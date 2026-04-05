@@ -69,24 +69,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _initWebView(String url) async {
     try {
-      final controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent(kBrowserPlaybackUserAgent)
-        ..setBackgroundColor(Colors.black)
-        ..enableZoom(true)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageFinished: (_) {
-              controller.runJavaScript(kPhpGatewayRecoveryJs);
-            },
-            onWebResourceError: (WebResourceError error) {
-              if (!mounted) return;
-              if (_error == null && error.errorCode != -3) {
-                setState(() => _error = error.description);
-              }
-            },
-          ),
-        );
+      // Build controller in steps so closures can close over `controller` after it exists
+      // (cascade + onPageFinished caused "referenced before declared" on web compile).
+      final controller = WebViewController();
+      await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      await controller.setUserAgent(kBrowserPlaybackUserAgent);
+      await controller.setBackgroundColor(Colors.black);
+      await controller.enableZoom(true);
+      await controller.setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (_) {
+            controller.runJavaScript(kPhpGatewayRecoveryJs);
+          },
+          onWebResourceError: (WebResourceError error) {
+            if (!mounted) return;
+            if (_error == null && error.errorCode != -3) {
+              setState(() => _error = error.description);
+            }
+          },
+        ),
+      );
 
       await controller.loadRequest(Uri.parse(url));
       if (!mounted) return;

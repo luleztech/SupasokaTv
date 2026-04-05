@@ -41,6 +41,18 @@ The root **`Dockerfile`** runs `flutter build web --release` and serves static f
 
 Canonical URL is also in code: `lib/config/deployment.dart` → `kRailwayWebUrl`.
 
+### Railway variables (Flutter web service — root `Dockerfile`)
+
+| Variable | Required? | Typical value | Notes |
+|----------|-------------|---------------|--------|
+| *(none)* | — | — | **Deploy can succeed with zero custom variables.** Railway injects **`PORT`** for you. |
+| `PORT` | No | *(auto)* | Only set manually if you want a fixed port (e.g. `8080`). Usually **leave unset** and let Railway assign it. |
+| `NODE_ENV` | No | `production` | Optional; only affects the small `serve` process in the final image. |
+
+**Backend service** (`backend/` root in a **second** Railway service): set `NODE_ENV=production`; add `CORS_ORIGIN=https://supasokatv-production.up.railway.app` if the browser calls the API from your web app. **`PORT`** is still injected by Railway — you normally do **not** define it yourself.
+
+If the Docker build fails, it is usually a **Flutter compile error** (fix in `lib/`), not missing env vars.
+
 Local Docker smoke test:
 
 ```bash
