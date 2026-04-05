@@ -48,3 +48,6 @@ app.*.map.json
 /android/key.properties
 # Keystores copied from React Native — do not commit
 /android/app/*.keystore
+
+# Admin console is developed separately; not part of the public user-app repo.
+/supaadmin/

@@ -1,33 +1,28 @@
 # SupasokaTv
 
-Supasoka — Flutter live TV / streaming viewer, with a separate **SupaAdmin** app for configuration (channels, carousel, pricing, users, live matches, notifications).
+Supasoka — Flutter live TV / streaming viewer app (Android, iOS, web, desktop).
 
-## Repository layout
-
-| Path | Description |
-|------|-------------|
-| `/` | Main **Supasoka** Flutter app (`lib/`, `android/`, `ios/`, …) |
-| `supaadmin/` | **SupaAdmin** Flutter app for content and subscription management |
+This repository contains the **user-facing app** only.
 
 ## Requirements
 
-- [Flutter](https://docs.flutter.dev/get-started/install) SDK (see `pubspec.yaml` for Dart SDK constraint)
+- [Flutter](https://docs.flutter.dev/get-started/install) SDK (see `pubspec.yaml` for the Dart SDK constraint)
 
-## Run the viewer
+## Run
 
 ```bash
 flutter pub get
 flutter run
 ```
 
-## Run SupaAdmin
+## Build for release (example)
 
 ```bash
-cd supaadmin
-flutter pub get
-flutter run
+flutter build apk
+# or
+flutter build appbundle
 ```
 
 ## License
 
-See repository owner for licensing.
+See the repository owner for licensing.
