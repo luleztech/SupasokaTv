@@ -86,7 +86,7 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Railway API URL + ADMIN_API_KEY — required so edits sync to Postgres for the viewer app.
+/// API URL + admin password → JWT (no API key stored in the app).
 class _ServerSyncCard extends StatefulWidget {
   @override
   State<_ServerSyncCard> createState() => _ServerSyncCardState();
@@ -94,13 +94,13 @@ class _ServerSyncCard extends StatefulWidget {
 
 class _ServerSyncCardState extends State<_ServerSyncCard> {
   late final TextEditingController _base = TextEditingController();
-  late final TextEditingController _key = TextEditingController();
-  bool _seededCredentials = false;
+  late final TextEditingController _password = TextEditingController();
+  bool _seededBase = false;
 
   @override
   void dispose() {
     _base.dispose();
-    _key.dispose();
+    _password.dispose();
     super.dispose();
   }
 
@@ -108,10 +108,9 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
     final cs = Theme.of(context).colorScheme;
-    if (!_seededCredentials && store.isLoaded) {
-      _seededCredentials = true;
+    if (!_seededBase && store.isLoaded) {
+      _seededBase = true;
       _base.text = store.resolvedApiBaseUrl;
-      _key.text = store.resolvedAdminKey;
     }
 
     return Container(
@@ -144,10 +143,10 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Funguo lazima iwe sawa na ADMIN_API_KEY kwenye Railway. App ya mtazamaji lazima iwe na API ile ile (deployment.dart / API_BASE_URL) ndiyo ipate channels kwenye DB.',
+            'Nenosiri ni ADMIN_APP_PASSWORD kwenye Railway (si API key). Token ndiyo imehifadhiwa — si nenosiri. App ya mtazamaji: deployment.dart / API_BASE_URL iwe sawa na URL hii.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
-          if (store.hasAdminApiKey) ...[
+          if (store.hasAdminSession) ...[
             const SizedBox(height: 8),
             Row(
               children: [
@@ -155,7 +154,7 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Funguo imehifadhiwa kwenye simu (itaonekana tena ukifungua app).',
+                    'Umeingia — token iko kwenye simu (siyo nenosiri).',
                     style: TextStyle(color: cs.primary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -174,14 +173,15 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
           ),
           const SizedBox(height: 10),
           TextField(
-            controller: _key,
+            controller: _password,
             decoration: const InputDecoration(
-              labelText: 'Admin API key',
-              hintText: 'Same as Railway variable ADMIN_API_KEY',
-              prefixIcon: Icon(Icons.key_rounded),
+              labelText: 'Admin password',
+              hintText: 'Railway env ADMIN_APP_PASSWORD',
+              prefixIcon: Icon(Icons.lock_outline_rounded),
             ),
             obscureText: true,
             autocorrect: false,
+            onSubmitted: (_) => FocusScope.of(context).unfocus(),
           ),
           if (store.lastSyncError != null) ...[
             const SizedBox(height: 10),
@@ -223,37 +223,36 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                       : () async {
                           await adminWithShimmerDialog(
                             context,
-                            future: context.read<AdminStore>().saveApiConnection(
+                            future: context.read<AdminStore>().saveUrlAndSignIn(
                                   apiBaseUrl: _base.text.trim().isEmpty ? kDefaultAdminApiBaseUrl : _base.text.trim(),
-                                  adminKey: _key.text,
+                                  password: _password.text,
                                 ),
-                            message: 'Inahifadhi na kupakia…',
+                            message: 'Inaingia na kupakia…',
                           );
                           if (context.mounted) {
                             final store = context.read<AdminStore>();
                             final err = store.lastSyncError;
-                            final hasKey = store.hasAdminApiKey;
+                            final ok = store.hasAdminSession;
                             String msg;
-                            if (!hasKey) {
-                              msg = err ?? 'Weka funguo ya admin.';
+                            if (!ok) {
+                              msg = err ?? 'Weka nenosiri sahihi.';
                             } else if (err == null) {
-                              msg = 'Imehifadhiwa. Funguo na data zimepakishwa kutoka Postgres.';
+                              msg = 'Imefanikiwa. Data zimepakishwa kutoka Postgres.';
                             } else {
-                              msg =
-                                  'Funguo imehifadhiwa kwenye simu, lakini kupakia kumeshindikana: $err';
+                              msg = 'Umeingia lakini kupakia kumeshindikana: $err';
                             }
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text(msg), duration: const Duration(seconds: 5)),
                             );
                           }
                         },
-                  icon: const Icon(Icons.save_rounded),
-                  label: const Text('Save key & load from server'),
+                  icon: const Icon(Icons.login_rounded),
+                  label: const Text('Sign in & load from server'),
                 ),
               ),
               const SizedBox(width: 10),
               OutlinedButton(
-                onPressed: store.syncingToServer || !store.hasAdminApiKey
+                onPressed: store.syncingToServer || !store.hasAdminSession
                     ? null
                     : () async {
                         await adminWithShimmerDialog(
@@ -274,7 +273,7 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
               ),
             ],
           ),
-          if (store.hasAdminApiKey) ...[
+          if (store.hasAdminSession) ...[
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
@@ -282,18 +281,18 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                 onPressed: store.syncingToServer
                     ? null
                     : () async {
-                        await context.read<AdminStore>().clearSavedAdminKey();
+                        await context.read<AdminStore>().logout();
                         if (context.mounted) {
                           setState(() {
-                            _key.clear();
+                            _password.clear();
                           });
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Funguo imefutwa kwenye simu')),
+                            const SnackBar(content: Text('Umetoka — token imefutwa kwenye simu')),
                           );
                         }
                       },
                 child: Text(
-                  'Futa funguo kwenye simu',
+                  'Sign out',
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                 ),
               ),

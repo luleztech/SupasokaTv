@@ -10,7 +10,8 @@ import '../models/app_config.dart';
 const _prefsKey = 'supaadmin_app_config_v2';
 const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsApiBase = 'supaadmin_api_base_url';
-const _prefsAdminKey = 'supaadmin_admin_api_key';
+const _prefsJwt = 'supaadmin_admin_jwt_v1';
+const _legacyAdminKey = 'supaadmin_admin_api_key';
 
 /// Empty workspace — no demo channels/users; add real data in SupaAdmin or load from API.
 AppConfig _emptyProductionConfig() {
@@ -47,19 +48,21 @@ class AdminStore extends ChangeNotifier {
   bool get isLoaded => _loaded;
 
   String? _apiBaseUrlPrefs;
-  String? _adminKeyPrefs;
+  String? _jwtPrefs;
   String? _lastSyncError;
   bool _syncing = false;
 
   AppConfig get config => _config;
 
-  /// Last error from `POST /api/v1/admin/import`, or null if last sync succeeded / not attempted.
   String? get lastSyncError => _lastSyncError;
 
   bool get syncingToServer => _syncing;
 
-  /// Same key as Railway `ADMIN_API_KEY` on the API service.
-  bool get hasAdminApiKey => resolvedAdminKey.isNotEmpty;
+  /// Signed-in to API (JWT from POST /auth/admin-login). No API key stored in the app.
+  bool get hasAdminSession => resolvedAdminToken.isNotEmpty;
+
+  @Deprecated('Use hasAdminSession')
+  bool get hasAdminApiKey => hasAdminSession;
 
   String get resolvedApiBaseUrl {
     final o = _apiBaseUrlPrefs?.trim();
@@ -69,62 +72,119 @@ class AdminStore extends ChangeNotifier {
     return kDefaultAdminApiBaseUrl;
   }
 
-  String get resolvedAdminKey {
-    final o = _adminKeyPrefs?.trim();
+  String get resolvedAdminToken {
+    final o = _jwtPrefs?.trim();
     if (o != null && o.isNotEmpty) return o;
-    return adminApiKeyFromEnvironment;
+    return '';
   }
 
-  /// Saves API origin + admin key on device, then loads config from the server.
-  /// If [adminKey] is empty, the previously saved key is kept (URL-only save).
-  Future<void> saveApiConnection({required String apiBaseUrl, required String adminKey}) async {
+  Future<void> _clearJwtSession() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_prefsJwt);
+    _jwtPrefs = null;
+  }
+
+  Map<String, String> _authHeaders({String contentType = ''}) {
+    final h = <String, String>{
+      'Accept': 'application/json',
+      if (contentType.isNotEmpty) 'Content-Type': contentType,
+    };
+    final t = resolvedAdminToken;
+    if (t.isNotEmpty) {
+      h['Authorization'] = 'Bearer $t';
+    }
+    return h;
+  }
+
+  /// Persists API base URL only (no secrets).
+  Future<void> saveApiBaseUrl(String apiBaseUrl) async {
     final p = await SharedPreferences.getInstance();
     final b = apiBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final k = adminKey.trim();
-
     await p.setString(_prefsApiBase, b);
     _apiBaseUrlPrefs = b;
-
-    if (k.isNotEmpty) {
-      await p.setString(_prefsAdminKey, k);
-    }
-
-    _adminKeyPrefs = p.getString(_prefsAdminKey);
-
-    if (resolvedAdminKey.isEmpty) {
-      _lastSyncError =
-          'Enter the Admin API key (exactly the same as Railway ADMIN_API_KEY). Without it, nothing syncs to Postgres.';
-      notifyListeners();
-      return;
-    }
-
-    _lastSyncError = null;
     notifyListeners();
-    await pullConfigFromServer();
   }
 
-  /// Removes the stored admin key (e.g. before handing device to someone else).
-  Future<void> clearSavedAdminKey() async {
+  /// Signs in with [password] (server env `ADMIN_APP_PASSWORD`), stores JWT only, then pulls config.
+  Future<void> loginWithPassword(String password) async {
     final p = await SharedPreferences.getInstance();
-    await p.remove(_prefsAdminKey);
-    _adminKeyPrefs = null;
+    final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$base/api/v1/auth/admin-login');
+    _lastSyncError = null;
+    notifyListeners();
+    try {
+      final res = await http
+          .post(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({'password': password}),
+          )
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode == 503) {
+        _lastSyncError =
+            'Server not ready: set ADMIN_APP_PASSWORD and JWT_SECRET on the Railway API service.';
+        notifyListeners();
+        return;
+      }
+      if (res.statusCode == 401) {
+        _lastSyncError = 'Wrong password.';
+        notifyListeners();
+        return;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _lastSyncError =
+            'Sign-in failed (${res.statusCode}): ${res.body.length > 160 ? '${res.body.substring(0, 160)}…' : res.body}';
+        notifyListeners();
+        return;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic>) {
+        _lastSyncError = 'Invalid sign-in response';
+        notifyListeners();
+        return;
+      }
+      final token = decoded['token'] as String?;
+      if (token == null || token.isEmpty) {
+        _lastSyncError = 'Server did not return a token';
+        notifyListeners();
+        return;
+      }
+      await p.setString(_prefsJwt, token);
+      _jwtPrefs = token;
+      notifyListeners();
+      await pullConfigFromServer();
+    } catch (e) {
+      _lastSyncError = 'Sign-in failed: $e';
+      notifyListeners();
+    }
+  }
+
+  /// Saves URL then signs in (one step from Settings).
+  Future<void> saveUrlAndSignIn({required String apiBaseUrl, required String password}) async {
+    await saveApiBaseUrl(apiBaseUrl);
+    await loginWithPassword(password);
+  }
+
+  Future<void> logout() async {
+    await _clearJwtSession();
     _lastSyncError = null;
     notifyListeners();
   }
 
-  /// Pushes current config to the server (same payload as local JSON).
+  @Deprecated('Use logout')
+  Future<void> clearSavedAdminKey() => logout();
+
   Future<void> syncNowToServer() async {
     await _pushConfigToServer();
   }
 
-  /// Returns null if `GET /api/v1/health` succeeds (API URL is reachable).
   Future<String?> testApiUrlReachable() async {
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
     try {
       final r = await http
           .get(
             Uri.parse('$base/api/v1/health'),
-            headers: {'Accept': 'application/json'},
+            headers: const {'Accept': 'application/json'},
           )
           .timeout(const Duration(seconds: 10));
       if (r.statusCode >= 200 && r.statusCode < 300) return null;
@@ -137,7 +197,8 @@ class AdminStore extends ChangeNotifier {
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     _apiBaseUrlPrefs = p.getString(_prefsApiBase);
-    _adminKeyPrefs = p.getString(_prefsAdminKey);
+    _jwtPrefs = p.getString(_prefsJwt);
+    await p.remove(_legacyAdminKey);
 
     var raw = p.getString(_prefsKey);
     if (raw == null || raw.isEmpty) {
@@ -168,15 +229,14 @@ class AdminStore extends ChangeNotifier {
     _loaded = true;
     notifyListeners();
 
-    if (resolvedAdminKey.isNotEmpty) {
+    if (resolvedAdminToken.isNotEmpty) {
       await pullConfigFromServer();
     }
   }
 
-  /// Loads full config from Postgres (`GET /api/v1/admin/export`) — channels, users, carousel, etc.
   Future<void> pullConfigFromServer() async {
-    final key = resolvedAdminKey;
-    if (key.isEmpty) {
+    final token = resolvedAdminToken;
+    if (token.isEmpty) {
       return;
     }
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
@@ -188,21 +248,20 @@ class AdminStore extends ChangeNotifier {
           .get(
             uri,
             headers: {
-              'Accept': 'application/json',
-              'X-Admin-Key': key,
+              ..._authHeaders(),
               'Cache-Control': 'no-cache',
             },
           )
           .timeout(const Duration(seconds: 40));
       if (res.statusCode == 401 || res.statusCode == 403) {
-        _lastSyncError =
-            'Invalid Admin API key (401). It must match ADMIN_API_KEY on the Railway API service exactly.';
+        await _clearJwtSession();
+        _lastSyncError = 'Session expired. Sign in again with your admin password.';
         notifyListeners();
         return;
       }
       if (res.statusCode == 503) {
         _lastSyncError =
-            'API cannot reach Postgres (503) or ADMIN_API_KEY is not set on the server. Check Railway DATABASE_URL and ADMIN_API_KEY.';
+            'API unavailable (503). On Railway set DATABASE_URL, JWT_SECRET, and ADMIN_APP_PASSWORD.';
         notifyListeners();
         return;
       }
@@ -246,14 +305,11 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
-  /// Same as [pullConfigFromServer] (kept for pull-to-refresh on Users).
   Future<void> refreshUsersFromServer() => pullConfigFromServer();
 
   Future<void> _pushConfigToServer() async {
-    final key = resolvedAdminKey;
-    if (key.isEmpty) {
-      _lastSyncError =
-          'Add Admin API key in Settings (must match Railway ADMIN_API_KEY). Edits are only on this device until then.';
+    if (resolvedAdminToken.isEmpty) {
+      _lastSyncError = 'Sign in with your admin password — changes stay on this device until you do.';
       notifyListeners();
       return;
     }
@@ -267,19 +323,18 @@ class AdminStore extends ChangeNotifier {
           .post(
             uri,
             headers: {
-              'Content-Type': 'application/json',
-              'X-Admin-Key': key,
+              ..._authHeaders(contentType: 'application/json'),
               'Cache-Control': 'no-cache',
             },
             body: jsonEncode(_config.toJson()),
           )
           .timeout(const Duration(seconds: 45));
       if (res.statusCode == 401 || res.statusCode == 403) {
-        _lastSyncError =
-            'Invalid Admin API key. Check Railway ADMIN_API_KEY matches what you saved in Settings.';
+        await _clearJwtSession();
+        _lastSyncError = 'Session expired. Sign in again.';
       } else if (res.statusCode == 503) {
         _lastSyncError =
-            'Database unavailable (503). Set DATABASE_URL and ADMIN_API_KEY on the Railway API service.';
+            'Database unavailable (503). Check Railway DATABASE_URL and admin env vars.';
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
         _lastSyncError = null;
       } else {
@@ -315,7 +370,6 @@ class AdminStore extends ChangeNotifier {
     await _persist();
   }
 
-  // —— Channels ——
   Future<void> upsertChannel(ChannelDto c) async {
     final i = _config.channels.indexWhere((x) => x.id == c.id);
     if (i >= 0) {
@@ -343,7 +397,6 @@ class AdminStore extends ChangeNotifier {
     return _config.channels.map((c) => c.id).reduce((a, b) => a > b ? a : b) + 1;
   }
 
-  // —— Carousel ——
   Future<void> upsertCarousel(int index, CarouselDto slide) async {
     if (index >= 0 && index < _config.carousel.length) {
       _config.carousel[index] = slide;
@@ -372,7 +425,6 @@ class AdminStore extends ChangeNotifier {
     await _persist();
   }
 
-  // —— Premium packages ——
   Future<void> upsertPackage(PackageDto p) async {
     final i = _config.premiumPackages.indexWhere((x) => x.id == p.id);
     if (i >= 0) {
@@ -388,7 +440,6 @@ class AdminStore extends ChangeNotifier {
     await _persist();
   }
 
-  // —— Malipo ——
   Future<void> upsertMalipo(MalipoPlanDto m) async {
     final i = _config.malipoPlans.indexWhere((x) => x.id == m.id);
     if (i >= 0) {
@@ -404,7 +455,6 @@ class AdminStore extends ChangeNotifier {
     await _persist();
   }
 
-  // —— Live matches ——
   Future<void> upsertLive(LiveMatchDto m) async {
     final i = _config.liveMatches.indexWhere((x) => x.id == m.id);
     if (i >= 0) {
@@ -426,7 +476,6 @@ class AdminStore extends ChangeNotifier {
     return _config.liveMatches.map((m) => m.id).reduce((a, b) => a > b ? a : b) + 1;
   }
 
-  // —— Notifications ——
   Future<void> sendNotification({required String title, required String body, required String target}) async {
     final id = DateTime.now().millisecondsSinceEpoch.toString();
     _config.notificationLog.insert(
@@ -447,7 +496,6 @@ class AdminStore extends ChangeNotifier {
     await _persist();
   }
 
-  // —— Users (subscriptions) ——
   Future<void> upsertUser(UserDto u) async {
     final i = _config.users.indexWhere((x) => x.id == u.id);
     if (i >= 0) {
@@ -459,26 +507,23 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> deleteUser(String id) async {
-    final key = resolvedAdminKey;
-    if (key.isNotEmpty) {
+    final token = resolvedAdminToken;
+    if (token.isNotEmpty) {
       final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
       final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(id)}');
       try {
         await http
             .delete(
               uri,
-              headers: {'X-Admin-Key': key},
+              headers: _authHeaders(),
             )
             .timeout(const Duration(seconds: 25));
-      } catch (_) {
-        /* still remove locally */
-      }
+      } catch (_) {}
     }
     _config.users.removeWhere((u) => u.id == id);
     await _persist();
   }
 
-  /// Adds [duration] to the user’s current end (or from now if none / expired), like the viewer app.
   Future<void> addUserPremiumDuration(String userId, Duration duration) async {
     final i = _config.users.indexWhere((x) => x.id == userId);
     if (i < 0) return;

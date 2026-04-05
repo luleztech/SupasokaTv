@@ -24,32 +24,47 @@ npm start        # node dist/index.js
 
 Copy `.env.example` → `.env` locally.
 
-| Variable | Default | Notes |
-|----------|---------|--------|
-| `PORT` | `8080` | Railway injects this at runtime (align with service port) |
-| `NODE_ENV` | `development` | `production` in deploy |
-| `CORS_ORIGIN` | `*` | For browser calls from web app: `https://supasokatv-production.up.railway.app` |
-| `ADMIN_API_KEY` | *(empty)* | Set a long random secret; use the same value in **SupaAdmin → Settings** so imports reach Postgres. |
+### Required for production
 
-**Flutter web (production):** [https://supasokatv-production.up.railway.app](https://supasokatv-production.up.railway.app)
+| Variable | Notes |
+|----------|--------|
+| `DATABASE_URL` | Postgres connection string (Railway plugin) |
+| `JWT_SECRET` | Long random string; used only on the server to sign admin JWTs |
+| `ADMIN_APP_PASSWORD` | Password for **SupaAdmin** sign-in (`POST /api/v1/auth/admin-login`). **Not** the old API key — the mobile app stores a **short-lived JWT**, not this password. |
 
-The user app’s default API base URL lives in the repo root at `lib/config/deployment.dart` (`kRailwayApiBaseUrl`). After you create this service’s public URL on Railway, set that constant to match (or use `--dart-define=API_BASE_URL=…` when building).
+### Optional
+
+| Variable | Notes |
+|----------|--------|
+| `PORT` | Railway sets this (often `8080`) |
+| `NODE_ENV` | `production` in deploy |
+| `CORS_ORIGIN` | `*` or your Flutter web origin |
+| `ADMIN_API_KEY` | **Legacy only** — for `curl`/scripts with header `X-Admin-Key`. **SupaAdmin mobile does not use this.** |
+
+### Viewer app (read-only)
+
+The user app calls **`GET /api/v1/public/config`** — no admin secret. Set the Flutter app’s API base URL (`lib/config/deployment.dart` or `--dart-define=API_BASE_URL=…`) to this service’s **public HTTPS URL**.
+
+### After deploy
+
+1. `curl -sS https://YOUR-API/api/v1/health` → JSON OK  
+2. In SupaAdmin: **Settings** → same API URL → **Admin password** = `ADMIN_APP_PASSWORD` → **Sign in & load from server**  
+3. Edits → **Push to DB** → viewer pull-to-refresh should show channels.
 
 ## Endpoints
 
 - `GET /` — service banner  
-- `GET /api/v1/health` — JSON health (use for Railway healthcheck)
+- `GET /api/v1/health` — JSON health (Railway healthcheck)  
+- `POST /api/v1/auth/admin-login` — `{ "password": "..." }` → `{ ok, token }` (JWT)  
+- `GET /api/v1/admin/export` — full config (requires admin JWT or legacy key)  
+- `POST /api/v1/admin/import` — write config to Postgres  
+- `GET /api/v1/public/config` — public config for the viewer app  
 
-## Railway (second service)
+## Railway (API service)
 
-1. New service → **GitHub repo** → same repo as the Flutter app.  
-2. **Root directory:** `backend`  
-3. Deploy: Dockerfile in this folder is picked up via `railway.json`, or use **Railpack/Nixpacks** with:
-   - Build: `npm run build`
-   - Start: `npm start`
-4. Open the API service → **Settings → Networking → Public networking** → generate/copy the **HTTPS URL** (different hostname from the Flutter web app).
-5. In the repo root `lib/config/deployment.dart`, set `kRailwayApiBaseUrl` to that URL (or pass `--dart-define=API_BASE_URL=…` when building the app).
-6. Link **Postgres** to this service (or set `DATABASE_URL`). Apply schema from `database/` (see repo root `database/README.md`).
-7. Smoke test: `curl -sS https://YOUR-API.up.railway.app/api/v1/health` should return JSON.
+1. New service → GitHub repo → **Root directory:** `backend`  
+2. Build: `npm run build` · Start: `npm start`  
+3. **Variables:** `DATABASE_URL`, `JWT_SECRET`, `ADMIN_APP_PASSWORD`  
+4. Public HTTPS URL → copy into Flutter `kRailwayApiBaseUrl` / `API_BASE_URL`  
 
-Keep the Flutter **web** service and this **API** as **two** Railway services in one project.
+Keep the Flutter **web** service and this **API** as **two** Railway services if you use both.
