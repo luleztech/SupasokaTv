@@ -11,4 +11,6 @@ export const env = {
   /** Railway sets `PORT` (commonly 8080). Local default matches typical Railway dev. */
   port: Number.parseInt(process.env.PORT ?? '8080', 10),
   corsOrigin: parseOrigins(process.env.CORS_ORIGIN),
+  databaseUrl: process.env.DATABASE_URL ?? '',
+  adminApiKey: process.env.ADMIN_API_KEY ?? '',
 } as const;

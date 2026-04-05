@@ -18,19 +18,66 @@ const Map<String, String> kCatLabel = {
   'sports': 'Sports',
   'entertainment': 'Entertainment',
   'news': 'News',
+  'mpira': 'Mpira',
+  'habari': 'Habari',
+  'tamthilia': 'Tamthilia',
 };
+
+String categoryPillLabel(String cat) {
+  if (cat.isEmpty) return cat;
+  return kCatLabel[cat] ?? '${cat[0].toUpperCase()}${cat.substring(1).toLowerCase()}';
+}
+
+/// Icon name strings for [CatPill] / [pillIcon].
+String categoryPillIconName(String cat) {
+  switch (cat) {
+    case 'all':
+      return 'flame-outline';
+    case 'football':
+    case 'mpira':
+    case 'sports':
+      return 'football-outline';
+    case 'movies':
+    case 'tamthilia':
+      return 'film-outline';
+    case 'entertainment':
+      return 'musical-notes-outline';
+    case 'news':
+    case 'habari':
+      return 'newspaper-outline';
+    default:
+      return 'tv-outline';
+  }
+}
+
+List<CategoryItem> buildCategoryPills(List<Channel> channels) {
+  final cats = channels.map((c) => c.cat).toSet().toList()..sort();
+  return [
+    const CategoryItem(key: 'all', label: 'All', icon: 'flame-outline'),
+    ...cats.map(
+      (k) => CategoryItem(
+        key: k,
+        label: categoryPillLabel(k),
+        icon: categoryPillIconName(k),
+      ),
+    ),
+  ];
+}
 
 IconData catIconFor(String cat) {
   switch (cat) {
     case 'football':
+    case 'mpira':
       return Ionicons.football_outline;
     case 'movies':
+    case 'tamthilia':
       return Ionicons.film_outline;
     case 'sports':
       return Ionicons.trophy_outline;
     case 'entertainment':
       return Ionicons.musical_notes_outline;
     case 'news':
+    case 'habari':
       return Ionicons.newspaper_outline;
     default:
       return Ionicons.tv_outline;

@@ -8,6 +8,7 @@ import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/player_screen.dart';
 import 'package:supasoka/screens/settings_screen.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
@@ -47,8 +48,8 @@ class _HomeScreenState extends State<HomeScreen> {
   int _carouselIndex = 0;
   Timer? _carouselTimer;
 
-  List<Channel> _filteredChannels() {
-    var list = _cat == 'all' ? kChannels : kChannels.where((c) => c.cat == _cat).toList();
+  List<Channel> _filteredChannels(List<Channel> channels, String catKey) {
+    var list = catKey == 'all' ? channels : channels.where((c) => c.cat == catKey).toList();
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return list;
     return list.where((c) {
@@ -64,8 +65,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _carouselTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (!mounted || kCarouselSlides.isEmpty) return;
-      final next = (_carouselIndex + 1) % kCarouselSlides.length;
+      if (!mounted) return;
+      final slides = context.read<ContentStore>().carouselSlides;
+      if (slides.isEmpty) return;
+      final next = (_carouselIndex + 1) % slides.length;
       setState(() => _carouselIndex = next);
       _carousel.animateToPage(next, duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
     });
@@ -80,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openChannel(BuildContext context, int channelId) {
-    final ch = channelById(channelId);
+    final ch = context.read<ContentStore>().channelById(channelId);
     if (ch != null && !ch.free) {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PaymentScreen()));
     } else {
@@ -91,9 +94,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
+    final store = context.watch<ContentStore>();
+    final channels = store.channels;
+    final carouselSlides = store.carouselSlides;
+    final cats = buildCategoryPills(channels);
+    final catKeys = cats.map((c) => c.key).toSet();
+    final fk = catKeys.contains(_cat) ? _cat : 'all';
     final w = MediaQuery.sizeOf(context).width;
     final cellW = (w - 32 - 14) / 2;
-    final filtered = _filteredChannels();
+    final filtered = _filteredChannels(channels, fk);
 
     return Stack(
       children: [
@@ -101,6 +110,35 @@ class _HomeScreenState extends State<HomeScreen> {
           color: t.bg1,
           child: CustomScrollView(
             slivers: [
+              if (store.loadError != null)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Material(
+                      color: t.card,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Icon(Icons.cloud_off_outlined, color: t.accent, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                store.loadError!,
+                                style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => store.refresh(),
+                              child: Text('Retry', style: TextStyle(color: t.accent)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               SliverToBoxAdapter(
                 child: AppHeader(
                   title: 'Supasoka',
@@ -163,52 +201,56 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               SliverToBoxAdapter(
-                child: SizedBox(
-                  height: 220,
-                  child: PageView.builder(
-                    controller: _carousel,
-                    itemCount: kCarouselSlides.length,
-                    onPageChanged: (i) => setState(() => _carouselIndex = i),
-                    itemBuilder: (context, i) {
-                      final item = kCarouselSlides[i];
-                      return _CarouselSlide(
-                        item: item,
-                        width: w,
-                        onWatch: () => _openChannel(context, item.channelId),
-                      );
-                    },
-                  ),
-                ),
+                child: carouselSlides.isEmpty
+                    ? const SizedBox.shrink()
+                    : SizedBox(
+                        height: 220,
+                        child: PageView.builder(
+                          controller: _carousel,
+                          itemCount: carouselSlides.length,
+                          onPageChanged: (i) => setState(() => _carouselIndex = i),
+                          itemBuilder: (context, i) {
+                            final item = carouselSlides[i];
+                            return _CarouselSlide(
+                              item: item,
+                              width: w,
+                              onWatch: () => _openChannel(context, item.channelId),
+                            );
+                          },
+                        ),
+                      ),
               ),
               SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 12, right: 20),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: List.generate(kCarouselSlides.length, (i) {
-                        final active = i == _carouselIndex;
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() => _carouselIndex = i);
-                            _carousel.animateToPage(i, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-                          },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 300),
-                            margin: const EdgeInsets.only(left: 5),
-                            width: active ? 18 : 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: active ? t.accent : Colors.white.withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(99),
-                            ),
+                child: carouselSlides.isEmpty
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(bottom: 12, right: 20),
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: List.generate(carouselSlides.length, (i) {
+                              final active = i == _carouselIndex;
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() => _carouselIndex = i);
+                                  _carousel.animateToPage(i, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 300),
+                                  margin: const EdgeInsets.only(left: 5),
+                                  width: active ? 18 : 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: active ? t.accent : Colors.white.withValues(alpha: 0.3),
+                                    borderRadius: BorderRadius.circular(99),
+                                  ),
+                                ),
+                              );
+                            }),
                           ),
-                        );
-                      }),
-                    ),
-                  ),
-                ),
+                        ),
+                      ),
               ),
               SliverToBoxAdapter(child: SectionTitle(main: 'BROWSE', accent: 'CATEGORIES')),
               SliverToBoxAdapter(
@@ -217,14 +259,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     scrollDirection: Axis.horizontal,
-                    itemCount: kCategories.length,
+                    itemCount: cats.length,
                     separatorBuilder: (_, __) => const SizedBox(width: 10),
                     itemBuilder: (context, i) {
-                      final cat = kCategories[i];
+                      final cat = cats[i];
                       return CatPill(
                         label: cat.label,
                         icon: cat.icon,
-                        active: _cat == cat.key,
+                        active: fk == cat.key,
                         onPress: () => setState(() => _cat = cat.key),
                       );
                     },

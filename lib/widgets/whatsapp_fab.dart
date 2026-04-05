@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
-import 'package:supasoka/data/app_data.dart';
+import 'package:provider/provider.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const double kTabBarBaseHeight = 62;
@@ -32,8 +33,8 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
     super.dispose();
   }
 
-  Future<void> _open() async {
-    final u = Uri.parse('https://wa.me/$kCustomerCareWhatsapp');
+  Future<void> _open(String digits) async {
+    final u = Uri.parse('https://wa.me/$digits');
     if (await canLaunchUrl(u)) {
       await launchUrl(u, mode: LaunchMode.externalApplication);
     }
@@ -41,6 +42,11 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<ContentStore>();
+    if (!store.hasValidCustomerCare) {
+      return const SizedBox.shrink();
+    }
+    final digits = store.customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
     final bottom = MediaQuery.paddingOf(context).bottom + kTabBarBaseHeight + 18;
 
     return Positioned(
@@ -60,7 +66,7 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
             shape: const CircleBorder(),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
-              onTap: _open,
+              onTap: () => _open(digits),
               child: Ink(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -80,4 +86,3 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
     );
   }
 }
-

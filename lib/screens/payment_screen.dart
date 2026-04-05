@@ -2,65 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
+import 'package:supasoka/data/pay_plan.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
-
-/// Local plan model (mirrors admin Malipo; tune copy here for the viewer).
-class PayPlan {
-  const PayPlan({
-    required this.id,
-    required this.label,
-    required this.priceLines,
-    required this.amount,
-    required this.period,
-    required this.popular,
-    required this.accent1,
-    required this.accent2,
-  });
-
-  final String id;
-  final String label;
-  final String priceLines;
-  final String amount;
-  final String period;
-  final bool popular;
-  final Color accent1;
-  final Color accent2;
-}
-
-const _plans = [
-  PayPlan(
-    id: 'weekly',
-    label: 'Wiki 1',
-    priceLines: 'TSh\n2,000',
-    amount: 'TSh 2,000',
-    period: 'Wiki Moja',
-    popular: false,
-    accent1: Color(0xFF0ea5e9),
-    accent2: Color(0xFF6366f1),
-  ),
-  PayPlan(
-    id: 'monthly',
-    label: 'Mwezi',
-    priceLines: 'TSh\n5,000',
-    amount: 'TSh 5,000',
-    period: 'Mwezi Moja',
-    popular: true,
-    accent1: Color(0xFFa855f7),
-    accent2: Color(0xFFec4899),
-  ),
-  PayPlan(
-    id: 'yearly',
-    label: 'Mwaka',
-    priceLines: 'TSh\n12,000',
-    amount: 'TSh 12,000',
-    period: 'Mwaka Mzima',
-    popular: false,
-    accent1: Color(0xFFf59e0b),
-    accent2: Color(0xFFef4444),
-  ),
-];
 
 const _mpesa = Color(0xFF00c853);
 
@@ -81,9 +27,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String _phone = '';
   bool _phoneFocused = false;
 
-  PayPlan? get _selectedPlan {
+  PayPlan? _selectedPlan(List<PayPlan> plans) {
     if (_planId == null) return null;
-    for (final p in _plans) {
+    for (final p in plans) {
       if (p.id == _planId) return p;
     }
     return null;
@@ -92,6 +38,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
+    final plans = context.watch<ContentStore>().malipoPayPlans;
+    final selectedPlan = _selectedPlan(plans);
     final bottom = MediaQuery.paddingOf(context).bottom;
     final w = MediaQuery.sizeOf(context).width;
     final cardGap = 10.0;
@@ -114,25 +62,34 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   style: rajdhani(13, weight: FontWeight.w700).copyWith(color: t.text2, letterSpacing: 0.8),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (var i = 0; i < _plans.length; i++)
-                      Padding(
-                        padding: EdgeInsets.only(right: i < _plans.length - 1 ? cardGap : 0),
-                        child: _PlanCard(
-                          plan: _plans[i],
-                          width: cardW,
-                          selected: _planId == _plans[i].id,
-                          theme: t,
-                          onTap: () => setState(() {
-                            _planId = _planId == _plans[i].id ? null : _plans[i].id;
-                            if (_planId == null) _phone = '';
-                          }),
+                if (plans.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'Hakuna mipango ya malipo. Wasiliana na msaada.',
+                      style: rajdhani(13).copyWith(color: t.text2),
+                    ),
+                  )
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var i = 0; i < plans.length; i++)
+                        Padding(
+                          padding: EdgeInsets.only(right: i < plans.length - 1 ? cardGap : 0),
+                          child: _PlanCard(
+                            plan: plans[i],
+                            width: cardW,
+                            selected: _planId == plans[i].id,
+                            theme: t,
+                            onTap: () => setState(() {
+                              _planId = _planId == plans[i].id ? null : plans[i].id;
+                              if (_planId == null) _phone = '';
+                            }),
+                          ),
                         ),
-                      ),
-                  ],
-                ),
+                    ],
+                  ),
                 AnimatedSize(
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeOutCubic,
@@ -236,7 +193,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                   ),
                                 ),
                               ),
-                              if (_selectedPlan != null) ...[
+                              if (selectedPlan != null) ...[
                                 const SizedBox(height: 20),
                                 Container(
                                   padding: const EdgeInsets.all(16),
@@ -257,7 +214,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                       Expanded(
                                         child: _SummaryTile(
                                           label: 'Kifurushi',
-                                          value: _selectedPlan!.label,
+                                          value: selectedPlan!.label,
                                           t: t,
                                         ),
                                       ),
@@ -280,7 +237,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                       Expanded(
                                         child: _SummaryTile(
                                           label: 'Kiasi',
-                                          value: _selectedPlan!.amount,
+                                          value: selectedPlan!.amount,
                                           t: t,
                                           highlight: true,
                                         ),
@@ -672,7 +629,7 @@ class _PlanCard extends StatelessWidget {
                     Icon(Ionicons.star, size: 11, color: Colors.black.withValues(alpha: 0.75)),
                     const SizedBox(width: 5),
                     Text(
-                      'BORA',
+                      plan.badge.isNotEmpty ? plan.badge : 'BORA',
                       style: orbitron(8, weight: FontWeight.w900).copyWith(
                         color: const Color(0xFF1a0a00),
                         letterSpacing: 2,

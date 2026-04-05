@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
@@ -16,8 +16,10 @@ class SettingsScreen extends StatelessWidget {
     await Share.share('Watch live football, movies & more on Supasoka! Download now.', subject: 'Supasoka');
   }
 
-  static Future<void> _openWhatsapp() async {
-    final u = Uri.parse('https://wa.me/$kCustomerCareWhatsapp');
+  static Future<void> _openWhatsapp(BuildContext context) async {
+    final d = context.read<ContentStore>().customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
+    if (d.length < 8) return;
+    final u = Uri.parse('https://wa.me/$d');
     if (await canLaunchUrl(u)) {
       await launchUrl(u, mode: LaunchMode.externalApplication);
     }
@@ -127,7 +129,7 @@ class SettingsScreen extends StatelessWidget {
                 _group(
                   t,
                   [
-                    _row(t, Ionicons.logo_whatsapp, 'WhatsApp Support', 'Chat Now', onTap: _openWhatsapp),
+                    _row(t, Ionicons.logo_whatsapp, 'WhatsApp Support', 'Chat Now', onTap: () => _openWhatsapp(context)),
                     _row(t, Ionicons.mail_outline, 'Email Support', 'ghettodevelopers@gmail.com'),
                   ],
                 ),

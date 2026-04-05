@@ -32,6 +32,8 @@ Copy `.env.example` → `.env` locally.
 
 **Flutter web (production):** [https://supasokatv-production.up.railway.app](https://supasokatv-production.up.railway.app)
 
+The user app’s default API base URL lives in the repo root at `lib/config/deployment.dart` (`kRailwayApiBaseUrl`). After you create this service’s public URL on Railway, set that constant to match (or use `--dart-define=API_BASE_URL=…` when building).
+
 ## Endpoints
 
 - `GET /` — service banner  
@@ -44,6 +46,6 @@ Copy `.env.example` → `.env` locally.
 3. Deploy: Dockerfile in this folder is picked up via `railway.json`, or use **Railpack/Nixpacks** with:
    - Build: `npm run build`
    - Start: `npm start`
-4. Generate a **public URL** for the API.
+4. Generate a **public URL** for the API and align it with `kRailwayApiBaseUrl` in the Flutter app’s `lib/config/deployment.dart`.
 
 Keep the Flutter **web** service and this **API** as **two** Railway services in one project.

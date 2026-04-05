@@ -29,6 +29,12 @@ flutter pub get
 flutter run
 ```
 
+The app loads public config from the API. The default base URL is `lib/config/deployment.dart` → `kRailwayApiBaseUrl` (production on Railway). To point at another backend (e.g. local):
+
+```bash
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8080
+```
+
 ## Build for release (example)
 
 ```bash
@@ -36,6 +42,8 @@ flutter build apk
 # or
 flutter build appbundle
 ```
+
+Optional: `--dart-define=API_BASE_URL=https://your-api.example.com` if it differs from the default in `deployment.dart`.
 
 ## Deploy on [Railway](https://railway.app)
 
@@ -48,7 +56,7 @@ The root **`Dockerfile`** runs `flutter build web --release` and serves static f
 3. **Variables (optional):** `PORT=8080` if you want a fixed internal port; otherwise Railway assigns `PORT` automatically.
 4. **Networking:** public hostname `supasokatv-production.up.railway.app` → routes to the service on `$PORT`.
 
-Canonical URL is also in code: `lib/config/deployment.dart` → `kRailwayWebUrl`.
+Canonical URLs are in code: `lib/config/deployment.dart` → `kRailwayWebUrl` (Flutter web) and `kRailwayApiBaseUrl` (Node API used by the app).
 
 ### Railway variables (Flutter web service — root `Dockerfile`)
 

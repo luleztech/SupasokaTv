@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/main_shell.dart';
 import 'package:supasoka/screens/loader_screen.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
@@ -15,19 +16,22 @@ Future<void> main() async {
   ));
   final themeController = await ThemeController.load();
   await SubscriptionStore.refreshNotifierFromPrefs();
-  runApp(SupasokaApp(themeController: themeController));
+  final contentStore = ContentStore();
+  runApp(SupasokaApp(themeController: themeController, contentStore: contentStore));
 }
 
 class SupasokaApp extends StatelessWidget {
-  const SupasokaApp({super.key, required this.themeController});
+  const SupasokaApp({super.key, required this.themeController, required this.contentStore});
 
   final ThemeController themeController;
+  final ContentStore contentStore;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: themeController),
+        ChangeNotifierProvider.value(value: contentStore),
         ChangeNotifierProvider(create: (_) => AppNav()),
       ],
       child: Consumer<ThemeController>(

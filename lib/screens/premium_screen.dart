@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
@@ -39,6 +40,7 @@ class _PremiumScreenState extends State<PremiumScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
+    final packages = context.watch<ContentStore>().premiumPackages;
 
     return Stack(
       children: [
@@ -86,63 +88,74 @@ class _PremiumScreenState extends State<PremiumScreen> with SingleTickerProvider
                         style: rajdhani(14).copyWith(color: t.text2, height: 1.5),
                       ),
                     ),
-                    for (final pkg in kPackages)
+                    if (packages.isEmpty)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                        child: Material(
-                          color: t.card,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
-                            side: BorderSide(
-                              color: _pkg == pkg.id ? t.accent : pkg.popular ? const Color(0xFFffd700) : t.border,
-                              width: _pkg == pkg.id || pkg.popular ? 2 : 1,
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Text(
+                          'Hakuna vifurushi vilivyopangwa. Jaribu tena baadaye.',
+                          textAlign: TextAlign.center,
+                          style: rajdhani(13).copyWith(color: t.text2),
+                        ),
+                      )
+                    else
+                      ...packages.map(
+                        (pkg) => Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                          child: Material(
+                            color: t.card,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: _pkg == pkg.id ? t.accent : pkg.popular ? const Color(0xFFffd700) : t.border,
+                                width: _pkg == pkg.id || pkg.popular ? 2 : 1,
+                              ),
                             ),
-                          ),
-                          child: InkWell(
-                            onTap: () => setState(() => _pkg = pkg.id),
-                            borderRadius: BorderRadius.circular(18),
-                            child: Padding(
-                              padding: const EdgeInsets.all(18),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (pkg.popular)
-                                    Align(
-                                      alignment: Alignment.topRight,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                                        decoration: BoxDecoration(color: const Color(0xFFffd700), borderRadius: BorderRadius.circular(99)),
-                                        child: Text('⭐ BEST VALUE', style: orbitron(8).copyWith(color: Colors.black, letterSpacing: 1)),
+                            child: InkWell(
+                              onTap: () => setState(() => _pkg = pkg.id),
+                              borderRadius: BorderRadius.circular(18),
+                              child: Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (pkg.popular)
+                                      Align(
+                                        alignment: Alignment.topRight,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                                          decoration: BoxDecoration(color: const Color(0xFFffd700), borderRadius: BorderRadius.circular(99)),
+                                          child: Text('⭐ BEST VALUE', style: orbitron(8).copyWith(color: Colors.black, letterSpacing: 1)),
+                                        ),
+                                      ),
+                                    Text(pkg.name, style: orbitron(15).copyWith(color: t.text)),
+                                    const SizedBox(height: 4),
+                                    Text.rich(
+                                      TextSpan(
+                                        children: [
+                                          TextSpan(text: pkg.price, style: orbitron(26, weight: FontWeight.w900).copyWith(color: t.accent)),
+                                          TextSpan(text: pkg.period, style: rajdhani(14).copyWith(color: t.text2)),
+                                        ],
                                       ),
                                     ),
-                                  Text(pkg.name, style: orbitron(15).copyWith(color: t.text)),
-                                  const SizedBox(height: 4),
-                                  Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(text: pkg.price, style: orbitron(26, weight: FontWeight.w900).copyWith(color: t.accent)),
-                                        TextSpan(text: pkg.period, style: rajdhani(14).copyWith(color: t.text2)),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Wrap(
-                                    spacing: 6,
-                                    runSpacing: 6,
-                                    children: pkg.features
-                                        .map(
-                                          (f) => Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: Colors.white.withValues(alpha: 0.05),
-                                              borderRadius: BorderRadius.circular(99),
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: pkg.features
+                                          .map(
+                                            (f) => Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white.withValues(alpha: 0.05),
+                                                borderRadius: BorderRadius.circular(99),
+                                              ),
+                                              child: Text('✓ $f', style: rajdhani(11).copyWith(color: t.text2)),
                                             ),
-                                            child: Text('✓ $f', style: rajdhani(11).copyWith(color: t.text2)),
-                                          ),
-                                        )
-                                        .toList(),
-                                  ),
-                                ],
+                                          )
+                                          .toList(),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),

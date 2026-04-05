@@ -9,6 +9,8 @@ COPY pubspec.yaml pubspec.lock ./
 RUN flutter pub get
 
 COPY . .
+# Uses default API URL from lib/config/deployment.dart; override if needed:
+# --dart-define=API_BASE_URL=https://your-api.example.com
 RUN flutter build web --release
 
 # Tiny static server; respects Railway PORT

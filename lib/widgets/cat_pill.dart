@@ -18,6 +18,8 @@ IconData pillIcon(String name) {
       return Ionicons.musical_notes_outline;
     case 'newspaper-outline':
       return Ionicons.newspaper_outline;
+    case 'tv-outline':
+      return Ionicons.tv_outline;
     default:
       return Ionicons.flame_outline;
   }

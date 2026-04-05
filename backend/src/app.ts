@@ -18,7 +18,7 @@ export function createApp(): express.Application {
       ? { origin: true as const }
       : { origin: env.corsOrigin as string | string[], credentials: true as const };
   app.use(cors(corsOptions));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '5mb' }));
   app.use(
     pinoHttp({
       logger,

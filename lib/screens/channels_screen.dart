@@ -4,12 +4,11 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/player_screen.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/channel_card.dart';
-
-const _filters = ['All', 'Free', 'Premium', 'Football', 'Movies', 'Sports', 'News'];
 
 class ChannelsScreen extends StatefulWidget {
   const ChannelsScreen({super.key});
@@ -19,7 +18,8 @@ class ChannelsScreen extends StatefulWidget {
 }
 
 class _ChannelsScreenState extends State<ChannelsScreen> {
-  String _filter = 'All';
+  /// `all` | `free` | `premium` | category key (e.g. `football`, `mpira`).
+  String _filterKey = 'all';
   String _query = '';
   bool _searchOpen = false;
   final _searchFocus = FocusNode();
@@ -30,27 +30,37 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     super.dispose();
   }
 
-  List<Channel> _filtered() {
-    var list = List<Channel>.from(kChannels);
-    switch (_filter) {
-      case 'Free':
+  List<String> _filterKeys(List<Channel> channels) {
+    final cats = channels.map((c) => c.cat).toSet().toList()..sort();
+    return ['all', 'free', 'premium', ...cats];
+  }
+
+  String _filterLabel(String key) {
+    switch (key) {
+      case 'all':
+        return 'All';
+      case 'free':
+        return 'Free';
+      case 'premium':
+        return 'Premium';
+      default:
+        return categoryPillLabel(key);
+    }
+  }
+
+  List<Channel> _filtered(List<Channel> channels, String filterKey) {
+    var list = List<Channel>.from(channels);
+    switch (filterKey) {
+      case 'all':
+        break;
+      case 'free':
         list = list.where((c) => c.free).toList();
         break;
-      case 'Premium':
+      case 'premium':
         list = list.where((c) => !c.free).toList();
         break;
-      case 'Football':
-        list = list.where((c) => c.cat == 'football').toList();
-        break;
-      case 'Movies':
-        list = list.where((c) => c.cat == 'movies').toList();
-        break;
-      case 'Sports':
-        list = list.where((c) => c.cat == 'sports').toList();
-        break;
-      case 'News':
-        list = list.where((c) => c.cat == 'news').toList();
-        break;
+      default:
+        list = list.where((c) => c.cat == filterKey).toList();
     }
     final q = _query.trim().toLowerCase();
     if (q.isNotEmpty) {
@@ -60,7 +70,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
   }
 
   void _openChannel(BuildContext context, int channelId) {
-    final ch = channelById(channelId);
+    final store = context.read<ContentStore>();
+    final ch = store.channelById(channelId);
     if (ch != null && !ch.free) {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PaymentScreen()));
     } else {
@@ -71,9 +82,13 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
+    final store = context.watch<ContentStore>();
+    final channels = store.channels;
+    final keys = _filterKeys(channels);
+    final fk = keys.contains(_filterKey) ? _filterKey : 'all';
     final w = MediaQuery.sizeOf(context).width;
     final cellW = (w - 32 - 14) / 2;
-    final list = _filtered();
+    final list = _filtered(channels, fk);
 
     return ColoredBox(
       color: t.bg1,
@@ -141,15 +156,15 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               scrollDirection: Axis.horizontal,
-              itemCount: _filters.length,
+              itemCount: keys.length,
               separatorBuilder: (_, __) => const SizedBox(width: 8),
               itemBuilder: (context, i) {
-                final opt = _filters[i];
-                final active = _filter == opt;
+                final opt = keys[i];
+                final active = fk == opt;
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: () => setState(() => _filter = opt),
+                    onTap: () => setState(() => _filterKey = opt),
                     borderRadius: BorderRadius.circular(99),
                     child: Ink(
                       decoration: BoxDecoration(
@@ -161,7 +176,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
                       child: Center(
                         child: Text(
-                          opt,
+                          _filterLabel(opt),
                           style: rajdhani(13, weight: FontWeight.w600).copyWith(color: active ? Colors.black : t.text2),
                         ),
                       ),

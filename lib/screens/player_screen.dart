@@ -7,6 +7,7 @@ import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/player/php_gateway_js.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -24,6 +25,7 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   late int _channelId;
+  Channel? _channel;
 
   VideoPlayerController? _video;
   ChewieController? _chewie;
@@ -47,7 +49,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _bootstrap() async {
-    final ch = _ch;
+    final store = context.read<ContentStore>();
+    final ch = store.channelById(_channelId);
+    _channel = ch;
+    if (ch == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Kituo hakipatikani. Pakia upya orodha.';
+      });
+      return;
+    }
     final url = ch.streamUrl.trim();
     if (url.isEmpty) {
       setState(() {
@@ -64,8 +75,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await _initNativePlayer(url);
     }
   }
-
-  Channel get _ch => channelById(_channelId) ?? kChannels.first;
 
   Future<void> _initWebView(String url) async {
     try {
@@ -172,7 +181,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _reloadWeb() async {
     final w = _web;
-    final url = _ch.streamUrl.trim();
+    final url = (_channel?.streamUrl ?? '').trim();
     if (w == null || url.isEmpty) return;
     setState(() => _loading = true);
     await w.loadRequest(Uri.parse(url));
@@ -182,7 +191,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
-    final ch = _ch;
+    context.watch<ContentStore>();
+    final ch = _channel;
     final top = MediaQuery.paddingOf(context).top;
 
     return Scaffold(
@@ -191,7 +201,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           _PlayerChrome(
             top: top,
-            title: ch.name,
+            title: ch?.name ?? 'Kituo',
             subtitle: _useWebView ? 'Kivinjari · PHP gateway' : 'ExoPlayer · mfululizo',
             accent: t.accent,
             accent2: t.accent2,

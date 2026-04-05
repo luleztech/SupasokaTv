@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
+import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_typography.dart';
 
 class LoaderScreen extends StatefulWidget {
@@ -21,11 +23,21 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   int _pct = 0;
   String _status = kLoadingMessages.first;
   Timer? _timer;
+  bool _bootStarted = false;
 
   @override
   void initState() {
     super.initState();
     _logo.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+  }
+
+  Future<void> _start() async {
+    if (_bootStarted) return;
+    _bootStarted = true;
+    if (!mounted) return;
+    await context.read<ContentStore>().bootstrap();
+    if (!mounted) return;
     _timer = Timer.periodic(const Duration(milliseconds: 45), (t) {
       if (!mounted) return;
       setState(() {
