@@ -2,7 +2,12 @@
 
 Supasoka — Flutter live TV / streaming viewer app (Android, iOS, web, desktop).
 
-This repository contains the **user-facing app** only.
+This repository contains the **user-facing Flutter app** and a **Node.js API** under `backend/`.
+
+| Part | Stack | Deploy |
+|------|--------|--------|
+| Root | Flutter (mobile + web) | e.g. Railway Docker (`Dockerfile` at repo root) |
+| `backend/` | Node 20 + TypeScript + Express | Railway: set **root directory** to `backend` (see `backend/README.md`) |
 
 ## Requirements
 
