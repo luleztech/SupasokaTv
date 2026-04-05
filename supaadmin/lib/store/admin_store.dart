@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -115,17 +116,29 @@ class AdminStore extends ChangeNotifier {
   }
 
   /// Saves API origin + admin key on device (SharedPreferences). Required for syncing to Postgres.
+  /// If [adminKey] is empty, the previously saved key is kept (so saving URL alone does not wipe the key).
   Future<void> saveApiConnection({required String apiBaseUrl, required String adminKey}) async {
     final p = await SharedPreferences.getInstance();
     final b = apiBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
     final k = adminKey.trim();
     await p.setString(_prefsApiBase, b);
-    await p.setString(_prefsAdminKey, k);
     _apiBaseUrlPrefs = b;
-    _adminKeyPrefs = k;
+    if (k.isNotEmpty) {
+      await p.setString(_prefsAdminKey, k);
+      _adminKeyPrefs = k;
+    }
     _lastSyncError = null;
     notifyListeners();
     await syncNowToServer();
+  }
+
+  /// Removes the stored admin key (e.g. before handing device to someone else).
+  Future<void> clearSavedAdminKey() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_prefsAdminKey);
+    _adminKeyPrefs = null;
+    _lastSyncError = null;
+    notifyListeners();
   }
 
   /// Pushes current config to the server (same payload as local JSON).
@@ -149,6 +162,39 @@ class AdminStore extends ChangeNotifier {
     }
     _loaded = true;
     notifyListeners();
+    unawaited(refreshUsersFromServer());
+  }
+
+  /// Loads users from Postgres via `GET /api/v1/admin/users` (viewer registrations + admin-managed rows).
+  Future<void> refreshUsersFromServer() async {
+    final key = resolvedAdminKey;
+    if (key.isEmpty) return;
+    final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$base/api/v1/admin/users').replace(
+      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+    );
+    try {
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              'Accept': 'application/json',
+              'X-Admin-Key': key,
+            },
+          )
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return;
+      final raw = j['users'] as List<dynamic>? ?? [];
+      _config.users = raw.map((e) => UserDto.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_prefsKey, _config.toJsonString());
+      _lastSyncError = null;
+      notifyListeners();
+    } catch (_) {
+      /* offline or wrong URL — keep cached users */
+    }
   }
 
   Future<void> _pushConfigToServer({bool requireKey = false}) async {
@@ -355,6 +401,21 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> deleteUser(String id) async {
+    final key = resolvedAdminKey;
+    if (key.isNotEmpty) {
+      final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+      final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(id)}');
+      try {
+        await http
+            .delete(
+              uri,
+              headers: {'X-Admin-Key': key},
+            )
+            .timeout(const Duration(seconds: 25));
+      } catch (_) {
+        /* still remove locally */
+      }
+    }
     _config.users.removeWhere((u) => u.id == id);
     await _persist();
   }

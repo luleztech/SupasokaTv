@@ -155,9 +155,11 @@ class AppNav extends ChangeNotifier {
 
   int get currentTab => _tab;
 
-  void setTab(int index) {
-    if (_tab == index) return;
+  /// Returns true if the tab actually changed (caller may refresh content).
+  bool setTab(int index) {
+    if (_tab == index) return false;
     _tab = index;
     notifyListeners();
+    return true;
   }
 }

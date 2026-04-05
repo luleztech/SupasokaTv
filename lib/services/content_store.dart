@@ -32,9 +32,13 @@ class ContentStore extends ChangeNotifier {
   List<PayPlan> _malipoPlans = [];
   String _customerCareWhatsapp = '';
   bool _ready = false;
+  bool _refreshing = false;
   String? _loadError;
 
   bool get ready => _ready;
+
+  /// True while a silent background fetch ([refresh]) is in progress.
+  bool get refreshing => _refreshing;
   String? get loadError => _loadError;
   List<Channel> get channels => _channels;
   List<CarouselSlide> get carouselSlides => _carousel;
@@ -57,86 +61,113 @@ class ContentStore extends ChangeNotifier {
     return null;
   }
 
-  Future<void> bootstrap() async {
-    _ready = false;
-    _loadError = null;
+  /// [silent]: keep current UI visible while fetching (used for pull-to-refresh and tab changes).
+  Future<void> bootstrap({bool silent = false}) async {
+    if (!silent) {
+      _ready = false;
+      _loadError = null;
+    } else {
+      _refreshing = true;
+    }
     notifyListeners();
 
-    final prefs = await SharedPreferences.getInstance();
-    final base = apiConfigUrl;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final base = apiConfigUrl;
 
-    Future<void> applyCached() async {
-      final raw = prefs.getString(_prefsKey);
-      if (raw == null || raw.isEmpty) return;
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      _applyConfig(j);
-    }
+      Future<void> applyCached() async {
+        final raw = prefs.getString(_prefsKey);
+        if (raw == null || raw.isEmpty) return;
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        _applyConfig(j);
+      }
 
-    if (base.isEmpty) {
+      if (base.isEmpty) {
+        await applyCached();
+        if (_channels.isEmpty) {
+          _loadError =
+              'API base URL is not set. Set kRailwayApiBaseUrl in lib/config/deployment.dart to your Railway '
+              'API public HTTPS URL (same host if root directory is backend/, or another hostname if you use two services). '
+              'Or: flutter build apk --dart-define=API_BASE_URL=https://…';
+        } else {
+          _loadError = 'API base URL not set; showing last downloaded config.';
+        }
+        _ready = true;
+        notifyListeners();
+        return;
+      }
+
+      final origin = base.replaceAll(RegExp(r'/$'), '');
+      final uri = Uri.parse('$origin/api/v1/public/config').replace(
+        queryParameters: {
+          '_': DateTime.now().millisecondsSinceEpoch.toString(),
+          'r': DateTime.now().microsecondsSinceEpoch.toString(),
+        },
+      );
+      try {
+        final res = await http
+            .get(
+              uri,
+              headers: const {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Accept': 'application/json',
+              },
+            )
+            .timeout(const Duration(seconds: 25));
+        final body = res.body.trim();
+
+        if (res.statusCode == 200) {
+          if (body.startsWith('<!') || body.startsWith('<html')) {
+            _loadError =
+                'Got HTML instead of JSON — this base URL is probably a static web server, not the Node API. '
+                'Use a separate Railway service for backend/ and set kRailwayApiBaseUrl to that service’s public URL.';
+          } else {
+            Map<String, dynamic>? j;
+            try {
+              j = jsonDecode(res.body) as Map<String, dynamic>?;
+            } catch (_) {
+              j = null;
+            }
+            if (j != null && j['ok'] == true) {
+              _applyConfig(j);
+              await prefs.setString(_prefsKey, res.body);
+              _loadError = null;
+              _ready = true;
+              notifyListeners();
+              return;
+            }
+            _loadError = 'Invalid API response (expected JSON with ok: true). Check API base URL.';
+          }
+        } else if (res.statusCode == 404) {
+          _loadError =
+              'API not found (404). The backend URL may be wrong or the Railway service is missing. '
+              'Deploy backend/ and set kRailwayApiBaseUrl to that service’s public HTTPS URL.';
+        } else {
+          _loadError = 'Server error (${res.statusCode}).';
+        }
+      } catch (e) {
+        _loadError = 'Could not load config: $e';
+      }
+
       await applyCached();
-      if (_channels.isEmpty) {
-        _loadError =
-            'API base URL is not set. Set kRailwayApiBaseUrl in lib/config/deployment.dart to your Railway '
-            'API public HTTPS URL (same host if root directory is backend/, or another hostname if you use two services). '
-            'Or: flutter build apk --dart-define=API_BASE_URL=https://…';
-      } else {
-        _loadError = 'API base URL not set; showing last downloaded config.';
+      if (_channels.isNotEmpty && _loadError != null) {
+        _loadError = '${_loadError!} Showing cached data.';
+      }
+      if (_channels.isEmpty && _loadError == null) {
+        _loadError = 'No configuration available.';
       }
       _ready = true;
       notifyListeners();
-      return;
-    }
-
-    final uri = Uri.parse('${base.replaceAll(RegExp(r'/$'), '')}/api/v1/public/config');
-    try {
-      final res = await http.get(uri).timeout(const Duration(seconds: 20));
-      final body = res.body.trim();
-
-      if (res.statusCode == 200) {
-        if (body.startsWith('<!') || body.startsWith('<html')) {
-          _loadError =
-              'Got HTML instead of JSON — this base URL is probably a static web server, not the Node API. '
-              'Use a separate Railway service for backend/ and set kRailwayApiBaseUrl to that service’s public URL.';
-        } else {
-          Map<String, dynamic>? j;
-          try {
-            j = jsonDecode(res.body) as Map<String, dynamic>?;
-          } catch (_) {
-            j = null;
-          }
-          if (j != null && j['ok'] == true) {
-            _applyConfig(j);
-            await prefs.setString(_prefsKey, res.body);
-            _loadError = null;
-            _ready = true;
-            notifyListeners();
-            return;
-          }
-          _loadError = 'Invalid API response (expected JSON with ok: true). Check API base URL.';
-        }
-      } else if (res.statusCode == 404) {
-        _loadError =
-            'API not found (404). The backend URL may be wrong or the Railway service is missing. '
-            'Deploy backend/ and set kRailwayApiBaseUrl to that service’s public HTTPS URL.';
-      } else {
-        _loadError = 'Server error (${res.statusCode}).';
+    } finally {
+      if (silent) {
+        _refreshing = false;
+        notifyListeners();
       }
-    } catch (e) {
-      _loadError = 'Could not load config: $e';
     }
-
-    await applyCached();
-    if (_channels.isNotEmpty && _loadError != null) {
-      _loadError = '${_loadError!} Showing cached data.';
-    }
-    if (_channels.isEmpty && _loadError == null) {
-      _loadError = 'No configuration available.';
-    }
-    _ready = true;
-    notifyListeners();
   }
 
-  Future<void> refresh() => bootstrap();
+  Future<void> refresh() => bootstrap(silent: true);
 
   void _applyConfig(Map<String, dynamic> j) {
     final chRaw = j['channels'] as List<dynamic>? ?? [];

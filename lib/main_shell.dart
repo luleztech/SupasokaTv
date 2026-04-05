@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
@@ -15,18 +17,31 @@ class MainShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final nav = context.watch<AppNav>();
     final t = context.watch<ThemeController>().colors;
+    final refreshing = context.watch<ContentStore>().refreshing;
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
       backgroundColor: t.bg1,
-      body: IndexedStack(
-        index: nav.currentTab,
-        children: const [
-          HomeScreen(),
-          ChannelsScreen(),
-          LiveScreen(),
-          PaymentScreen(),
-          ProfileScreen(),
+      body: Column(
+        children: [
+          if (refreshing)
+            LinearProgressIndicator(
+              minHeight: 2,
+              backgroundColor: t.border.withValues(alpha: 0.35),
+              color: t.accent,
+            ),
+          Expanded(
+            child: IndexedStack(
+              index: nav.currentTab,
+              children: const [
+                HomeScreen(),
+                ChannelsScreen(),
+                LiveScreen(),
+                PaymentScreen(),
+                ProfileScreen(),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: Container(
@@ -71,7 +86,10 @@ class _TabButton extends StatelessWidget {
 
     return Expanded(
       child: InkWell(
-        onTap: () => context.read<AppNav>().setTab(i),
+        onTap: () {
+          final changed = context.read<AppNav>().setTab(i);
+          if (changed) unawaited(context.read<ContentStore>().refresh());
+        },
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [

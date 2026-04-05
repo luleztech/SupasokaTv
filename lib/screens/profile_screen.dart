@@ -1,41 +1,20 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/screens/settings_screen.dart';
+import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 
-const _chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-String _genId() {
-  final r = Random();
-  return List.generate(6, (_) => _chars[r.nextInt(_chars.length)]).join();
-}
-
-/// Letters + digits, shuffled — unique-feeling handle (e.g. `k7m2npa9`).
-String _genUsername() {
-  final r = Random();
-  const letters = 'abcdefghijklmnopqrstuvwxyz';
-  const digits = '0123456789';
-  final parts = <String>[];
-  for (var i = 0; i < 5; i++) {
-    parts.add(letters[r.nextInt(letters.length)]);
-  }
-  for (var i = 0; i < 3; i++) {
-    parts.add(digits[r.nextInt(digits.length)]);
-  }
-  parts.shuffle(r);
-  return parts.join();
-}
-
-String _avatarLetters(String username) {
-  final alnum = username.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+String _avatarLetters(String publicId) {
+  final tail =
+      publicId.startsWith('User-') && publicId.length > 5 ? publicId.substring(5) : publicId;
+  final alnum = tail.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
   if (alnum.length >= 2) return alnum.substring(0, 2).toUpperCase();
   if (alnum.isNotEmpty) return '${alnum[0]}•'.toUpperCase();
   return 'SK';
@@ -92,17 +71,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadUsername() async {
-    final p = await SharedPreferences.getInstance();
-    var name = p.getString('profile_username');
-    name ??= _genUsername();
-    await p.setString('profile_username', name);
-
-    var legacy = p.getString('user_id');
-    legacy ??= _genId();
-    await p.setString('user_id', legacy);
-
+    final id = await UserIdentity.getOrCreatePublicId();
     if (!mounted) return;
-    setState(() => _username = name);
+    setState(() => _username = id);
   }
 
   void _syncCountdownTimer() {
@@ -138,9 +109,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return ColoredBox(
       color: t.bg1,
-      child: ListView(
-        padding: const EdgeInsets.only(bottom: 100),
-        children: [
+      child: RefreshIndicator(
+        color: t.accent,
+        onRefresh: () => context.read<ContentStore>().refresh(),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 100),
+          children: [
           const AppHeader(title: 'Akaunti', subtitle: 'AKAUNTI YAKO'),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
@@ -209,6 +184,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

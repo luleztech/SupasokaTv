@@ -56,8 +56,15 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     };
   });
 
+  const cv = Number(settings.configVersion);
+  const syncedAt =
+    settings.configSyncedAt != null && settings.configSyncedAt !== ''
+      ? Number(settings.configSyncedAt)
+      : null;
+
   return {
-    configVersion: 1,
+    configVersion: Number.isFinite(cv) && cv > 0 ? cv : 1,
+    ...(syncedAt != null && Number.isFinite(syncedAt) ? { configSyncedAt: syncedAt } : {}),
     customerCareWhatsapp: settings.customerCareWhatsapp ?? '212600000000',
     channels,
     carousel: carRes.rows,

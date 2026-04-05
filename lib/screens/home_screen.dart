@@ -108,8 +108,12 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         ColoredBox(
           color: t.bg1,
-          child: CustomScrollView(
-            slivers: [
+          child: RefreshIndicator(
+            color: t.accent,
+            onRefresh: () => context.read<ContentStore>().refresh(),
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
               if (store.loadError != null)
                 SliverToBoxAdapter(
                   child: Padding(
@@ -324,6 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
             ],
+            ),
           ),
         ),
         const WhatsAppFab(),

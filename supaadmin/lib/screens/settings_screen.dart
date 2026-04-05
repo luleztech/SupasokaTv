@@ -95,7 +95,7 @@ class _ServerSyncCard extends StatefulWidget {
 class _ServerSyncCardState extends State<_ServerSyncCard> {
   late final TextEditingController _base = TextEditingController();
   late final TextEditingController _key = TextEditingController();
-  bool _seededBase = false;
+  bool _seededCredentials = false;
 
   @override
   void dispose() {
@@ -108,9 +108,10 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
     final cs = Theme.of(context).colorScheme;
-    if (!_seededBase && store.isLoaded) {
-      _seededBase = true;
+    if (!_seededCredentials && store.isLoaded) {
+      _seededCredentials = true;
       _base.text = store.resolvedApiBaseUrl;
+      _key.text = store.resolvedAdminKey;
     }
 
     return Container(
@@ -146,6 +147,21 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
             'Hifadhi kwenye simu pekee haitumiki kwa app ya mtazamaji. Weka API na funguo sawa na Railway (ADMIN_API_KEY).',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
+          if (store.hasAdminApiKey) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: cs.primary, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Funguo imehifadhiwa kwenye simu (itaonekana tena ukifungua app).',
+                    style: TextStyle(color: cs.primary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 14),
           TextField(
             controller: _base,
@@ -192,9 +208,16 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                           );
                           if (context.mounted) {
                             final err = context.read<AdminStore>().lastSyncError;
+                            final saved = context.read<AdminStore>().hasAdminApiKey;
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text(err == null ? 'Imehifadhiwa kwenye seva' : err),
+                                content: Text(
+                                  err == null
+                                      ? (saved
+                                          ? 'Imehifadhiwa: URL na funguo kwenye simu, na data kwenye seva.'
+                                          : 'Imehifadhiwa kwenye seva')
+                                      : err,
+                                ),
                               ),
                             );
                           }
@@ -218,6 +241,31 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
               ),
             ],
           ),
+          if (store.hasAdminApiKey) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: store.syncingToServer
+                    ? null
+                    : () async {
+                        await context.read<AdminStore>().clearSavedAdminKey();
+                        if (context.mounted) {
+                          setState(() {
+                            _key.clear();
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Funguo imefutwa kwenye simu')),
+                          );
+                        }
+                      },
+                child: Text(
+                  'Futa funguo kwenye simu',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

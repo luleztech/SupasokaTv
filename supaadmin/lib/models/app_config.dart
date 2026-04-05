@@ -358,27 +358,32 @@ class UserDto {
     required this.username,
     this.premiumUntilMs,
     this.note = '',
+    this.createdAtMs,
   });
 
-  /// Stable id (e.g. device `user_id` from the viewer app).
+  /// Stable id (e.g. `User-xxxxx` from the viewer app).
   String id;
   String username;
   /// When premium ends; `null` = free (no subscription end set).
   int? premiumUntilMs;
   String note;
+  /// Set when loaded from `GET /api/v1/admin/users` (first registration time).
+  int? createdAtMs;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'username': username,
         'premiumUntilMs': premiumUntilMs,
         'note': note,
+        if (createdAtMs != null) 'createdAtMs': createdAtMs,
       };
 
   factory UserDto.fromJson(Map<String, dynamic> j) => UserDto(
         id: j['id'] as String,
         username: j['username'] as String,
-        premiumUntilMs: j['premiumUntilMs'] as int?,
+        premiumUntilMs: (j['premiumUntilMs'] as num?)?.toInt(),
         note: j['note'] as String? ?? '',
+        createdAtMs: (j['createdAtMs'] as num?)?.toInt(),
       );
 
   UserDto copyWith({
@@ -387,12 +392,15 @@ class UserDto {
     int? premiumUntilMs,
     bool clearPremiumUntilMs = false,
     String? note,
+    int? createdAtMs,
+    bool clearCreatedAtMs = false,
   }) {
     return UserDto(
       id: id ?? this.id,
       username: username ?? this.username,
       premiumUntilMs: clearPremiumUntilMs ? null : (premiumUntilMs ?? this.premiumUntilMs),
       note: note ?? this.note,
+      createdAtMs: clearCreatedAtMs ? null : (createdAtMs ?? this.createdAtMs),
     );
   }
 

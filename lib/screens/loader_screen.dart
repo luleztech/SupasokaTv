@@ -5,6 +5,7 @@ import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
 
 class LoaderScreen extends StatefulWidget {
@@ -37,6 +38,7 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     _bootStarted = true;
     if (!mounted) return;
     await context.read<ContentStore>().bootstrap();
+    await UserIdentity.registerWithBackend();
     if (!mounted) return;
     _timer = Timer.periodic(const Duration(milliseconds: 45), (t) {
       if (!mounted) return;

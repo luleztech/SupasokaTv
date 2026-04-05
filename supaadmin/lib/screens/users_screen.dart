@@ -18,6 +18,22 @@ class UsersScreen extends StatefulWidget {
 
 class _UsersScreenState extends State<UsersScreen> {
   _UserFilter _filter = _UserFilter.all;
+  final _searchFocus = FocusNode();
+  final _searchCtrl = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  String _fmtJoinedMs(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(d.day)}.${two(d.month)}.${d.year}';
+  }
 
   bool _matches(UserDto u, _UserFilter f) {
     switch (f) {
@@ -32,74 +48,16 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
-  List<UserDto> _filtered(List<UserDto> all) => all.where((u) => _matches(u, _filter)).toList();
-
-  Future<void> _addUser(BuildContext context, AdminStore store) async {
-    final idCtrl = TextEditingController();
-    final nameCtrl = TextEditingController();
-    bool? ok;
-    String id = '';
-    String name = '';
-    try {
-      ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Mtumiaji mpya'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: idCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Kitambulisho (ID)',
-                  hintText: 'device / user id',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Jina la mtumiaji',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ongeza')),
-          ],
-        ),
-      );
-      if (ok == true) {
-        id = idCtrl.text.trim();
-        name = nameCtrl.text.trim();
-      }
-    } finally {
-      idCtrl.dispose();
-      nameCtrl.dispose();
-    }
-    if (ok != true || !context.mounted) return;
-    if (id.isEmpty || name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Jaza ID na jina')),
-      );
-      return;
-    }
-    if (store.config.users.any((u) => u.id == id)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ID hii tayari ipo')),
-      );
-      return;
-    }
-    await store.upsertUser(UserDto(id: id, username: name, premiumUntilMs: null, note: ''));
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mtumiaji ameongezwa')),
-      );
-    }
+  bool _matchesSearch(UserDto u, String q) {
+    final s = q.trim().toLowerCase();
+    if (s.isEmpty) return true;
+    return u.id.toLowerCase().contains(s) ||
+        u.username.toLowerCase().contains(s) ||
+        u.note.toLowerCase().contains(s);
   }
+
+  List<UserDto> _filtered(List<UserDto> all) =>
+      all.where((u) => _matches(u, _filter)).where((u) => _matchesSearch(u, _searchQuery)).toList();
 
   Future<void> _confirmDelete(BuildContext context, AdminStore store, UserDto u) async {
     final ok = await showDialog<bool>(
@@ -135,6 +93,11 @@ class _UsersScreenState extends State<UsersScreen> {
     final all = store.config.users;
     final list = _filtered(all);
     final cs = Theme.of(context).colorScheme;
+    final emptyMsg = all.isEmpty
+        ? 'Hakuna watumiaji kwenye kichujio hiki.'
+        : (_searchQuery.trim().isNotEmpty
+            ? 'Hakuna matokeo ya utafutaji.'
+            : 'Hakuna watumiaji kwenye kichujio hiki.');
 
     int count(_UserFilter f) => all.where((u) => _matches(u, f)).length;
 
@@ -145,15 +108,51 @@ class _UsersScreenState extends State<UsersScreen> {
         children: [
           StaggerEntrance(
             index: 0,
-            child: AdminPageHeader(
-              title: 'Users',
-              subtitle: 'Premium · walioisha · bure — Dhibiti muda wa kila mtumiaji.',
-              icon: Icons.group_rounded,
-              actions: [
-                FilledButton.icon(
-                  onPressed: () => _addUser(context, store),
-                  icon: const Icon(Icons.person_add_rounded),
-                  label: const Text('Ongeza'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const AdminPageHeader(
+                  title: 'Users',
+                  subtitle: 'Premium · walioisha · bure — Dhibiti muda wa kila mtumiaji.',
+                  icon: Icons.group_rounded,
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _searchCtrl,
+                  focusNode: _searchFocus,
+                  onChanged: (v) => setState(() => _searchQuery = v),
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Tafuta kwa ID, jina, maelezo…',
+                    hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+                    prefixIcon: Icon(Icons.search_rounded, color: cs.primary.withValues(alpha: 0.9)),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            tooltip: 'Futa',
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                            icon: Icon(Icons.close_rounded, color: Colors.white.withValues(alpha: 0.45)),
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: cs.primary.withValues(alpha: 0.65), width: 1.5),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 14),
+                  ),
                 ),
               ],
             ),
@@ -193,34 +192,47 @@ class _UsersScreenState extends State<UsersScreen> {
           ),
           const SizedBox(height: 16),
           Expanded(
-            child: list.isEmpty
-                ? Center(
-                    child: Text(
-                      'Hakuna watumiaji kwenye kichujio hiki.',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.45)),
-                    ),
-                  )
-                : ListView.builder(
-                    physics: const BouncingScrollPhysics(),
-                    padding: EdgeInsets.zero,
-                    itemCount: list.length,
-                    itemBuilder: (context, i) {
-                      final u = list[i];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: StaggerEntrance(
-                          index: i,
-                          child: _UserCard(
-                            user: u,
-                            statusLabel: _statusShort(u),
-                            statusColor: _statusColor(context, u),
-                            onManage: () => showUserManageSheet(context, u),
-                            onDelete: () => _confirmDelete(context, store, u),
+            child: RefreshIndicator(
+              color: cs.primary,
+              onRefresh: () => store.refreshUsersFromServer(),
+              child: list.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(
+                          height: 280,
+                          child: Center(
+                            child: Text(
+                              emptyMsg,
+                              style: TextStyle(color: Colors.white.withValues(alpha: 0.45)),
+                            ),
                           ),
                         ),
-                      );
-                    },
-                  ),
+                      ],
+                    )
+                  : ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.zero,
+                      itemCount: list.length,
+                      itemBuilder: (context, i) {
+                        final u = list[i];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: StaggerEntrance(
+                            index: i,
+                            child: _UserCard(
+                              user: u,
+                              joinedLabel: u.createdAtMs != null ? _fmtJoinedMs(u.createdAtMs!) : null,
+                              statusLabel: _statusShort(u),
+                              statusColor: _statusColor(context, u),
+                              onManage: () => showUserManageSheet(context, u),
+                              onDelete: () => _confirmDelete(context, store, u),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
           ),
         ],
       ),
@@ -263,6 +275,7 @@ class _FilterChip extends StatelessWidget {
 class _UserCard extends StatelessWidget {
   const _UserCard({
     required this.user,
+    this.joinedLabel,
     required this.statusLabel,
     required this.statusColor,
     required this.onManage,
@@ -270,6 +283,7 @@ class _UserCard extends StatelessWidget {
   });
 
   final UserDto user;
+  final String? joinedLabel;
   final String statusLabel;
   final Color statusColor;
   final VoidCallback onManage;
@@ -329,6 +343,13 @@ class _UserCard extends StatelessWidget {
                       user.id,
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                     ),
+                    if (joinedLabel != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Alijiunga: $joinedLabel',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 11),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 6,

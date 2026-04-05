@@ -53,10 +53,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
         children: [
           _PaymentHeader(t: t, top: MediaQuery.paddingOf(context).top),
           Expanded(
-            child: ListView(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, bottom + 32),
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              children: [
+            child: RefreshIndicator(
+              color: t.accent,
+              onRefresh: () => context.read<ContentStore>().refresh(),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(16, 8, 16, bottom + 32),
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                children: [
                 Text(
                   'Chagua kifurushi',
                   style: rajdhani(13, weight: FontWeight.w700).copyWith(color: t.text2, letterSpacing: 0.8),
@@ -340,6 +344,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       : const SizedBox.shrink(),
                 ),
               ],
+              ),
             ),
           ),
         ],

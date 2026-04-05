@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/main_shell.dart';
 import 'package:supasoka/screens/loader_screen.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
@@ -61,8 +64,31 @@ class _RootNavigator extends StatefulWidget {
   State<_RootNavigator> createState() => _RootNavigatorState();
 }
 
-class _RootNavigatorState extends State<_RootNavigator> {
+class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObserver {
   bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _loaded && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        context.read<ContentStore>().refresh();
+        unawaited(UserIdentity.registerWithBackend());
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

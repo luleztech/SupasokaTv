@@ -54,39 +54,54 @@ class LiveScreen extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: matches.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        'Hakuna mechi za moja kwa moja zilizo orodheshwa.',
-                        textAlign: TextAlign.center,
-                        style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text2),
+            child: RefreshIndicator(
+              color: t.accent,
+              onRefresh: () => context.read<ContentStore>().refresh(),
+              child: matches.isEmpty
+                  ? LayoutBuilder(
+                      builder: (context, constraints) {
+                        return SingleChildScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Text(
+                                  'Hakuna mechi za moja kwa moja zilizo orodheshwa.',
+                                  textAlign: TextAlign.center,
+                                  style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text2),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    )
+                  : GridView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: cellW / kChannelCardLiveGridHeight,
                       ),
+                      itemCount: matches.length,
+                      itemBuilder: (context, i) {
+                        final m = matches[i];
+                        final channelId = m.channelId;
+                        final ch = store.channelById(channelId);
+                        if (ch == null) {
+                          return const SizedBox.shrink();
+                        }
+                        return ChannelCard(
+                          channel: ch,
+                          onPress: () => _openChannel(context, channelId),
+                        );
+                      },
                     ),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: cellW / kChannelCardLiveGridHeight,
-                    ),
-                    itemCount: matches.length,
-                    itemBuilder: (context, i) {
-                      final m = matches[i];
-                      final channelId = m.channelId;
-                      final ch = store.channelById(channelId);
-                      if (ch == null) {
-                        return const SizedBox.shrink();
-                      }
-                      return ChannelCard(
-                        channel: ch,
-                        onPress: () => _openChannel(context, channelId),
-                      );
-                    },
-                  ),
+            ),
           ),
         ],
       ),

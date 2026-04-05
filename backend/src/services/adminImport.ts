@@ -183,6 +183,49 @@ export async function importAppConfig(body: unknown): Promise<void> {
       [wa],
     );
 
+    const cfgVer =
+      typeof b.configVersion === 'number' && Number.isFinite(b.configVersion)
+        ? String(Math.trunc(b.configVersion))
+        : '1';
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('configVersion', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [cfgVer],
+    );
+
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('configSyncedAt', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [String(Date.now())],
+    );
+
+    const appUsers = (b.users as unknown[]) ?? [];
+    for (const u of appUsers) {
+      const x = u as Record<string, unknown>;
+      const uid = String(x.id ?? '').trim();
+      if (!uid) continue;
+      const premiumRaw = x.premiumUntilMs;
+      const premiumUntilMs =
+        premiumRaw === null || premiumRaw === undefined ? null : Number(premiumRaw);
+      await client.query(
+        `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (id) DO UPDATE SET
+           profile_username = EXCLUDED.profile_username,
+           legacy_user_id = COALESCE(EXCLUDED.legacy_user_id, users.legacy_user_id),
+           premium_until_ms = EXCLUDED.premium_until_ms,
+           note = EXCLUDED.note,
+           updated_at = now()`,
+        [
+          uid,
+          String(x.username ?? ''),
+          x.legacyUserId != null ? String(x.legacyUserId) : null,
+          premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null,
+          String(x.note ?? ''),
+        ],
+      );
+    }
+
     await client.query('COMMIT');
   } catch (e) {
     try {

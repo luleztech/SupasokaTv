@@ -92,141 +92,159 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
 
     return ColoredBox(
       color: t.bg1,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          AppHeader(
-            title: 'Channels',
-            subtitle: 'ALL STREAMS',
-            onSearch: () {
-              setState(() {
-                _searchOpen = !_searchOpen;
-                if (!_searchOpen) {
-                  _query = '';
-                  _searchFocus.unfocus();
-                } else {
-                  Future.microtask(_searchFocus.requestFocus);
-                }
-              });
-            },
-          ),
-          AnimatedCrossFade(
-            firstChild: const SizedBox.shrink(),
-            secondChild: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Container(
-                height: 44,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: t.card,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _searchOpen ? t.accent : t.border, width: 1.5),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Ionicons.search_outline, size: 16, color: t.accent),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        focusNode: _searchFocus,
-                        onChanged: (v) => setState(() => _query = v),
-                        style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          hintText: 'Search channels...',
-                          hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
-                        ),
-                      ),
-                    ),
-                    if (_query.isNotEmpty)
-                      IconButton(
-                        onPressed: () => setState(() => _query = ''),
-                        icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
-                      ),
-                  ],
-                ),
+      child: RefreshIndicator(
+        color: t.accent,
+        onRefresh: () => context.read<ContentStore>().refresh(),
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: AppHeader(
+                title: 'Channels',
+                subtitle: 'ALL STREAMS',
+                onSearch: () {
+                  setState(() {
+                    _searchOpen = !_searchOpen;
+                    if (!_searchOpen) {
+                      _query = '';
+                      _searchFocus.unfocus();
+                    } else {
+                      Future.microtask(_searchFocus.requestFocus);
+                    }
+                  });
+                },
               ),
             ),
-            crossFadeState: _searchOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 220),
-          ),
-          SizedBox(
-            height: 44,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              scrollDirection: Axis.horizontal,
-              itemCount: keys.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, i) {
-                final opt = keys[i];
-                final active = fk == opt;
-                return Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => setState(() => _filterKey = opt),
-                    borderRadius: BorderRadius.circular(99),
-                    child: Ink(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(99),
-                        gradient: active ? LinearGradient(colors: [t.accent, t.accent2]) : null,
-                        color: active ? null : t.card,
-                        border: active ? null : Border.all(color: t.border),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-                      child: Center(
-                        child: Text(
-                          _filterLabel(opt),
-                          style: rajdhani(13, weight: FontWeight.w600).copyWith(color: active ? Colors.black : t.text2),
-                        ),
-                      ),
+            SliverToBoxAdapter(
+              child: AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: t.card,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _searchOpen ? t.accent : t.border, width: 1.5),
                     ),
-                  ),
-                );
-              },
-            ),
-          ),
-          if (_query.trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-              child: Text.rich(
-                TextSpan(
-                  style: rajdhani(12).copyWith(color: t.text2),
-                  children: [
-                    TextSpan(text: '${list.length} result${list.length == 1 ? '' : 's'} for '),
-                    TextSpan(text: '"$_query"', style: TextStyle(color: t.accent)),
-                  ],
-                ),
-              ),
-            ),
-          Expanded(
-            child: list.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Row(
                       children: [
-                        Icon(Ionicons.search_outline, size: 40, color: t.border),
-                        const SizedBox(height: 12),
-                        Text('No channels found', style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text2)),
+                        Icon(Ionicons.search_outline, size: 16, color: t.accent),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            focusNode: _searchFocus,
+                            onChanged: (v) => setState(() => _query = v),
+                            style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              border: InputBorder.none,
+                              hintText: 'Search channels...',
+                              hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
+                            ),
+                          ),
+                        ),
+                        if (_query.isNotEmpty)
+                          IconButton(
+                            onPressed: () => setState(() => _query = ''),
+                            icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
+                          ),
                       ],
                     ),
-                  )
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 90),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 14,
-                      crossAxisSpacing: 14,
-                      childAspectRatio: cellW / kChannelCardGridHeight,
+                  ),
+                ),
+                crossFadeState: _searchOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 220),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 44,
+                child: ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: keys.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) {
+                    final opt = keys[i];
+                    final active = fk == opt;
+                    return Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => setState(() => _filterKey = opt),
+                        borderRadius: BorderRadius.circular(99),
+                        child: Ink(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(99),
+                            gradient: active ? LinearGradient(colors: [t.accent, t.accent2]) : null,
+                            color: active ? null : t.card,
+                            border: active ? null : Border.all(color: t.border),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                          child: Center(
+                            child: Text(
+                              _filterLabel(opt),
+                              style: rajdhani(13, weight: FontWeight.w600).copyWith(color: active ? Colors.black : t.text2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            if (_query.trim().isNotEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                  child: Text.rich(
+                    TextSpan(
+                      style: rajdhani(12).copyWith(color: t.text2),
+                      children: [
+                        TextSpan(text: '${list.length} result${list.length == 1 ? '' : 's'} for '),
+                        TextSpan(text: '"$_query"', style: TextStyle(color: t.accent)),
+                      ],
                     ),
-                    itemCount: list.length,
-                    itemBuilder: (context, i) {
+                  ),
+                ),
+              ),
+            if (list.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Ionicons.search_outline, size: 40, color: t.border),
+                      const SizedBox(height: 12),
+                      Text('No channels found', style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text2)),
+                    ],
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 90),
+                sliver: SliverGrid(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 14,
+                    crossAxisSpacing: 14,
+                    childAspectRatio: cellW / kChannelCardGridHeight,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) {
                       final ch = list[i];
                       return ChannelCard(channel: ch, onPress: () => _openChannel(context, ch.id));
                     },
+                    childCount: list.length,
                   ),
-          ),
-        ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
