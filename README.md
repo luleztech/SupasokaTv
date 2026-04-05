@@ -9,6 +9,15 @@ This repository contains the **user-facing Flutter app** and a **Node.js API** u
 | Root | Flutter (mobile + web) | e.g. Railway Docker (`Dockerfile` at repo root) |
 | `backend/` | Node 20 + TypeScript + Express | Railway: set **root directory** to `backend` (see `backend/README.md`) |
 
+## PostgreSQL (Railway)
+
+SQL schema and apply script live in **`database/`** (see [`database/README.md`](database/README.md)).
+
+```bash
+railway run bash database/apply.sh
+# or from psql: \i .../database/schema.sql
+```
+
 ## Requirements
 
 - [Flutter](https://docs.flutter.dev/get-started/install) SDK (see `pubspec.yaml` for the Dart SDK constraint)
