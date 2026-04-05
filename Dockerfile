@@ -19,6 +19,7 @@ WORKDIR /srv
 COPY --from=build /app/build/web ./web
 
 ENV NODE_ENV=production
+# Railway injects PORT at runtime (e.g. 8080). Fallback 8080 for local runs.
 EXPOSE 8080
 
 # -s: SPA fallback; bind all interfaces for Railway

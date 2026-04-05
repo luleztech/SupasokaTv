@@ -30,13 +30,18 @@ flutter build appbundle
 
 ## Deploy on [Railway](https://railway.app)
 
-This repo includes a **`Dockerfile`** that runs `flutter build web --release` and serves the output with [`serve`](https://www.npmjs.com/package/serve) on **`PORT`** (required by Railway).
+**Production (Flutter web):** [https://supasokatv-production.up.railway.app](https://supasokatv-production.up.railway.app)
 
-1. Create a project → **Deploy from GitHub** → select this repo.
-2. Railway should pick **Dockerfile** (see `railway.json`). Do **not** use Railpack-only mode for this repo — Flutter is not auto-detected.
-3. After deploy, open the generated **public URL** (Settings → Networking → Generate domain).
+The root **`Dockerfile`** runs `flutter build web --release` and serves static files with [`serve`](https://www.npmjs.com/package/serve). The process **must listen on `PORT`** (Railway sets this; use **8080** in variables if you pin a port — the container binds `0.0.0.0:$PORT`).
 
-To test the image locally:
+1. Create a project → **Deploy from GitHub** → select this repo (root directory = repo root).
+2. Use **Dockerfile** / `railway.json` — do **not** rely on Railpack for the Flutter app.
+3. **Variables (optional):** `PORT=8080` if you want a fixed internal port; otherwise Railway assigns `PORT` automatically.
+4. **Networking:** public hostname `supasokatv-production.up.railway.app` → routes to the service on `$PORT`.
+
+Canonical URL is also in code: `lib/config/deployment.dart` → `kRailwayWebUrl`.
+
+Local Docker smoke test:
 
 ```bash
 docker build -t supasoka-web .

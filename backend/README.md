@@ -26,9 +26,11 @@ Copy `.env.example` → `.env` locally.
 
 | Variable | Default | Notes |
 |----------|---------|--------|
-| `PORT` | `3000` | Railway injects this |
+| `PORT` | `8080` | Railway injects this at runtime (align with service port) |
 | `NODE_ENV` | `development` | `production` in deploy |
-| `CORS_ORIGIN` | `*` | Comma list or `*` |
+| `CORS_ORIGIN` | `*` | For browser calls from web app: `https://supasokatv-production.up.railway.app` |
+
+**Flutter web (production):** [https://supasokatv-production.up.railway.app](https://supasokatv-production.up.railway.app)
 
 ## Endpoints
 
