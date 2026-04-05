@@ -68,7 +68,10 @@ class ContentStore extends ChangeNotifier {
     if (base.isEmpty) {
       await applyCached();
       if (_channels.isEmpty) {
-        _loadError = 'API base URL is not configured.';
+        _loadError =
+            'API base URL is not set. Set kRailwayApiBaseUrl in lib/config/deployment.dart to your Railway '
+            'API public HTTPS URL (same host if root directory is backend/, or another hostname if you use two services). '
+            'Or: flutter build apk --dart-define=API_BASE_URL=https://…';
       } else {
         _loadError = 'API base URL not set; showing last downloaded config.';
       }
@@ -80,18 +83,37 @@ class ContentStore extends ChangeNotifier {
     final uri = Uri.parse('${base.replaceAll(RegExp(r'/$'), '')}/api/v1/public/config');
     try {
       final res = await http.get(uri).timeout(const Duration(seconds: 20));
+      final body = res.body.trim();
+
       if (res.statusCode == 200) {
-        final j = jsonDecode(res.body) as Map<String, dynamic>;
-        if (j['ok'] == true) {
-          _applyConfig(j);
-          await prefs.setString(_prefsKey, res.body);
-          _loadError = null;
-          _ready = true;
-          notifyListeners();
-          return;
+        if (body.startsWith('<!') || body.startsWith('<html')) {
+          _loadError =
+              'Got HTML instead of JSON — this base URL is probably a static web server, not the Node API. '
+              'Use a separate Railway service for backend/ and set kRailwayApiBaseUrl to that service’s public URL.';
+        } else {
+          Map<String, dynamic>? j;
+          try {
+            j = jsonDecode(res.body) as Map<String, dynamic>?;
+          } catch (_) {
+            j = null;
+          }
+          if (j != null && j['ok'] == true) {
+            _applyConfig(j);
+            await prefs.setString(_prefsKey, res.body);
+            _loadError = null;
+            _ready = true;
+            notifyListeners();
+            return;
+          }
+          _loadError = 'Invalid API response (expected JSON with ok: true). Check API base URL.';
         }
+      } else if (res.statusCode == 404) {
+        _loadError =
+            'API not found (404). The backend URL may be wrong or the Railway service is missing. '
+            'Deploy backend/ and set kRailwayApiBaseUrl to that service’s public HTTPS URL.';
+      } else {
+        _loadError = 'Server error (${res.statusCode}).';
       }
-      _loadError = 'Server error (${res.statusCode}).';
     } catch (e) {
       _loadError = 'Could not load config: $e';
     }

@@ -9,9 +9,9 @@ COPY pubspec.yaml pubspec.lock ./
 RUN flutter pub get
 
 COPY . .
-# Uses default API URL from lib/config/deployment.dart; override if needed:
-# --dart-define=API_BASE_URL=https://your-api.example.com
-RUN flutter build web --release
+# Set Railway **build** variable `API_BASE_URL` to your backend’s public HTTPS origin, or bake it in `deployment.dart`.
+ARG API_BASE_URL
+RUN flutter build web --release --dart-define=API_BASE_URL=${API_BASE_URL}
 
 # Tiny static server; respects Railway PORT
 FROM node:20-alpine

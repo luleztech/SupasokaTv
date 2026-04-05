@@ -46,6 +46,9 @@ The user app’s default API base URL lives in the repo root at `lib/config/depl
 3. Deploy: Dockerfile in this folder is picked up via `railway.json`, or use **Railpack/Nixpacks** with:
    - Build: `npm run build`
    - Start: `npm start`
-4. Generate a **public URL** for the API and align it with `kRailwayApiBaseUrl` in the Flutter app’s `lib/config/deployment.dart`.
+4. Open the API service → **Settings → Networking → Public networking** → generate/copy the **HTTPS URL** (different hostname from the Flutter web app).
+5. In the repo root `lib/config/deployment.dart`, set `kRailwayApiBaseUrl` to that URL (or pass `--dart-define=API_BASE_URL=…` when building the app).
+6. Link **Postgres** to this service (or set `DATABASE_URL`). Apply schema from `database/` (see repo root `database/README.md`).
+7. Smoke test: `curl -sS https://YOUR-API.up.railway.app/api/v1/health` should return JSON.
 
 Keep the Flutter **web** service and this **API** as **two** Railway services in one project.

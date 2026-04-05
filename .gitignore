@@ -55,3 +55,6 @@ app.*.map.json
 # Node API (local secrets)
 /backend/.env
 /backend/.env.local
+
+# Local API URL for Flutter builds (copy from dart_defines.example.json)
+/dart_defines.json
