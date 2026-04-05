@@ -17,6 +17,13 @@ int _asInt(dynamic v) {
   return int.tryParse(v.toString()) ?? 0;
 }
 
+/// Malipo accents may be 24-bit RGB only (DB INTEGER) or full ARGB (BIGINT).
+Color _malipoAccentFromApi(int raw) {
+  final u = raw & 0xFFFFFFFF;
+  if (u <= 0xFFFFFF) return Color(0xFF000000 | u);
+  return Color(u);
+}
+
 class ContentStore extends ChangeNotifier {
   List<Channel> _channels = [];
   List<CarouselSlide> _carousel = [];
@@ -203,8 +210,8 @@ class ContentStore extends ChangeNotifier {
         amount: m['amount'] as String? ?? '',
         period: m['period'] as String? ?? '',
         popular: m['popular'] as bool? ?? false,
-        accent1: Color(a1 & 0xFFFFFFFF),
-        accent2: Color(a2 & 0xFFFFFFFF),
+        accent1: _malipoAccentFromApi(a1),
+        accent2: _malipoAccentFromApi(a2),
         badge: m['badge'] as String? ?? '',
       );
     }).toList();

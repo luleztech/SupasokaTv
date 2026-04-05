@@ -35,6 +35,14 @@ function importErrorMessage(e: unknown): string {
   return String(e);
 }
 
+/** Dart `Color.value` is 32-bit ARGB (>2^31-1); PG INTEGER must stay ≤ 2147483647. Keep RGB only. */
+function accentRgbFromDartColor(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  const u = Math.trunc(n) >>> 0;
+  return u & 0xffffff;
+}
+
 export async function importAppConfig(body: unknown): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -146,8 +154,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
           x.amount,
           x.period,
           (x.popular as boolean) ?? false,
-          Math.trunc(Number(x.accent1)) || 0,
-          Math.trunc(Number(x.accent2)) || 0,
+          accentRgbFromDartColor(x.accent1),
+          accentRgbFromDartColor(x.accent2),
           (x.badge as string) ?? '',
           sort,
         ],
