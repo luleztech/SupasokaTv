@@ -43,15 +43,3 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-
-# Release signing (copy from key.properties.example)
-/android/key.properties
-# Keystores copied from React Native — do not commit
-/android/app/*.keystore
-
-# Node API (local secrets)
-/backend/.env
-/backend/.env.local
-
-# Local API URL for Flutter builds (copy from dart_defines.example.json)
-/dart_defines.json

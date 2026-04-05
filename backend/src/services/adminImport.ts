@@ -1,4 +1,7 @@
+import { DatabaseError } from 'pg';
+
 import { getPool } from '../db/pool';
+import { logger } from '../lib/logger';
 import { HttpError } from '../middleware/errorHandler';
 
 type ChannelIn = {
@@ -21,6 +24,17 @@ function digitsWhatsapp(raw: unknown): string {
   return '212600000000';
 }
 
+function importErrorMessage(e: unknown): string {
+  if (e instanceof DatabaseError) {
+    const parts = [e.message];
+    if (e.detail) parts.push(e.detail);
+    if (e.hint) parts.push(`Hint: ${e.hint}`);
+    return parts.join(' ');
+  }
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 export async function importAppConfig(body: unknown): Promise<void> {
   const pool = getPool();
   if (!pool) {
@@ -39,9 +53,11 @@ export async function importAppConfig(body: unknown): Promise<void> {
     );
 
     const channels = (b.channels as unknown[]) ?? [];
+    const channelIds = new Set<number>();
     let sort = 0;
     for (const c of channels) {
       const ch = c as ChannelIn;
+      channelIds.add(ch.id);
       const streamUrl = String(ch.streamUrl ?? ch.url ?? '');
       await client.query(
         `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, sort_order)
@@ -66,14 +82,25 @@ export async function importAppConfig(body: unknown): Promise<void> {
       `SELECT setval(pg_get_serial_sequence('channels','id'), (SELECT COALESCE(MAX(id),1) FROM channels))`,
     );
 
+    const fallbackChannelId =
+      channels.length > 0 ? (channels[0] as ChannelIn).id : null;
+
     const carousel = (b.carousel as unknown[]) ?? [];
+    if (carousel.length > 0 && fallbackChannelId === null) {
+      throw new HttpError(400, 'Carousel slides require at least one channel.', 'NO_CHANNELS');
+    }
     sort = 0;
     for (const s of carousel) {
       const x = s as Record<string, unknown>;
+      const rawCid = Number(x.channelId);
+      const channelId =
+        channelIds.has(rawCid) && Number.isFinite(rawCid)
+          ? rawCid
+          : fallbackChannelId!;
       await client.query(
         `INSERT INTO carousel_slides (badge, badge_icon, title, channel_id, img, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [x.badge, x.badgeIcon, x.title, x.channelId, x.img, sort],
+        [x.badge, x.badgeIcon, x.title, channelId, x.img, sort],
       );
       sort += 1;
     }
@@ -82,6 +109,9 @@ export async function importAppConfig(body: unknown): Promise<void> {
     sort = 0;
     for (const m of lives) {
       const x = m as Record<string, unknown>;
+      const rawLc = Number(x.channelId);
+      const liveChannelId =
+        channelIds.has(rawLc) && Number.isFinite(rawLc) ? rawLc : null;
       await client.query(
         `INSERT INTO live_matches (id, title, sport, sport_icon, img, channel_id, live_badge, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
@@ -91,7 +121,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
           (x.sport as string) ?? '',
           (x.sportIcon as string) ?? '',
           (x.img as string) ?? '',
-          x.channelId,
+          liveChannelId,
           (x.liveBadge as boolean) ?? true,
           sort,
         ],
@@ -116,8 +146,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
           x.amount,
           x.period,
           (x.popular as boolean) ?? false,
-          x.accent1 as number,
-          x.accent2 as number,
+          Math.trunc(Number(x.accent1)) || 0,
+          Math.trunc(Number(x.accent2)) || 0,
           (x.badge as string) ?? '',
           sort,
         ],
@@ -147,8 +177,16 @@ export async function importAppConfig(body: unknown): Promise<void> {
 
     await client.query('COMMIT');
   } catch (e) {
-    await client.query('ROLLBACK');
-    throw e;
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    if (e instanceof HttpError) {
+      throw e;
+    }
+    logger.error({ err: e }, 'admin_import_failed');
+    throw new HttpError(500, importErrorMessage(e), 'IMPORT_FAILED');
   } finally {
     client.release();
   }

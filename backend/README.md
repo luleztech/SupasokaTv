@@ -29,6 +29,7 @@ Copy `.env.example` → `.env` locally.
 | `PORT` | `8080` | Railway injects this at runtime (align with service port) |
 | `NODE_ENV` | `development` | `production` in deploy |
 | `CORS_ORIGIN` | `*` | For browser calls from web app: `https://supasokatv-production.up.railway.app` |
+| `ADMIN_API_KEY` | *(empty)* | Set a long random secret; use the same value in **SupaAdmin → Settings** so imports reach Postgres. |
 
 **Flutter web (production):** [https://supasokatv-production.up.railway.app](https://supasokatv-production.up.railway.app)
 
