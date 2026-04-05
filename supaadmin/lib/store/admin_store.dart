@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -8,78 +7,39 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/admin_api_config.dart';
 import '../models/app_config.dart';
 
-const _prefsKey = 'supaadmin_app_config_v1';
+const _prefsKey = 'supaadmin_app_config_v2';
+const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsApiBase = 'supaadmin_api_base_url';
 const _prefsAdminKey = 'supaadmin_admin_api_key';
 
-AppConfig _defaultConfig() {
+/// Empty workspace — no demo channels/users; add real data in SupaAdmin or load from API.
+AppConfig _emptyProductionConfig() {
   return AppConfig(
-    configVersion: 1,
-    channels: [
-      ChannelDto(id: 0, name: 'Vero Sports HD', cat: 'mpira', img: 'https://picsum.photos/seed/bein1/400/220', free: true, viewers: '24.1K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 1, name: 'Aero Sports Premier', cat: 'mpira', img: 'https://picsum.photos/seed/sky2/400/220', free: false, viewers: '18.9K', url: '', enabled: true, drm: 'widevine'),
-      ChannelDto(id: 2, name: 'Flixora Originals', cat: 'movies', img: 'https://picsum.photos/seed/netf3/400/220', free: true, viewers: '32K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 3, name: 'Cinemax Ultra', cat: 'movies', img: 'https://picsum.photos/seed/hbo4/400/220', free: false, viewers: '11.3K', url: '', enabled: true, drm: 'clearkey'),
-      ChannelDto(id: 4, name: 'SportVex HD', cat: 'mpira', img: 'https://picsum.photos/seed/espn5/400/220', free: true, viewers: '9.7K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 5, name: 'Nexosport HD', cat: 'habari', img: 'https://picsum.photos/seed/euro6/400/220', free: false, viewers: '7.2K', url: '', enabled: true, drm: 'widevine'),
-      ChannelDto(id: 6, name: 'Vibra Entertainment', cat: 'movies', img: 'https://picsum.photos/seed/mtv7/400/220', free: true, viewers: '15K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 7, name: 'Explorix Channel', cat: 'movies', img: 'https://picsum.photos/seed/disc8/400/220', free: false, viewers: '6.4K', url: '', enabled: true, drm: 'clearkey'),
-      ChannelDto(id: 8, name: 'Globex World News', cat: 'habari', img: 'https://picsum.photos/seed/bbc9/400/220', free: true, viewers: '21K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 9, name: 'Arivo News Live', cat: 'habari', img: 'https://picsum.photos/seed/alj10/400/220', free: false, viewers: '13.5K', url: '', enabled: true, drm: 'none'),
-      ChannelDto(id: 10, name: 'Lorium Liga TV', cat: 'mpira', img: 'https://picsum.photos/seed/laliga11/400/220', free: false, viewers: '8.8K', url: '', enabled: true, drm: 'widevine'),
-      ChannelDto(id: 11, name: 'Cinevox Movies 4K', cat: 'movies', img: 'https://picsum.photos/seed/action12/400/220', free: true, viewers: '19K', url: '', enabled: true, drm: 'none'),
-    ],
-    carousel: [
-      CarouselDto(badge: 'LIVE NOW', badgeIcon: 'radio-outline', title: 'Lorem Cup\nFinal 2025', channelId: 0, img: 'https://picsum.photos/seed/match1/800/400'),
-      CarouselDto(badge: 'NEW MOVIE', badgeIcon: 'film-outline', title: 'The Lorem\nIpsum', channelId: 2, img: 'https://picsum.photos/seed/movie22/800/400'),
-      CarouselDto(badge: 'TONIGHT', badgeIcon: 'trophy-outline', title: 'Lorem League\nDerby Night', channelId: 1, img: 'https://picsum.photos/seed/sport5/800/400'),
-      CarouselDto(badge: 'ENTERTAINMENT', badgeIcon: 'musical-notes-outline', title: 'Dolor Night\nLive Stream', channelId: 3, img: 'https://picsum.photos/seed/enter9/800/400'),
-    ],
-    premiumPackages: [
-      PackageDto(id: 'daily', name: 'Daily Pass', price: r'$1.99', period: '/day', features: ['All Channels', 'HD Quality', '1 Device'], popular: false),
-      PackageDto(id: 'weekly', name: 'Weekly Pack', price: r'$7.99', period: '/week', features: ['All Channels', 'Full HD', '2 Devices', 'Catch-up TV'], popular: true),
-      PackageDto(id: 'monthly', name: 'Monthly Pro', price: r'$19.99', period: '/month', features: ['All Channels', '4K Ultra', '4 Devices', 'Catch-up TV', 'Download'], popular: false),
-    ],
-    malipoPlans: [
-      MalipoPlanDto(id: 'weekly', label: 'Wiki 1', priceLines: 'TSh\n2,000', amount: 'TSh 2,000', period: 'Wiki Moja', popular: false, accent1: 0xFF0ea5e9, accent2: 0xFF6366f1, badge: 'MPYA'),
-      MalipoPlanDto(id: 'monthly', label: 'Mwezi', priceLines: 'TSh\n5,000', amount: 'TSh 5,000', period: 'Mwezi Moja', popular: true, accent1: 0xFFa855f7, accent2: 0xFFec4899, badge: 'BORA'),
-      MalipoPlanDto(id: 'yearly', label: 'Mwaka', priceLines: 'TSh\n12,000', amount: 'TSh 12,000', period: 'Mwaka Mzima', popular: false, accent1: 0xFFf59e0b, accent2: 0xFFef4444, badge: 'PUNGUZO'),
-    ],
-    liveMatches: [
-      LiveMatchDto(id: 0, title: 'Lorem FC vs Ipsum United', channelId: 0, liveBadge: true),
-      LiveMatchDto(id: 1, title: 'Dolor City vs Amet FC', channelId: 1, liveBadge: true),
-      LiveMatchDto(id: 2, title: 'Lorem Hawks vs Ipsum Bulls', channelId: 4, liveBadge: false),
-      LiveMatchDto(id: 3, title: 'Lorem Open Final', channelId: 2, liveBadge: true),
-      LiveMatchDto(id: 4, title: 'Lorem Grand Prix Series', channelId: 5, liveBadge: false),
-      LiveMatchDto(id: 5, title: 'Lorem Championship Fight', channelId: 3, liveBadge: true),
-    ],
+    configVersion: 2,
+    channels: [],
+    carousel: [],
+    premiumPackages: [],
+    malipoPlans: [],
+    liveMatches: [],
     notificationLog: [],
-    users: [
-      UserDto(
-        id: 'usr_demo1',
-        username: 'k7mpo2a9',
-        premiumUntilMs: DateTime.now().add(const Duration(days: 25)).millisecondsSinceEpoch,
-        note: 'Premium active',
-      ),
-      UserDto(
-        id: 'usr_demo2',
-        username: 'expired_x3',
-        premiumUntilMs: DateTime.now().subtract(const Duration(days: 5)).millisecondsSinceEpoch,
-        note: 'Expired',
-      ),
-      UserDto(
-        id: 'usr_demo3',
-        username: 'free_only',
-        premiumUntilMs: null,
-        note: 'Free tier',
-      ),
-    ],
+    users: [],
+    customerCareWhatsapp: '212600000000',
   );
+}
+
+bool _looksLikeBundledDemo(AppConfig c) {
+  if (c.users.any((u) => u.id.startsWith('usr_demo'))) return true;
+  if (c.channels.isNotEmpty &&
+      c.channels.length == 12 &&
+      c.channels.first.name == 'Vero Sports HD') {
+    return true;
+  }
+  return false;
 }
 
 class AdminStore extends ChangeNotifier {
   AdminStore() {
-    _config = _defaultConfig();
+    _config = _emptyProductionConfig();
   }
 
   late AppConfig _config;
@@ -115,21 +75,32 @@ class AdminStore extends ChangeNotifier {
     return adminApiKeyFromEnvironment;
   }
 
-  /// Saves API origin + admin key on device (SharedPreferences). Required for syncing to Postgres.
-  /// If [adminKey] is empty, the previously saved key is kept (so saving URL alone does not wipe the key).
+  /// Saves API origin + admin key on device, then loads config from the server.
+  /// If [adminKey] is empty, the previously saved key is kept (URL-only save).
   Future<void> saveApiConnection({required String apiBaseUrl, required String adminKey}) async {
     final p = await SharedPreferences.getInstance();
     final b = apiBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
     final k = adminKey.trim();
+
     await p.setString(_prefsApiBase, b);
     _apiBaseUrlPrefs = b;
+
     if (k.isNotEmpty) {
       await p.setString(_prefsAdminKey, k);
-      _adminKeyPrefs = k;
     }
+
+    _adminKeyPrefs = p.getString(_prefsAdminKey);
+
+    if (resolvedAdminKey.isEmpty) {
+      _lastSyncError =
+          'Enter the Admin API key (exactly the same as Railway ADMIN_API_KEY). Without it, nothing syncs to Postgres.';
+      notifyListeners();
+      return;
+    }
+
     _lastSyncError = null;
     notifyListeners();
-    await syncNowToServer();
+    await pullConfigFromServer();
   }
 
   /// Removes the stored admin key (e.g. before handing device to someone else).
@@ -143,34 +114,73 @@ class AdminStore extends ChangeNotifier {
 
   /// Pushes current config to the server (same payload as local JSON).
   Future<void> syncNowToServer() async {
-    await _pushConfigToServer(requireKey: true);
+    await _pushConfigToServer();
+  }
+
+  /// Returns null if `GET /api/v1/health` succeeds (API URL is reachable).
+  Future<String?> testApiUrlReachable() async {
+    final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    try {
+      final r = await http
+          .get(
+            Uri.parse('$base/api/v1/health'),
+            headers: {'Accept': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode >= 200 && r.statusCode < 300) return null;
+      return 'Health check returned HTTP ${r.statusCode}';
+    } catch (e) {
+      return 'Cannot reach $base — $e';
+    }
   }
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     _apiBaseUrlPrefs = p.getString(_prefsApiBase);
     _adminKeyPrefs = p.getString(_prefsAdminKey);
-    final raw = p.getString(_prefsKey);
+
+    var raw = p.getString(_prefsKey);
+    if (raw == null || raw.isEmpty) {
+      raw = p.getString(_prefsKeyLegacy);
+    }
+
     if (raw != null && raw.isNotEmpty) {
       try {
-        _config = AppConfig.fromJsonString(raw);
+        final parsed = AppConfig.fromJsonString(raw);
+        if (_looksLikeBundledDemo(parsed)) {
+          _config = _emptyProductionConfig();
+        } else {
+          _config = parsed;
+          if (_config.configVersion < 2) {
+            _config.configVersion = 2;
+          }
+        }
       } catch (_) {
-        _config = _defaultConfig();
+        _config = _emptyProductionConfig();
       }
     } else {
-      _config = _defaultConfig();
+      _config = _emptyProductionConfig();
     }
+
+    await p.setString(_prefsKey, _config.toJsonString());
+    await p.remove(_prefsKeyLegacy);
+
     _loaded = true;
     notifyListeners();
-    unawaited(refreshUsersFromServer());
+
+    if (resolvedAdminKey.isNotEmpty) {
+      await pullConfigFromServer();
+    }
   }
 
-  /// Loads users from Postgres via `GET /api/v1/admin/users` (viewer registrations + admin-managed rows).
-  Future<void> refreshUsersFromServer() async {
+  /// Loads full config from Postgres (`GET /api/v1/admin/export`) — channels, users, carousel, etc.
+  Future<void> pullConfigFromServer() async {
     final key = resolvedAdminKey;
-    if (key.isEmpty) return;
+    if (key.isEmpty) {
+      return;
+    }
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$base/api/v1/admin/users').replace(
+    final uri = Uri.parse('$base/api/v1/admin/export').replace(
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
     try {
@@ -180,30 +190,71 @@ class AdminStore extends ChangeNotifier {
             headers: {
               'Accept': 'application/json',
               'X-Admin-Key': key,
+              'Cache-Control': 'no-cache',
             },
           )
-          .timeout(const Duration(seconds: 25));
-      if (res.statusCode < 200 || res.statusCode >= 300) return;
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      if (j['ok'] != true) return;
-      final raw = j['users'] as List<dynamic>? ?? [];
-      _config.users = raw.map((e) => UserDto.fromJson(Map<String, dynamic>.from(e as Map))).toList();
-      final p = await SharedPreferences.getInstance();
-      await p.setString(_prefsKey, _config.toJsonString());
+          .timeout(const Duration(seconds: 40));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        _lastSyncError =
+            'Invalid Admin API key (401). It must match ADMIN_API_KEY on the Railway API service exactly.';
+        notifyListeners();
+        return;
+      }
+      if (res.statusCode == 503) {
+        _lastSyncError =
+            'API cannot reach Postgres (503) or ADMIN_API_KEY is not set on the server. Check Railway DATABASE_URL and ADMIN_API_KEY.';
+        notifyListeners();
+        return;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _lastSyncError = 'Load failed (${res.statusCode}): ${res.body.length > 180 ? '${res.body.substring(0, 180)}…' : res.body}';
+        notifyListeners();
+        return;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic>) {
+        _lastSyncError = 'Server did not return a JSON object.';
+        notifyListeners();
+        return;
+      }
+      final j = Map<String, dynamic>.from(decoded);
+      if (j['ok'] != true) {
+        _lastSyncError = 'Invalid export response (ok != true)';
+        notifyListeners();
+        return;
+      }
+      j.remove('ok');
+      j.remove('configSyncedAt');
+      try {
+        _config = AppConfig.fromJson(j);
+      } catch (e, st) {
+        _lastSyncError = 'Could not parse server config: $e';
+        assert(() {
+          debugPrint('AppConfig.fromJson failed: $e\n$st');
+          return true;
+        }());
+        notifyListeners();
+        return;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsKey, _config.toJsonString());
       _lastSyncError = null;
       notifyListeners();
-    } catch (_) {
-      /* offline or wrong URL — keep cached users */
+    } catch (e) {
+      _lastSyncError = 'Could not load from server: $e';
+      notifyListeners();
     }
   }
 
-  Future<void> _pushConfigToServer({bool requireKey = false}) async {
+  /// Same as [pullConfigFromServer] (kept for pull-to-refresh on Users).
+  Future<void> refreshUsersFromServer() => pullConfigFromServer();
+
+  Future<void> _pushConfigToServer() async {
     final key = resolvedAdminKey;
     if (key.isEmpty) {
-      if (requireKey) {
-        _lastSyncError = 'Add Admin API key in Settings (must match Railway ADMIN_API_KEY).';
-        notifyListeners();
-      }
+      _lastSyncError =
+          'Add Admin API key in Settings (must match Railway ADMIN_API_KEY). Edits are only on this device until then.';
+      notifyListeners();
       return;
     }
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
@@ -218,11 +269,18 @@ class AdminStore extends ChangeNotifier {
             headers: {
               'Content-Type': 'application/json',
               'X-Admin-Key': key,
+              'Cache-Control': 'no-cache',
             },
             body: jsonEncode(_config.toJson()),
           )
           .timeout(const Duration(seconds: 45));
-      if (res.statusCode >= 200 && res.statusCode < 300) {
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        _lastSyncError =
+            'Invalid Admin API key. Check Railway ADMIN_API_KEY matches what you saved in Settings.';
+      } else if (res.statusCode == 503) {
+        _lastSyncError =
+            'Database unavailable (503). Set DATABASE_URL and ADMIN_API_KEY on the Railway API service.';
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
         _lastSyncError = null;
       } else {
         _lastSyncError = 'Sync failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
@@ -248,7 +306,7 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> resetToDefaults() async {
-    _config = _defaultConfig();
+    _config = _emptyProductionConfig();
     await _persist();
   }
 

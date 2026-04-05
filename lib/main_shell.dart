@@ -8,6 +8,7 @@ import 'package:supasoka/screens/home_screen.dart';
 import 'package:supasoka/screens/live_screen.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/profile_screen.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
 class MainShell extends StatelessWidget {

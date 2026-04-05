@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
@@ -48,7 +49,7 @@ class UserIdentity {
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
     try {
-      await http
+      final res = await http
           .post(
             uri,
             headers: const {
@@ -61,9 +62,19 @@ class UserIdentity {
               'profileUsername': publicId,
             }),
           )
-          .timeout(const Duration(seconds: 15));
-    } catch (_) {
-      /* offline / wrong URL — id stays local; will retry on next launch or refresh */
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        return;
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'UserIdentity.registerWithBackend failed: HTTP ${res.statusCode} ${res.body.length > 120 ? '${res.body.substring(0, 120)}…' : res.body}',
+        );
+      }
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('UserIdentity.registerWithBackend error: $e\n$st');
+      }
     }
   }
 }

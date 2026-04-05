@@ -2,6 +2,20 @@
 
 import 'dart:convert';
 
+/// API / JSON may send [int], [double], or [String] (e.g. Postgres BIGINT).
+int? parseIntNullable(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+int parseIntLoose(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.parse(v.toString());
+}
+
 /// Serializable bundle for export / mobile Remote Config later.
 class AppConfig {
   AppConfig({
@@ -42,7 +56,7 @@ class AppConfig {
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
     return AppConfig(
-      configVersion: j['configVersion'] as int? ?? 1,
+      configVersion: (j['configVersion'] as num?)?.toInt() ?? 1,
       channels: (j['channels'] as List<dynamic>? ?? []).map((e) => ChannelDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       carousel: (j['carousel'] as List<dynamic>? ?? []).map((e) => CarouselDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       premiumPackages: (j['premiumPackages'] as List<dynamic>? ?? []).map((e) => PackageDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
@@ -104,7 +118,7 @@ class ChannelDto {
       };
 
   factory ChannelDto.fromJson(Map<String, dynamic> j) => ChannelDto(
-        id: j['id'] as int,
+        id: parseIntLoose(j['id']),
         name: j['name'] as String,
         cat: normalizeChannelCategory(j['cat'] as String?),
         img: j['img'] as String,
@@ -227,7 +241,7 @@ class CarouselDto {
         badge: j['badge'] as String,
         badgeIcon: j['badgeIcon'] as String,
         title: j['title'] as String,
-        channelId: j['channelId'] as int,
+        channelId: parseIntLoose(j['channelId']),
         img: j['img'] as String,
       );
 }
@@ -311,8 +325,8 @@ class MalipoPlanDto {
         amount: j['amount'] as String,
         period: j['period'] as String,
         popular: j['popular'] as bool? ?? false,
-        accent1: j['accent1'] as int,
-        accent2: j['accent2'] as int,
+        accent1: (j['accent1'] as num).toInt(),
+        accent2: (j['accent2'] as num).toInt(),
         badge: j['badge'] as String? ?? '',
       );
 }
@@ -342,11 +356,11 @@ class LiveMatchDto {
 
   factory LiveMatchDto.fromJson(Map<String, dynamic> j) {
     final cid = j['channelId'];
-    final migrated = cid is int;
+    final c = cid == null ? 0 : parseIntLoose(cid);
     return LiveMatchDto(
-      id: j['id'] as int,
+      id: parseIntLoose(j['id']),
       title: j['title'] as String,
-      channelId: migrated ? cid : 0,
+      channelId: c,
       liveBadge: j['liveBadge'] as bool? ?? true,
     );
   }
@@ -379,11 +393,11 @@ class UserDto {
       };
 
   factory UserDto.fromJson(Map<String, dynamic> j) => UserDto(
-        id: j['id'] as String,
-        username: j['username'] as String,
-        premiumUntilMs: (j['premiumUntilMs'] as num?)?.toInt(),
+        id: '${j['id'] ?? ''}',
+        username: '${j['username'] ?? j['profile_username'] ?? ''}',
+        premiumUntilMs: parseIntNullable(j['premiumUntilMs']),
         note: j['note'] as String? ?? '',
-        createdAtMs: (j['createdAtMs'] as num?)?.toInt(),
+        createdAtMs: parseIntNullable(j['createdAtMs']),
       );
 
   UserDto copyWith({
@@ -443,12 +457,12 @@ class NotificationEntryDto {
       };
 
   factory NotificationEntryDto.fromJson(Map<String, dynamic> j) => NotificationEntryDto(
-        id: j['id'] as String,
-        title: j['title'] as String,
-        body: j['body'] as String,
+        id: '${j['id'] ?? ''}',
+        title: j['title'] as String? ?? '',
+        body: j['body'] as String? ?? '',
         target: j['target'] as String? ?? 'all',
-        createdAt: j['createdAt'] as String,
-        scheduledFor: j['scheduledFor'] as String?,
+        createdAt: j['createdAt']?.toString() ?? '',
+        scheduledFor: j['scheduledFor']?.toString(),
       );
 }
 

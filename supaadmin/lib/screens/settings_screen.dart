@@ -144,7 +144,7 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Hifadhi kwenye simu pekee haitumiki kwa app ya mtazamaji. Weka API na funguo sawa na Railway (ADMIN_API_KEY).',
+            'Funguo lazima iwe sawa na ADMIN_API_KEY kwenye Railway. App ya mtazamaji lazima iwe na API ile ile (deployment.dart / API_BASE_URL) ndiyo ipate channels kwenye DB.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
           if (store.hasAdminApiKey) ...[
@@ -190,6 +190,29 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
               style: TextStyle(color: Colors.redAccent.withValues(alpha: 0.9), fontSize: 12),
             ),
           ],
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: store.syncingToServer
+                  ? null
+                  : () async {
+                      final msg = await context.read<AdminStore>().testApiUrlReachable();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            msg == null
+                                ? 'API URL inafunguka (health OK).'
+                                : msg,
+                          ),
+                        ),
+                      );
+                    },
+              icon: const Icon(Icons.wifi_tethering_rounded, size: 18),
+              label: const Text('Test API URL'),
+            ),
+          ),
           const SizedBox(height: 14),
           Row(
             children: [
@@ -204,26 +227,28 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                                   apiBaseUrl: _base.text.trim().isEmpty ? kDefaultAdminApiBaseUrl : _base.text.trim(),
                                   adminKey: _key.text,
                                 ),
-                            message: 'Inatuma…',
+                            message: 'Inahifadhi na kupakia…',
                           );
                           if (context.mounted) {
-                            final err = context.read<AdminStore>().lastSyncError;
-                            final saved = context.read<AdminStore>().hasAdminApiKey;
+                            final store = context.read<AdminStore>();
+                            final err = store.lastSyncError;
+                            final hasKey = store.hasAdminApiKey;
+                            String msg;
+                            if (!hasKey) {
+                              msg = err ?? 'Weka funguo ya admin.';
+                            } else if (err == null) {
+                              msg = 'Imehifadhiwa. Funguo na data zimepakishwa kutoka Postgres.';
+                            } else {
+                              msg =
+                                  'Funguo imehifadhiwa kwenye simu, lakini kupakia kumeshindikana: $err';
+                            }
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  err == null
-                                      ? (saved
-                                          ? 'Imehifadhiwa: URL na funguo kwenye simu, na data kwenye seva.'
-                                          : 'Imehifadhiwa kwenye seva')
-                                      : err,
-                                ),
-                              ),
+                              SnackBar(content: Text(msg), duration: const Duration(seconds: 5)),
                             );
                           }
                         },
                   icon: const Icon(Icons.save_rounded),
-                  label: const Text('Save & sync now'),
+                  label: const Text('Save key & load from server'),
                 ),
               ),
               const SizedBox(width: 10),
@@ -234,10 +259,18 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
                         await adminWithShimmerDialog(
                           context,
                           future: context.read<AdminStore>().syncNowToServer(),
-                          message: 'Inatuma…',
+                          message: 'Inatuma kwenye DB…',
                         );
+                        if (context.mounted) {
+                          final err = context.read<AdminStore>().lastSyncError;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err == null ? 'Imesawazishwa na Postgres.' : err),
+                            ),
+                          );
+                        }
                       },
-                child: const Text('Sync'),
+                child: const Text('Push to DB'),
               ),
             ],
           ),

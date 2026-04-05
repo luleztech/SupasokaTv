@@ -1,9 +1,20 @@
 import { Router } from 'express';
+import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
 import { requireAdmin } from '../../middleware/adminAuth';
 import { deleteUserById, listUsersForAdmin } from '../../services/userDirectory';
 
 export const adminRouter = Router();
+
+/** Full config from Postgres (channels, users, etc.) — SupaAdmin should load this on startup. */
+adminRouter.get('/export', requireAdmin, async (_req, res, next) => {
+  try {
+    const config = await fetchAdminExportConfig();
+    res.json({ ok: true, ...config });
+  } catch (e) {
+    next(e);
+  }
+});
 
 adminRouter.post('/import', requireAdmin, async (req, res, next) => {
   try {

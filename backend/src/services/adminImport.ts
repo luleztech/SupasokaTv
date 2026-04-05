@@ -226,6 +226,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
       );
     }
 
+    await client.query(`DELETE FROM users WHERE id ~ '^usr_demo'`);
+
     await client.query('COMMIT');
   } catch (e) {
     try {
