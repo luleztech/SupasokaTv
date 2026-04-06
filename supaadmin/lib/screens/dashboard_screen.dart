@@ -13,6 +13,7 @@ class DashboardScreen extends StatelessWidget {
     final store = context.watch<AdminStore>();
     final c = store.config;
     final cs = Theme.of(context).colorScheme;
+    final syncing = store.syncingToServer;
 
     final stats = [
       _Stat('Channels', '${c.channels.length}', Icons.tv_rounded, const Color(0xFF8b5cf6)),
@@ -31,19 +32,52 @@ class DashboardScreen extends StatelessWidget {
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 0,
-              child: AdminPageHeader(
-                title: 'Overview',
-                subtitle: 'Tazama maendeleo ya App hapa',
-                icon: Icons.dashboard_customize_rounded,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: AdminPageHeader(
+                      title: 'Overview',
+                      subtitle: 'Tazama maendeleo ya App hapa',
+                      icon: Icons.dashboard_customize_rounded,
+                    ),
+                  ),
+                  if (store.hasAdminSession)
+                    FilledButton.icon(
+                      onPressed: syncing ? null : store.syncToServer,
+                      icon: const Icon(Icons.cloud_upload_rounded, size: 18),
+                      label: syncing ? const Text('Syncing...') : const Text('Sync'),
+                    ),
+                ],
               ),
             ),
           ),
         ),
+        if (store.lastSyncError != null)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+            sliver: SliverToBoxAdapter(
+              child: StaggerEntrance(
+                index: 1,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.error.withValues(alpha: 0.1),
+                    border: Border.all(color: cs.error.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    store.lastSyncError!,
+                    style: TextStyle(color: cs.error, fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
-              index: 1,
+              index: 2,
               slide: 28,
               child: Container(
                 padding: const EdgeInsets.all(20),
@@ -109,7 +143,7 @@ class DashboardScreen extends StatelessWidget {
                   children: [
                     for (var i = 0; i < stats.length; i++)
                       StaggerEntrance(
-                        index: i + 2,
+                        index: i + 3,
                         child: _StatTile(stat: stats[i]),
                       ),
                   ],

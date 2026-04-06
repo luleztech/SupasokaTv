@@ -144,11 +144,11 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
         children: [
           Row(
             children: [
-              Icon(Icons.cloud_done_rounded, color: ok ? cs.primary : Colors.amber, size: 22),
+              Icon(Icons.storage_rounded, color: ok ? cs.primary : Colors.amber, size: 22),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Cloud',
+                  'Backend',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
@@ -163,8 +163,8 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
           const SizedBox(height: 10),
           Text(
             ok
-                ? 'Mabadiliko yanaenda Postgres kiotomatiki. Uko logged in.'
-                : 'Not logged in.',
+                ? 'Mabadiliko yanaenda Railway Postgres moja kwa moja. Uko logged in.'
+                : 'Not logged in. Login in the Admin app first.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 14),

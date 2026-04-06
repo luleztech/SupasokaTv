@@ -321,10 +321,15 @@ class AdminStore extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Public sync method to push all changes to server.
+  Future<void> syncToServer() async {
+    await _pushConfigToServer();
+  }
+
   Future<void> _pushConfigToServer() async {
     if (!hasAdminSession) {
       _lastSyncError =
-          'Hakuna Admin API key — weka kwenye Settings → Cloud au tumia --dart-define=ADMIN_API_KEY=… / kRailwayAdminApiKey kwenye build.';
+          'Hakuna JWT — ingia tena kwenye Settings';
       notifyListeners();
       _snack(_lastSyncError!);
       return;
@@ -362,7 +367,7 @@ class AdminStore extends ChangeNotifier {
       if (res == null) {
         _lastSyncError = 'Sync failed: $lastErr';
       } else if (res.statusCode == 401 || res.statusCode == 403) {
-        _lastSyncError = 'Unauthorized — ADMIN_API_KEY in app must match Railway.';
+        _lastSyncError = 'Unauthorized — login again with your admin password.';
       } else if (res.statusCode == 503) {
         _lastSyncError = 'Database unavailable (503). Check Railway DATABASE_URL.';
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
