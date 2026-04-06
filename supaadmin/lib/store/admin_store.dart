@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,6 +13,13 @@ const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsApiBase = 'supaadmin_api_base_url';
 const _prefsJwt = 'supaadmin_admin_jwt_v1';
 const _legacyAdminKey = 'supaadmin_admin_api_key';
+
+const _secureJwtKey = 'supaadmin_jwt_v1';
+const _securePasswordKey = 'supaadmin_admin_password_v1';
+
+const FlutterSecureStorage _adminSecureStorage = FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+);
 
 /// Empty workspace — no demo channels/users; add real data in SupaAdmin or load from API.
 AppConfig _emptyProductionConfig() {
@@ -79,9 +87,56 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> _clearJwtSession() async {
+    try {
+      await _adminSecureStorage.delete(key: _secureJwtKey);
+    } catch (_) {}
     final p = await SharedPreferences.getInstance();
     await p.remove(_prefsJwt);
     _jwtPrefs = null;
+  }
+
+  Future<String?> _readJwtWithMigration() async {
+    try {
+      var t = await _adminSecureStorage.read(key: _secureJwtKey);
+      t = t?.trim();
+      if (t != null && t.isNotEmpty) return t;
+    } catch (_) {}
+    final p = await SharedPreferences.getInstance();
+    final legacy = p.getString(_prefsJwt)?.trim();
+    if (legacy != null && legacy.isNotEmpty) {
+      try {
+        await _adminSecureStorage.write(key: _secureJwtKey, value: legacy);
+        await p.remove(_prefsJwt);
+      } catch (_) {
+        /* keep legacy in prefs */
+      }
+      return legacy;
+    }
+    return null;
+  }
+
+  Future<void> _persistJwt(String token) async {
+    final t = token.trim();
+    try {
+      await _adminSecureStorage.write(key: _secureJwtKey, value: t);
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_prefsJwt);
+    } catch (_) {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_prefsJwt, t);
+    }
+    _jwtPrefs = t;
+  }
+
+  /// Filled into Settings after load. Updated on each successful sign-in. Not cleared on sign-out.
+  Future<String?> readSavedAdminPassword() async {
+    try {
+      final s = await _adminSecureStorage.read(key: _securePasswordKey);
+      if (s == null || s.isEmpty) return null;
+      return s;
+    } catch (_) {
+      return null;
+    }
   }
 
   Map<String, String> _authHeaders({String contentType = ''}) {
@@ -105,9 +160,8 @@ class AdminStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Signs in with [password] (server env `ADMIN_APP_PASSWORD`), stores JWT only, then pulls config.
+  /// Signs in with [password] (server env `ADMIN_APP_PASSWORD`), stores JWT + remembers password securely, then pulls config.
   Future<void> loginWithPassword(String password) async {
-    final p = await SharedPreferences.getInstance();
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$base/api/v1/auth/admin-login');
     _lastSyncError = null;
@@ -149,8 +203,10 @@ class AdminStore extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      await p.setString(_prefsJwt, token);
-      _jwtPrefs = token;
+      await _persistJwt(token);
+      try {
+        await _adminSecureStorage.write(key: _securePasswordKey, value: password);
+      } catch (_) {}
       notifyListeners();
       await pullConfigFromServer();
     } catch (e) {
@@ -224,7 +280,7 @@ class AdminStore extends ChangeNotifier {
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     _apiBaseUrlPrefs = p.getString(_prefsApiBase);
-    _jwtPrefs = p.getString(_prefsJwt);
+    _jwtPrefs = await _readJwtWithMigration();
     await p.remove(_legacyAdminKey);
 
     var raw = p.getString(_prefsKey);
@@ -255,10 +311,7 @@ class AdminStore extends ChangeNotifier {
 
     _loaded = true;
     notifyListeners();
-
-    if (resolvedAdminToken.isNotEmpty) {
-      await pullConfigFromServer();
-    }
+    // Do not pull from server here — that overwrote local deletes when the last push had failed.
   }
 
   Future<void> pullConfigFromServer() async {

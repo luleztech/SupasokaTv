@@ -96,6 +96,7 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
   late final TextEditingController _base = TextEditingController();
   late final TextEditingController _password = TextEditingController();
   bool _seededBase = false;
+  bool _scheduledPasswordSeed = false;
 
   @override
   void dispose() {
@@ -111,6 +112,16 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
     if (!_seededBase && store.isLoaded) {
       _seededBase = true;
       _base.text = store.resolvedApiBaseUrl;
+    }
+    if (store.isLoaded && !_scheduledPasswordSeed) {
+      _scheduledPasswordSeed = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        final pwd = await context.read<AdminStore>().readSavedAdminPassword();
+        if (!mounted) return;
+        if (pwd != null && pwd.isNotEmpty) {
+          setState(() => _password.text = pwd);
+        }
+      });
     }
 
     return Container(
@@ -143,7 +154,7 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Nenosiri ni ADMIN_APP_PASSWORD kwenye Railway (si API key). Token ndiyo imehifadhiwa — si nenosiri. App ya mtazamaji: deployment.dart / API_BASE_URL iwe sawa na URL hii.',
+            'Nenosiri ni ADMIN_APP_PASSWORD kwenye Railway. Baada ya kuingia mara moja, nenosiri linakumbukwa kwa usalama kwenye simu (hufutwi unapo Sign out). Pakia kutoka seva wewe mwenyewe: Reload from server.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
           if (store.hasAdminSession) ...[
@@ -301,17 +312,45 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: store.syncingToServer
+                    ? null
+                    : () async {
+                        await adminWithShimmerDialog(
+                          context,
+                          future: context.read<AdminStore>().pullConfigFromServer(),
+                          message: 'Inapakia kutoka Postgres…',
+                        );
+                        if (!context.mounted) return;
+                        final err = context.read<AdminStore>().lastSyncError;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              err == null ? 'Data zimepakishwa kutoka seva.' : err,
+                            ),
+                            duration: const Duration(seconds: 5),
+                          ),
+                        );
+                      },
+                icon: Icon(Icons.cloud_download_rounded, size: 18, color: cs.primary),
+                label: Text(
+                  'Reload from server',
+                  style: TextStyle(color: cs.primary, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
               child: TextButton(
                 onPressed: store.syncingToServer
                     ? null
                     : () async {
                         await context.read<AdminStore>().logout();
                         if (context.mounted) {
-                          setState(() {
-                            _password.clear();
-                          });
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Umetoka — token imefutwa kwenye simu')),
+                            const SnackBar(
+                              content: Text('Umetoka — token imefutwa; nenosiri bado limehifadhiwa kwenye simu'),
+                            ),
                           );
                         }
                       },

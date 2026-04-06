@@ -200,10 +200,12 @@ export async function importAppConfig(body: unknown): Promise<void> {
     );
 
     const appUsers = (b.users as unknown[]) ?? [];
+    const userIdsToKeep: string[] = [];
     for (const u of appUsers) {
       const x = u as Record<string, unknown>;
       const uid = String(x.id ?? '').trim();
       if (!uid) continue;
+      userIdsToKeep.push(uid);
       const premiumRaw = x.premiumUntilMs;
       const premiumUntilMs =
         premiumRaw === null || premiumRaw === undefined ? null : Number(premiumRaw);
@@ -226,7 +228,15 @@ export async function importAppConfig(body: unknown): Promise<void> {
       );
     }
 
-    await client.query(`DELETE FROM users WHERE id ~ '^usr_demo'`);
+    /** Full user-directory sync: rows not present in this import are removed (same idea as TRUNCATE for channels). */
+    if (userIdsToKeep.length === 0) {
+      await client.query(`DELETE FROM users`);
+    } else {
+      await client.query(
+        `DELETE FROM users WHERE id NOT IN (${userIdsToKeep.map((_, i) => `$${i + 1}`).join(',')})`,
+        userIdsToKeep,
+      );
+    }
 
     await client.query('COMMIT');
   } catch (e) {
