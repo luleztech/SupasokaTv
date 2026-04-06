@@ -29,19 +29,14 @@ Copy `.env.example` → `.env` locally.
 | Variable | Notes |
 |----------|--------|
 | `DATABASE_URL` | Postgres connection string (Railway plugin) |
-| **`ADMIN_API_KEY`** | **Recommended for SupaAdmin (EaAdmin-style):** long random secret. Same value must be passed into the admin APK with `--dart-define=ADMIN_API_KEY=…`. All admin routes accept header `X-Admin-Key: <value>`. |
+| **`ADMIN_APP_PASSWORD`** | Password for admin login. SupaAdmin uses this to authenticate. |
 
-### Optional (JWT admin login)
-
-| Variable | Notes |
-|----------|--------|
-| `JWT_SECRET` | Signs admin JWTs from `POST /api/v1/auth/admin-login` |
-| `ADMIN_APP_PASSWORD` | Password for that JWT flow (SupaAdmin **Advanced → Sign in JWT**) |
-
-### Other optional
+### Optional
 
 | Variable | Notes |
 |----------|--------|
+| `JWT_SECRET` | Signs admin JWTs from `POST /api/v1/auth/admin-login` (auto-generated if not set) |
+| `ADMIN_API_KEY` | Legacy support for X-Admin-Key header |
 | `PORT` | Railway sets this (often `8080`) |
 | `NODE_ENV` | `production` in deploy |
 | `CORS_ORIGIN` | `*` or your Flutter web origin |

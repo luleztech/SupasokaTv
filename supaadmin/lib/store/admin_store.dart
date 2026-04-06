@@ -1,14 +1,20 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../admin_messenger.dart';
 import '../config/admin_api_config.dart';
 import '../models/app_config.dart';
 
 const _prefsKey = 'supaadmin_app_config_v2';
 const _prefsKeyLegacy = 'supaadmin_app_config_v1';
+const _prefsJwt = 'supaadmin_jwt_v1';
+const _prefsRuntimeApiBase = 'supaadmin_runtime_api_base_url_v1';
+
+String _stripTrailingSlash(String s) => s.replaceAll(RegExp(r'/$'), '');
 
 AppConfig _emptyProductionConfig() {
   return AppConfig(
@@ -43,6 +49,9 @@ class AdminStore extends ChangeNotifier {
   bool _loaded = false;
   bool get isLoaded => _loaded;
 
+  String _jwt = '';
+  String _runtimeApiBaseUrl = '';
+
   String? _lastSyncError;
   bool _syncing = false;
 
@@ -52,30 +61,66 @@ class AdminStore extends ChangeNotifier {
 
   bool get syncingToServer => _syncing;
 
-  /// True when `kRailwayAdminApiKey` / dart-define is set (same as Railway `ADMIN_API_KEY`).
-  bool get hasAdminSession => resolvedBundledAdminApiKey.isNotEmpty;
+  /// Non-empty when key was compiled in (`kRailwayAdminApiKey` / `--dart-define=ADMIN_API_KEY=…`).
+  bool get adminApiKeyIsFromBuild => false;
 
-  String get resolvedAdminApiKey => resolvedBundledAdminApiKey;
+  /// Runtime prefs only — never exposes a build-time key (for Settings field).
+  String get runtimeAdminApiKeyForEditing => _jwt;
 
-  String get resolvedApiBaseUrl => resolvedAdminApiBaseUrl;
+  String get runtimeApiBaseUrlForEditing => _runtimeApiBaseUrl;
+
+  /// JWT token for auth.
+  String get resolvedAdminApiKey => _jwt.trim();
+
+  /// Optional runtime override; otherwise [apiBaseUrlFromBuild].
+  String get resolvedApiBaseUrl {
+    final r = _runtimeApiBaseUrl.trim();
+    if (r.isNotEmpty) return _stripTrailingSlash(r);
+    return apiBaseUrlFromBuild;
+  }
+
+  bool get hasAdminSession => resolvedAdminApiKey.isNotEmpty;
 
   @Deprecated('Use hasAdminSession')
   bool get hasAdminApiKey => hasAdminSession;
 
+  void _snack(String message) {
+    final m = adminScaffoldMessengerKey.currentState;
+    if (m == null) return;
+    m.clearSnackBars();
+    m.showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Map<String, String> _authHeaders({String contentType = ''}) {
-    final key = resolvedBundledAdminApiKey;
+    final key = resolvedAdminApiKey;
     return {
       'Accept': 'application/json',
       if (contentType.isNotEmpty) 'Content-Type': contentType,
-      if (key.isNotEmpty) 'X-Admin-Key': key,
+      if (key.isNotEmpty) 'Authorization': 'Bearer $key',
     };
   }
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     await p.remove('supaadmin_admin_jwt_v1');
+
+    var jwt = p.getString(_prefsJwt);
+    if (jwt == null || jwt.isEmpty) {
+      // Migrate old API key to JWT if possible, but since we can't, just clear
+    }
+
+    var ru = p.getString(_prefsRuntimeApiBase);
+    if (ru == null || ru.isEmpty) {
+      final oldu = p.getString('supaadmin_api_base_url');
+      if (oldu != null && oldu.isNotEmpty) {
+        ru = _stripTrailingSlash(oldu);
+        await p.setString(_prefsRuntimeApiBase, ru);
+      }
+    }
     await p.remove('supaadmin_api_base_url');
-    await p.remove('supaadmin_admin_api_key');
+
+    _jwt = (jwt ?? '').trim();
+    _runtimeApiBaseUrl = (ru ?? '').trim();
 
     var raw = p.getString(_prefsKey);
     if (raw == null || raw.isEmpty) {
@@ -106,13 +151,72 @@ class AdminStore extends ChangeNotifier {
     _loaded = true;
     notifyListeners();
 
-    if (resolvedBundledAdminApiKey.isNotEmpty) {
+    if (hasAdminSession) {
+      await pullConfigFromServer();
+    }
+  }
+
+  Future<String?> login(String password) async {
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/auth/admin-login');
+    try {
+      final res = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded['ok'] == true && decoded['token'] is String) {
+          final token = decoded['token'] as String;
+          await saveRuntimeSyncSettings(jwt: token, apiBaseUrlField: _runtimeApiBaseUrl);
+          return null; // success
+        }
+      }
+      return 'Login failed: ${res.statusCode} ${res.body}';
+    } catch (e) {
+      return 'Login error: $e';
+    }
+  }
+
+  Future<void> logout() async {
+    await saveRuntimeSyncSettings(jwt: '', apiBaseUrlField: _runtimeApiBaseUrl);
+  }
+
+  Future<void> saveRuntimeSyncSettings({
+    required String jwt,
+    required String apiBaseUrlField,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    if (jwt.isEmpty) {
+      await prefs.remove(_prefsJwt);
+      _jwt = '';
+    } else {
+      await prefs.setString(_prefsJwt, jwt);
+      _jwt = jwt;
+    }
+
+    final base = apiBaseUrlField.trim();
+    if (base.isEmpty) {
+      await prefs.remove(_prefsRuntimeApiBase);
+      _runtimeApiBaseUrl = '';
+    } else {
+      final n = _stripTrailingSlash(base);
+      await prefs.setString(_prefsRuntimeApiBase, n);
+      _runtimeApiBaseUrl = n;
+    }
+
+    notifyListeners();
+    if (hasAdminSession) {
       await pullConfigFromServer();
     }
   }
 
   Future<void> pullConfigFromServer() async {
-    if (resolvedBundledAdminApiKey.isEmpty) {
+    if (!hasAdminSession) {
       return;
     }
     final base = resolvedApiBaseUrl;
@@ -131,12 +235,12 @@ class AdminStore extends ChangeNotifier {
           .timeout(const Duration(seconds: 40));
       if (res.statusCode == 401 || res.statusCode == 403) {
         _lastSyncError =
-            'Unauthorized — set kRailwayAdminApiKey in admin_api_config.dart to match Railway ADMIN_API_KEY.';
+            'Unauthorized — password si sahihi; ingia tena.';
         notifyListeners();
         return;
       }
       if (res.statusCode == 503) {
-        _lastSyncError = 'API unavailable (503). Set DATABASE_URL and ADMIN_API_KEY on Railway.';
+        _lastSyncError = 'API unavailable (503). Set DATABASE_URL and ADMIN_APP_PASSWORD on Railway.';
         notifyListeners();
         return;
       }
@@ -184,7 +288,7 @@ class AdminStore extends ChangeNotifier {
 
   /// Ensures viewer accounts from `POST /public/register-user` are in the next import payload.
   Future<void> _mergeRegisteredUsersFromApi() async {
-    if (resolvedBundledAdminApiKey.isEmpty) return;
+    if (!hasAdminSession) return;
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/admin/users').replace(
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
@@ -218,10 +322,11 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> _pushConfigToServer() async {
-    if (resolvedBundledAdminApiKey.isEmpty) {
+    if (!hasAdminSession) {
       _lastSyncError =
-          'Set kRailwayAdminApiKey in lib/config/admin_api_config.dart (same value as Railway ADMIN_API_KEY) and rebuild.';
+          'Hakuna Admin API key — weka kwenye Settings → Cloud au tumia --dart-define=ADMIN_API_KEY=… / kRailwayAdminApiKey kwenye build.';
       notifyListeners();
+      _snack(_lastSyncError!);
       return;
     }
     final base = resolvedApiBaseUrl;
@@ -268,11 +373,14 @@ class AdminStore extends ChangeNotifier {
     } finally {
       _syncing = false;
       notifyListeners();
+      if (_lastSyncError != null && _lastSyncError!.isNotEmpty) {
+        _snack(_lastSyncError!);
+      }
     }
   }
 
   Future<void> _persist() async {
-    if (resolvedBundledAdminApiKey.isNotEmpty) {
+    if (hasAdminSession) {
       await _mergeRegisteredUsersFromApi();
     }
     final p = await SharedPreferences.getInstance();
@@ -433,7 +541,7 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> deleteUser(String id) async {
-    if (resolvedBundledAdminApiKey.isNotEmpty) {
+    if (hasAdminSession) {
       final base = resolvedApiBaseUrl;
       final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(id)}');
       try {

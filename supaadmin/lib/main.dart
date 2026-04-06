@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import 'admin_messenger.dart';
 import 'app_launch_gate.dart';
 import 'app_theme.dart';
 import 'store/admin_store.dart';
@@ -23,7 +24,8 @@ Future<void> main() async {
   runApp(
     ChangeNotifierProvider<AdminStore>.value(
       value: store,
-      child: MaterialApp(
+        child: MaterialApp(
+        scaffoldMessengerKey: adminScaffoldMessengerKey,
         title: 'SupaAdmin',
         debugShowCheckedModeBanner: false,
         theme: adminTheme(),

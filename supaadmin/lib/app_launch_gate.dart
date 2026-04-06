@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'admin_shell.dart';
+import 'screens/login_screen.dart';
 import 'store/admin_store.dart';
 import 'widgets/admin_shimmer.dart';
 import 'widgets/admin_splash_screen.dart';
@@ -37,6 +38,8 @@ class _AppLaunchGateState extends State<AppLaunchGate> {
       );
     } else if (!store.isLoaded) {
       child = const AdminShimmerLoadingPage();
+    } else if (!store.hasAdminSession) {
+      child = const LoginScreen();
     } else {
       child = const AdminShell();
     }
@@ -51,7 +54,9 @@ class _AppLaunchGateState extends State<AppLaunchGate> {
               ? 'splash'
               : !store.isLoaded
                   ? 'shimmer'
-                  : 'app',
+                  : !store.hasAdminSession
+                      ? 'login'
+                      : 'app',
         ),
         child: child,
       ),

@@ -35,7 +35,7 @@ class SettingsScreen extends StatelessWidget {
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 1,
-              child: _CloudStatusCard(),
+              child: const _CloudStatusCard(),
             ),
           ),
         ),
@@ -85,10 +85,50 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-class _CloudStatusCard extends StatelessWidget {
+class _CloudStatusCard extends StatefulWidget {
+  const _CloudStatusCard();
+
+  @override
+  State<_CloudStatusCard> createState() => _CloudStatusCardState();
+}
+
+class _CloudStatusCardState extends State<_CloudStatusCard> {
+  late final TextEditingController _apiBase = TextEditingController();
+  bool _controllersPrimed = false;
+
+  @override
+  void dispose() {
+    _apiBase.dispose();
+    super.dispose();
+  }
+
+  void _primeFromStore(AdminStore store) {
+    if (_controllersPrimed) return;
+    _controllersPrimed = true;
+    _apiBase.text = store.runtimeApiBaseUrlForEditing;
+  }
+
+  Future<void> _save(BuildContext context) async {
+    final store = context.read<AdminStore>();
+    await store.saveRuntimeSyncSettings(
+      jwt: store.runtimeAdminApiKeyForEditing,
+      apiBaseUrlField: _apiBase.text,
+    );
+    if (!context.mounted) return;
+    final err = store.lastSyncError;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          err == null || err.isEmpty ? 'Imehifadhiwa; data yamepakiwa kutoka server.' : err,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
+    _primeFromStore(store);
     final cs = Theme.of(context).colorScheme;
     final ok = store.hasAdminSession;
 
@@ -123,37 +163,62 @@ class _CloudStatusCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             ok
-                ? 'Mabadiliko yanaenda Postgres kiotomatiki. Hakuna nenosiri kwenye app — funguo iko kwenye msimbo (admin_api_config.dart) na Railway.'
-                : 'Weka kRailwayAdminApiKey ndani ya supaadmin/lib/config/admin_api_config.dart iwe sawa na ADMIN_API_KEY kwenye Railway, kisha build APK upya.',
+                ? 'Mabadiliko yanaenda Postgres kiotomatiki. Uko logged in.'
+                : 'Not logged in.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
-          const SizedBox(height: 12),
-          InkWell(
-            onTap: () async {
-              await Clipboard.setData(ClipboardData(text: store.resolvedApiBaseUrl));
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('API URL copied')),
-                );
-              }
-            },
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                children: [
-                  Icon(Icons.link_rounded, size: 18, color: cs.primary.withValues(alpha: 0.85)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      store.resolvedApiBaseUrl,
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 12),
-                    ),
-                  ),
-                  Icon(Icons.copy_rounded, size: 16, color: Colors.white.withValues(alpha: 0.35)),
-                ],
-              ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _apiBase,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'API base URL (si lazima)',
+              hintText: 'Acha tupu = URL chaguo-msingi ya programu',
             ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'URL inayotumika sasa: ${store.resolvedApiBaseUrl}',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: store.syncingToServer
+                      ? null
+                      : () async {
+                          await Clipboard.setData(ClipboardData(text: store.resolvedApiBaseUrl));
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('API URL nakala')),
+                            );
+                          }
+                        },
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('Nakili URL'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: store.syncingToServer ? null : () => _save(context),
+                  icon: const Icon(Icons.save_rounded),
+                  label: const Text('Save'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: ok ? () => context.read<AdminStore>().logout() : null,
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Logout'),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: cs.error),
+                  foregroundColor: cs.error,
+                ),
+              ),
+            ],
           ),
           if (store.lastSyncError != null) ...[
             const SizedBox(height: 10),
