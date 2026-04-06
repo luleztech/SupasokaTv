@@ -368,11 +368,12 @@ class _UserCard extends StatelessWidget {
                         Chip(
                           label: Text(
                             _expiryLine(user),
-                            style: const TextStyle(fontSize: 10),
+                            style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.85)),
                           ),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
                           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          backgroundColor: cs.surface.withValues(alpha: 0.16),
                         ),
                       ],
                     ),

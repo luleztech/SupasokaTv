@@ -221,40 +221,35 @@ class _SubscriptionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              _Stat(t, '12', 'Watching'),
-              Container(width: 1, height: 52, color: t.border),
-              _Stat(t, '3', 'Favorites'),
-              Container(width: 1, height: 52, color: t.border),
-              Expanded(
-                child: Container(
-                  color: t.card,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (isPremium) ...[
-                        Icon(Ionicons.star, size: 16, color: t.premium),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Premium User',
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          style: orbitron(11, weight: FontWeight.w800).copyWith(
-                            color: t.premium,
-                            height: 1.15,
-                          ),
-                        ),
-                      ] else ...[
-                        Text(
-                          'Free user only',
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          style: orbitron(11, weight: FontWeight.w800).copyWith(
-                            color: t.text2,
-                            height: 1.15,
-                          ),
+          Container(
+            color: t.card,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (isPremium) ...[
+                  Icon(Ionicons.star, size: 18, color: t.premium),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Premium User',
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    style: orbitron(11, weight: FontWeight.w800).copyWith(
+                      color: t.premium,
+                      height: 1.15,
+                    ),
+                  ),
+                ] else ...[
+                  Text(
+                    'Free user only',
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    style: orbitron(11, weight: FontWeight.w800).copyWith(
+                      color: t.text2,
+                      height: 1.15,
+                    ),
+                  ),
+                ],
                         ),
                       ],
                     ],
@@ -299,22 +294,6 @@ class _SubscriptionCard extends StatelessWidget {
       ),
     );
   }
-}
-
-Widget _Stat(AppThemeColors t, String n, String l) {
-  return Expanded(
-    child: Container(
-      color: t.card,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          Text(n, style: orbitron(20, weight: FontWeight.w900).copyWith(color: t.accent)),
-          const SizedBox(height: 2),
-          Text(l, style: rajdhani(11).copyWith(color: t.text2)),
-        ],
-      ),
-    ),
-  );
 }
 
 class _MenuTile extends StatelessWidget {

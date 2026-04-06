@@ -184,7 +184,12 @@ class AdminShimmerLoadingPage extends StatelessWidget {
               Text(
                 'Loading configuration…',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: cs.primary.withValues(alpha: 0.85), fontWeight: FontWeight.w600, fontSize: 13),
+                style: TextStyle(
+                  color: cs.primary.withValues(alpha: 0.85),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  decoration: TextDecoration.none,
+                ),
               ),
             ],
           ),

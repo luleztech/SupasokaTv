@@ -68,7 +68,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
-    _useWebView = StreamUrlClassifier.isPhpLikeUrl(url);
+    final isPhpGateway = StreamUrlClassifier.isPhpLikeUrl(url);
+    final hasDirectStream = StreamUrlClassifier.hasObviousM3u8(url) || StreamUrlClassifier.hasObviousMpd(url);
+    _useWebView = isPhpGateway && !hasDirectStream;
     if (_useWebView) {
       await _initWebView(url);
     } else {
@@ -119,7 +121,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final t = context.read<ThemeController>().colors;
     try {
       final uri = Uri.parse(url);
-      final video = VideoPlayerController.networkUrl(uri);
+      final formatHint = StreamUrlClassifier.hasObviousM3u8(url)
+          ? VideoFormat.hls
+          : StreamUrlClassifier.hasObviousMpd(url)
+              ? VideoFormat.dash
+              : null;
+
+      final video = formatHint != null
+          ? VideoPlayerController.networkUrl(uri, formatHint: formatHint)
+          : VideoPlayerController.networkUrl(uri);
       await video.initialize();
 
       final chewie = ChewieController(
@@ -202,7 +212,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _PlayerChrome(
             top: top,
             title: ch?.name ?? 'Kituo',
-            subtitle: _useWebView ? 'Kivinjari · PHP gateway' : 'ExoPlayer · mfululizo',
+            subtitle: 'Moja kwa moja',
             accent: t.accent,
             accent2: t.accent2,
             onBack: () => Navigator.of(context).pop(),

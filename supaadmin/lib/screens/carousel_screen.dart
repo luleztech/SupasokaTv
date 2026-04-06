@@ -97,7 +97,7 @@ class CarouselScreen extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(12),
                                   child: SizedBox(
                                     width: 96,
-                                    height: 56,
+                                    height: 76,
                                     child: Image.network(
                                       s.img,
                                       fit: BoxFit.cover,

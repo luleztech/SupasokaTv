@@ -93,26 +93,16 @@ class _CloudStatusCard extends StatefulWidget {
 }
 
 class _CloudStatusCardState extends State<_CloudStatusCard> {
-  late final TextEditingController _apiBase = TextEditingController();
-  bool _controllersPrimed = false;
 
   @override
   void dispose() {
-    _apiBase.dispose();
     super.dispose();
-  }
-
-  void _primeFromStore(AdminStore store) {
-    if (_controllersPrimed) return;
-    _controllersPrimed = true;
-    _apiBase.text = store.runtimeApiBaseUrlForEditing;
   }
 
   Future<void> _save(BuildContext context) async {
     final store = context.read<AdminStore>();
     await store.saveRuntimeSyncSettings(
       jwt: store.runtimeAdminApiKeyForEditing,
-      apiBaseUrlField: _apiBase.text,
     );
     if (!context.mounted) return;
     final err = store.lastSyncError;
@@ -128,9 +118,9 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
-    _primeFromStore(store);
     final cs = Theme.of(context).colorScheme;
     final ok = store.hasAdminSession;
+    final saving = store.syncingToServer;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -168,15 +158,6 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 14),
-          TextField(
-            controller: _apiBase,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              labelText: 'API base URL (si lazima)',
-              hintText: 'Acha tupu = URL chaguo-msingi ya programu',
-            ),
-          ),
-          const SizedBox(height: 8),
           Text(
             'URL inayotumika sasa: ${store.resolvedApiBaseUrl}',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
@@ -203,9 +184,15 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
               const SizedBox(width: 10),
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: store.syncingToServer ? null : () => _save(context),
-                  icon: const Icon(Icons.save_rounded),
-                  label: const Text('Save'),
+                  onPressed: saving ? null : () => _save(context),
+                  icon: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.save_rounded),
+                  label: Text(saving ? 'Saving...' : 'Save'),
                 ),
               ),
               const SizedBox(width: 10),
@@ -274,6 +261,8 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<AdminStore>();
+    final saving = store.syncingToServer;
     final cs = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(20),
@@ -342,9 +331,15 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
-            onPressed: _save,
-            icon: const Icon(Icons.save_rounded),
-            label: const Text('Save'),
+            onPressed: saving ? null : _save,
+            icon: saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.save_rounded),
+            label: Text(saving ? 'Saving...' : 'Save'),
           ),
         ],
       ),

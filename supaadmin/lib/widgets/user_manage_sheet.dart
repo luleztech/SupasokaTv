@@ -144,6 +144,7 @@ class _UserManageSheetState extends State<UserManageSheet> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
+    final saving = store.syncingToServer;
     final cs = Theme.of(context).colorScheme;
     final u = _user(store);
     final premium = UserDto.isPremiumNow(u.premiumUntilMs);
@@ -231,15 +232,15 @@ class _UserManageSheetState extends State<UserManageSheet> {
               runSpacing: 8,
               children: [
                 FilledButton.tonal(
-                  onPressed: () => _applyDuration(store, const Duration(days: 7)),
+                  onPressed: saving ? null : () => _applyDuration(store, const Duration(days: 7)),
                   child: const Text('+ Wiki 1'),
                 ),
                 FilledButton.tonal(
-                  onPressed: () => _applyDuration(store, const Duration(days: 30)),
+                  onPressed: saving ? null : () => _applyDuration(store, const Duration(days: 30)),
                   child: const Text('+ Mwezi 1'),
                 ),
                 FilledButton.tonal(
-                  onPressed: () => _applyDuration(store, const Duration(days: 365)),
+                  onPressed: saving ? null : () => _applyDuration(store, const Duration(days: 365)),
                   child: const Text('+ Mwaka 1'),
                 ),
               ],
@@ -264,7 +265,7 @@ class _UserManageSheetState extends State<UserManageSheet> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: FilledButton(
-                    onPressed: () => _applyCustomDays(store),
+                    onPressed: saving ? null : () => _applyCustomDays(store),
                     child: const Text('Ongeza'),
                   ),
                 ),
@@ -272,13 +273,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
-              onPressed: () => _pickEndDate(store),
+              onPressed: saving ? null : () => _pickEndDate(store),
               icon: const Icon(Icons.calendar_month_rounded, size: 20),
               label: const Text('Weka tarehe na saa ya mwisho'),
             ),
             const SizedBox(height: 10),
             OutlinedButton.icon(
-              onPressed: u.premiumUntilMs != null ? () => _clearPremium(store) : null,
+              onPressed: saving || u.premiumUntilMs == null ? null : () => _clearPremium(store),
               icon: Icon(Icons.remove_circle_outline_rounded, size: 20, color: cs.error),
               label: Text('Ondoa premium', style: TextStyle(color: cs.error)),
             ),
@@ -293,8 +294,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
             ),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: () => _saveNote(store),
-              child: const Text('Hifadhi maelezo'),
+              onPressed: saving ? null : () => _saveNote(store),
+              child: saving
+                  ? const SizedBox(
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Hifadhi maelezo'),
             ),
           ],
         ),

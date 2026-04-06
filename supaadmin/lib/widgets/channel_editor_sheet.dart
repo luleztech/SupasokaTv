@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../models/app_config.dart';
 import '../store/admin_store.dart';
@@ -116,6 +117,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final isNew = widget.existing == null;
 
+    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Container(
@@ -350,12 +352,17 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     ),
                     const SizedBox(height: 28),
                     FilledButton(
-                      onPressed: _save,
+                      onPressed: saving ? null : _save,
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: const Text('Save channel', style: TextStyle(fontWeight: FontWeight.w800)),
+                      child: saving
+                          ? const SizedBox(
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Text('Save channel', style: TextStyle(fontWeight: FontWeight.w800)),
                     ),
                     const SizedBox(height: 8),
                   ],

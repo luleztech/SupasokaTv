@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../models/app_config.dart';
 import '../store/admin_store.dart';
@@ -121,6 +122,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
     final c1 = Color(_parseHex(_accent1Ctrl.text));
     final c2 = Color(_parseHex(_accent2Ctrl.text));
 
+    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Container(
@@ -326,15 +328,20 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                     ),
                     const SizedBox(height: 28),
                     FilledButton(
-                      onPressed: _save,
+                      onPressed: saving ? null : _save,
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: Text(
-                        isNew ? 'Ongeza mpango' : 'Hifadhi mabadiliko',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
+                      child: saving
+                          ? const SizedBox(
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : Text(
+                              isNew ? 'Ongeza mpango' : 'Hifadhi mabadiliko',
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                            ),
                     ),
                     const SizedBox(height: 8),
                   ],

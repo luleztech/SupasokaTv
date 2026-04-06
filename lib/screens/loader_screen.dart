@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
@@ -25,6 +26,7 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   String _status = kLoadingMessages.first;
   Timer? _timer;
   bool _bootStarted = false;
+  bool _offline = false;
 
   @override
   void initState() {
@@ -37,6 +39,23 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     if (_bootStarted) return;
     _bootStarted = true;
     if (!mounted) return;
+
+    final online = await _hasInternetConnection();
+    if (!mounted) return;
+    if (!online) {
+      setState(() {
+        _offline = true;
+        _status = 'Mtandao haupatikani';
+      });
+      _bootStarted = false;
+      return;
+    }
+
+    setState(() {
+      _offline = false;
+      _status = kLoadingMessages.first;
+    });
+
     await context.read<ContentStore>().bootstrap();
     await UserIdentity.registerWithBackend();
     if (!mounted) return;
@@ -56,6 +75,16 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     });
   }
 
+  Future<bool> _hasInternetConnection() async {
+    try {
+      final socket = await Socket.connect('1.1.1.1', 53, timeout: const Duration(seconds: 4));
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -68,6 +97,10 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   Widget build(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
 
+    if (_offline) {
+      return Scaffold(body: _NoInternetModal(onRetry: _start));
+    }
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -79,7 +112,6 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
         ),
         child: Stack(
           children: [
-            ..._corners(),
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -170,32 +202,103 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     );
   }
 
-  List<Widget> _corners() {
-    Widget c(Alignment a, {bool top = true, bool left = true}) {
-      return Align(
-        alignment: a,
-        child: Container(
-          margin: const EdgeInsets.all(28),
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            border: Border(
-              top: top ? const BorderSide(color: Color(0xFF00e5ff), width: 1.5) : BorderSide.none,
-              bottom: !top ? const BorderSide(color: Color(0xFF00e5ff), width: 1.5) : BorderSide.none,
-              left: left ? const BorderSide(color: Color(0xFF00e5ff), width: 1.5) : BorderSide.none,
-              right: !left ? const BorderSide(color: Color(0xFF00e5ff), width: 1.5) : BorderSide.none,
+
+class _NoInternetModal extends StatelessWidget {
+  const _NoInternetModal({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      child: Stack(
+        children: [
+          const Positioned.fill(
+            child: ColoredBox(color: Color(0xFF0B0B0B)),
+          ),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF11131B),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.18)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF00E5FF).withOpacity(0.16),
+                      blurRadius: 32,
+                      offset: const Offset(0, 18),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed)]),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF00E5FF).withOpacity(0.3),
+                            blurRadius: 16,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Ionicons.cloud_offline_outline, size: 32, color: Colors.white),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Hakuna Internet',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Washa data na uwe na MB ili uweze kufurahia huduma zetu. Ahsante.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 15,
+                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton(
+                      onPressed: onRetry,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E5FF),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: const Text('Jaribu tena', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700)),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Tafadhali hakikisha una mtandao kabla ya kuendelea.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      );
-    }
-
-    return [
-      c(Alignment.topLeft),
-      c(Alignment.topRight, left: false),
-      c(Alignment.bottomLeft, top: false),
-      c(Alignment.bottomRight, top: false, left: false),
-    ];
+        ],
+      ),
+    );
   }
 }
 

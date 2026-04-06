@@ -73,16 +73,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 32),
                 TextField(
-                  controller: _apiBaseController,
-                  decoration: InputDecoration(
-                    labelText: 'API Base URL',
-                    hintText: 'https://your-api.example.com',
-                    prefixIcon: const Icon(Icons.link_rounded),
-                  ),
-                  keyboardType: TextInputType.url,
-                ),
-                const SizedBox(height: 16),
-                TextField(
                   controller: _passwordController,
                   obscureText: _obscurePassword,
                   decoration: InputDecoration(

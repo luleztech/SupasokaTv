@@ -140,52 +140,67 @@ class NotificationsScreen extends StatelessWidget {
     final body = TextEditingController();
     var target = 'all';
 
-    final ok = await showDialog<bool>(
+    await showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          title: const Text('Broadcast message'),
-          content: SizedBox(
-            width: 420,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
-                const SizedBox(height: 12),
-                TextField(controller: body, decoration: const InputDecoration(labelText: 'Body'), maxLines: 4),
-                const SizedBox(height: 12),
-                InputDecorator(
-                  decoration: const InputDecoration(labelText: 'Audience'),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: target,
-                      isExpanded: true,
-                      items: const [
-                        DropdownMenuItem(value: 'all', child: Text('All users')),
-                        DropdownMenuItem(value: 'premium', child: Text('Premium only')),
-                        DropdownMenuItem(value: 'free', child: Text('Free only')),
-                      ],
-                      onChanged: (v) => setSt(() => target = v ?? 'all'),
+      builder: (ctx) {
+        var sending = false;
+        return StatefulBuilder(
+          builder: (ctx, setSt) => AlertDialog(
+            title: const Text('Broadcast message'),
+            content: SizedBox(
+              width: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
+                  const SizedBox(height: 12),
+                  TextField(controller: body, decoration: const InputDecoration(labelText: 'Body'), maxLines: 4),
+                  const SizedBox(height: 12),
+                  InputDecorator(
+                    decoration: const InputDecoration(labelText: 'Audience'),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: target,
+                        isExpanded: true,
+                        items: const [
+                          DropdownMenuItem(value: 'all', child: Text('All users')),
+                          DropdownMenuItem(value: 'premium', child: Text('Premium only')),
+                          DropdownMenuItem(value: 'free', child: Text('Free only')),
+                        ],
+                        onChanged: (v) => setSt(() => target = v ?? 'all'),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
+            actions: [
+              TextButton(onPressed: sending ? null : () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: sending
+                    ? null
+                    : () async {
+                        if (title.text.trim().isEmpty) return;
+                        setSt(() => sending = true);
+                        await store.sendNotification(title: title.text.trim(), body: body.text.trim(), target: target);
+                        if (!context.mounted) return;
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Imehifadhiwa')),
+                        );
+                      },
+                child: sending
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Record send'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Record send')),
-          ],
-        ),
-      ),
-    );
-    if (ok == true && title.text.trim().isNotEmpty) {
-      await store.sendNotification(title: title.text.trim(), body: body.text.trim(), target: target);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Imehifadhiwa')),
         );
-      }
-    }
+      },
+    );
   }
 }
