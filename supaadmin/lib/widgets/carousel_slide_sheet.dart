@@ -46,10 +46,13 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
   void initState() {
     super.initState();
     final e = widget.existing;
+    final defaultChannelId =
+        e?.channelId ??
+        (widget.store.config.channels.isEmpty ? 0 : widget.store.config.channels.first.id);
     _badgeCtrl = TextEditingController(text: e?.badge ?? 'NEW');
     _badgeIconCtrl = TextEditingController(text: e?.badgeIcon ?? 'radio-outline');
     _titleCtrl = TextEditingController(text: e?.title ?? 'Title\nLine 2');
-    _channelIdCtrl = TextEditingController(text: '${e?.channelId ?? 0}');
+    _channelIdCtrl = TextEditingController(text: '$defaultChannelId');
     _imgCtrl = TextEditingController(text: e?.img ?? 'https://');
     _imgCtrl.addListener(() => setState(() {}));
   }

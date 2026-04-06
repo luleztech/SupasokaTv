@@ -182,6 +182,41 @@ class AdminStore extends ChangeNotifier {
 
   Future<void> refreshUsersFromServer() => pullConfigFromServer();
 
+  /// Ensures viewer accounts from `POST /public/register-user` are in the next import payload.
+  Future<void> _mergeRegisteredUsersFromApi() async {
+    if (resolvedBundledAdminApiKey.isEmpty) return;
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/users').replace(
+      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+    );
+    try {
+      final r = await http
+          .get(
+            uri,
+            headers: {
+              ..._authHeaders(),
+              'Cache-Control': 'no-cache',
+            },
+          )
+          .timeout(const Duration(seconds: 22));
+      if (r.statusCode < 200 || r.statusCode >= 300) return;
+      final decoded = jsonDecode(r.body);
+      if (decoded is! Map<String, dynamic>) return;
+      if (decoded['ok'] != true) return;
+      final list = decoded['users'];
+      if (list is! List<dynamic>) return;
+      final seen = _config.users.map((u) => u.id).toSet();
+      for (final raw in list) {
+        if (raw is! Map) continue;
+        final m = Map<String, dynamic>.from(raw);
+        final id = '${m['id'] ?? ''}'.trim();
+        if (id.isEmpty || seen.contains(id)) continue;
+        _config.users.add(UserDto.fromJson(m));
+        seen.add(id);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _pushConfigToServer() async {
     if (resolvedBundledAdminApiKey.isEmpty) {
       _lastSyncError =
@@ -237,6 +272,9 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> _persist() async {
+    if (resolvedBundledAdminApiKey.isNotEmpty) {
+      await _mergeRegisteredUsersFromApi();
+    }
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsKey, _config.toJsonString());
     notifyListeners();

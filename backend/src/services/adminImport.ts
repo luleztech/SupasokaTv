@@ -200,27 +200,27 @@ export async function importAppConfig(body: unknown): Promise<void> {
     );
 
     const appUsers = (b.users as unknown[]) ?? [];
-    const userIdsToKeep: string[] = [];
     for (const u of appUsers) {
       const x = u as Record<string, unknown>;
       const uid = String(x.id ?? '').trim();
       if (!uid) continue;
-      userIdsToKeep.push(uid);
       const premiumRaw = x.premiumUntilMs;
       const premiumUntilMs =
         premiumRaw === null || premiumRaw === undefined ? null : Number(premiumRaw);
+      const profileUser = String(x.username ?? '').trim();
+      const displayName = profileUser.length > 0 ? profileUser : uid;
       await client.query(
         `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
          VALUES ($1, $2, $3, $4, $5, now())
          ON CONFLICT (id) DO UPDATE SET
-           profile_username = EXCLUDED.profile_username,
+           profile_username = COALESCE(NULLIF(TRIM(EXCLUDED.profile_username), ''), users.profile_username),
            legacy_user_id = COALESCE(EXCLUDED.legacy_user_id, users.legacy_user_id),
            premium_until_ms = EXCLUDED.premium_until_ms,
            note = EXCLUDED.note,
            updated_at = now()`,
         [
           uid,
-          String(x.username ?? ''),
+          displayName,
           x.legacyUserId != null ? String(x.legacyUserId) : null,
           premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null,
           String(x.note ?? ''),
@@ -228,15 +228,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
       );
     }
 
-    /** Full user-directory sync: rows not present in this import are removed (same idea as TRUNCATE for channels). */
-    if (userIdsToKeep.length === 0) {
-      await client.query(`DELETE FROM users`);
-    } else {
-      await client.query(
-        `DELETE FROM users WHERE id NOT IN (${userIdsToKeep.map((_, i) => `$${i + 1}`).join(',')})`,
-        userIdsToKeep,
-      );
-    }
+    /** Do not delete viewers registered via `POST /public/register-user` — only remove users with `DELETE /admin/users/:id`. */
 
     await client.query('COMMIT');
   } catch (e) {
