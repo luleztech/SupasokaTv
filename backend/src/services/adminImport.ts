@@ -35,6 +35,24 @@ function importErrorMessage(e: unknown): string {
   return String(e);
 }
 
+function asString(raw: unknown, fallback = ''): string {
+  if (raw === null || raw === undefined) return fallback;
+  return String(raw);
+}
+
+function asInt(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function asBool(raw: unknown, fallback: boolean): boolean {
+  if (raw === true || raw === false) return raw;
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'false' || s === '0' || s === 'no') return false;
+  if (s === 'true' || s === '1' || s === 'yes') return true;
+  return fallback;
+}
+
 /** Dart `Color.value` is 32-bit ARGB (>2^31-1); PG INTEGER must stay ≤ 2147483647. Keep RGB only. */
 function accentRgbFromDartColor(raw: unknown): number {
   const n = Number(raw);
@@ -65,22 +83,26 @@ export async function importAppConfig(body: unknown): Promise<void> {
     let sort = 0;
     for (const c of channels) {
       const ch = c as ChannelIn;
-      channelIds.add(ch.id);
-      const streamUrl = String(ch.streamUrl ?? ch.url ?? '');
+      const channelId = asInt(ch.id);
+      if (channelId === null) {
+        throw new HttpError(400, 'Channel id must be a number', 'BAD_CHANNEL_ID');
+      }
+      channelIds.add(channelId);
+      const streamUrl = asString(ch.streamUrl ?? ch.url, '');
       await client.query(
         `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
-          ch.id,
-          ch.name,
-          ch.cat,
-          ch.img ?? '',
-          ch.free ?? true,
-          ch.viewers ?? '',
+          channelId,
+          asString(ch.name, ''),
+          asString(ch.cat, 'movies'),
+          asString(ch.img, ''),
+          asBool(ch.free, true),
+          asString(ch.viewers, ''),
           streamUrl,
-          ch.enabled ?? true,
-          ch.drm ?? 'none',
-          ch.clearKeyKidKey ?? '',
+          asBool(ch.enabled, true),
+          asString(ch.drm, 'none'),
+          asString(ch.clearKeyKidKey, ''),
           sort,
         ],
       );
@@ -100,15 +122,13 @@ export async function importAppConfig(body: unknown): Promise<void> {
     sort = 0;
     for (const s of carousel) {
       const x = s as Record<string, unknown>;
-      const rawCid = Number(x.channelId);
+      const rawCid = asInt(x.channelId);
       const channelId =
-        channelIds.has(rawCid) && Number.isFinite(rawCid)
-          ? rawCid
-          : fallbackChannelId!;
+        rawCid !== null && channelIds.has(rawCid) ? rawCid : fallbackChannelId!;
       await client.query(
         `INSERT INTO carousel_slides (badge, badge_icon, title, channel_id, img, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [x.badge, x.badgeIcon, x.title, channelId, x.img, sort],
+        [asString(x.badge, ''), asString(x.badgeIcon, ''), asString(x.title, ''), channelId, asString(x.img, ''), sort],
       );
       sort += 1;
     }
@@ -117,20 +137,23 @@ export async function importAppConfig(body: unknown): Promise<void> {
     sort = 0;
     for (const m of lives) {
       const x = m as Record<string, unknown>;
-      const rawLc = Number(x.channelId);
-      const liveChannelId =
-        channelIds.has(rawLc) && Number.isFinite(rawLc) ? rawLc : null;
+      const rawId = asInt(x.id);
+      const rawLc = asInt(x.channelId);
+      const liveChannelId = rawLc !== null && channelIds.has(rawLc) ? rawLc : null;
+      if (rawId === null) {
+        throw new HttpError(400, 'Live match id must be a number', 'BAD_LIVE_ID');
+      }
       await client.query(
         `INSERT INTO live_matches (id, title, sport, sport_icon, img, channel_id, live_badge, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
-          x.id,
-          x.title,
-          (x.sport as string) ?? '',
-          (x.sportIcon as string) ?? '',
-          (x.img as string) ?? '',
+          rawId,
+          asString(x.title, ''),
+          asString(x.sport, ''),
+          asString(x.sportIcon, ''),
+          asString(x.img, ''),
           liveChannelId,
-          (x.liveBadge as boolean) ?? true,
+          asBool(x.liveBadge, true),
           sort,
         ],
       );
@@ -148,15 +171,15 @@ export async function importAppConfig(body: unknown): Promise<void> {
         `INSERT INTO malipo_plans (id, label, price_lines, amount, period, popular, accent1, accent2, badge, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [
-          x.id,
-          x.label,
-          x.priceLines,
-          x.amount,
-          x.period,
-          (x.popular as boolean) ?? false,
+          asString(x.id, ''),
+          asString(x.label, ''),
+          asString(x.priceLines, ''),
+          asString(x.amount, ''),
+          asString(x.period, ''),
+          asBool(x.popular, false),
           accentRgbFromDartColor(x.accent1),
           accentRgbFromDartColor(x.accent2),
-          (x.badge as string) ?? '',
+          asString(x.badge, ''),
           sort,
         ],
       );
@@ -171,7 +194,15 @@ export async function importAppConfig(body: unknown): Promise<void> {
       await client.query(
         `INSERT INTO premium_packages (id, name, price, period, features, popular, sort_order)
          VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)`,
-        [x.id, x.name, x.price, x.period, JSON.stringify(features), (x.popular as boolean) ?? false, sort],
+        [
+          asString(x.id, ''),
+          asString(x.name, ''),
+          asString(x.price, ''),
+          asString(x.period, ''),
+          JSON.stringify(features),
+          asBool(x.popular, false),
+          sort,
+        ],
       );
       sort += 1;
     }

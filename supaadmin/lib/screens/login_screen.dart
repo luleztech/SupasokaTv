@@ -12,21 +12,13 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
-  final _apiBaseController = TextEditingController();
   bool _obscurePassword = true;
   bool _loading = false;
   String? _error;
 
   @override
-  void initState() {
-    super.initState();
-    _apiBaseController.text = context.read<AdminStore>().runtimeApiBaseUrlForEditing;
-  }
-
-  @override
   void dispose() {
     _passwordController.dispose();
-    _apiBaseController.dispose();
     super.dispose();
   }
 
@@ -38,11 +30,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final store = context.read<AdminStore>();
     final error = await store.login(_passwordController.text);
     if (error == null) {
-      // Save API base
-      await store.saveRuntimeSyncSettings(
-        jwt: store.runtimeAdminApiKeyForEditing,
-        apiBaseUrlField: _apiBaseController.text,
-      );
+      await store.saveRuntimeSyncSettings(jwt: store.runtimeAdminApiKeyForEditing);
     } else {
       setState(() {
         _error = error;

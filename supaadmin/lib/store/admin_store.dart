@@ -12,7 +12,6 @@ import '../models/app_config.dart';
 const _prefsKey = 'supaadmin_app_config_v2';
 const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsJwt = 'supaadmin_jwt_v1';
-const _prefsRuntimeApiBase = 'supaadmin_runtime_api_base_url_v1';
 
 String _stripTrailingSlash(String s) => s.replaceAll(RegExp(r'/$'), '');
 
@@ -50,7 +49,6 @@ class AdminStore extends ChangeNotifier {
   bool get isLoaded => _loaded;
 
   String _jwt = '';
-  String _runtimeApiBaseUrl = '';
 
   String? _lastSyncError;
   bool _syncing = false;
@@ -67,17 +65,10 @@ class AdminStore extends ChangeNotifier {
   /// Runtime prefs only — never exposes a build-time key (for Settings field).
   String get runtimeAdminApiKeyForEditing => _jwt;
 
-  String get runtimeApiBaseUrlForEditing => _runtimeApiBaseUrl;
-
   /// JWT token for auth.
   String get resolvedAdminApiKey => _jwt.trim();
 
-  /// Optional runtime override; otherwise [apiBaseUrlFromBuild].
-  String get resolvedApiBaseUrl {
-    final r = _runtimeApiBaseUrl.trim();
-    if (r.isNotEmpty) return _stripTrailingSlash(r);
-    return apiBaseUrlFromBuild;
-  }
+  String get resolvedApiBaseUrl => apiBaseUrlFromBuild;
 
   bool get hasAdminSession => resolvedAdminApiKey.isNotEmpty;
 
@@ -109,18 +100,7 @@ class AdminStore extends ChangeNotifier {
       // Migrate old API key to JWT if possible, but since we can't, just clear
     }
 
-    var ru = p.getString(_prefsRuntimeApiBase);
-    if (ru == null || ru.isEmpty) {
-      final oldu = p.getString('supaadmin_api_base_url');
-      if (oldu != null && oldu.isNotEmpty) {
-        ru = _stripTrailingSlash(oldu);
-        await p.setString(_prefsRuntimeApiBase, ru);
-      }
-    }
-    await p.remove('supaadmin_api_base_url');
-
     _jwt = (jwt ?? '').trim();
-    _runtimeApiBaseUrl = (ru ?? '').trim();
 
     var raw = p.getString(_prefsKey);
     if (raw == null || raw.isEmpty) {
@@ -171,7 +151,7 @@ class AdminStore extends ChangeNotifier {
         final decoded = jsonDecode(res.body);
         if (decoded is Map && decoded['ok'] == true && decoded['token'] is String) {
           final token = decoded['token'] as String;
-          await saveRuntimeSyncSettings(jwt: token, apiBaseUrlField: _runtimeApiBaseUrl);
+          await saveRuntimeSyncSettings(jwt: token);
           return null; // success
         }
       }
@@ -182,12 +162,11 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> logout() async {
-    await saveRuntimeSyncSettings(jwt: '', apiBaseUrlField: _runtimeApiBaseUrl);
+    await saveRuntimeSyncSettings(jwt: '');
   }
 
   Future<void> saveRuntimeSyncSettings({
     required String jwt,
-    required String apiBaseUrlField,
   }) async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -197,16 +176,6 @@ class AdminStore extends ChangeNotifier {
     } else {
       await prefs.setString(_prefsJwt, jwt);
       _jwt = jwt;
-    }
-
-    final base = apiBaseUrlField.trim();
-    if (base.isEmpty) {
-      await prefs.remove(_prefsRuntimeApiBase);
-      _runtimeApiBaseUrl = '';
-    } else {
-      final n = _stripTrailingSlash(base);
-      await prefs.setString(_prefsRuntimeApiBase, n);
-      _runtimeApiBaseUrl = n;
     }
 
     notifyListeners();
