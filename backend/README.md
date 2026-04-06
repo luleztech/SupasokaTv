@@ -29,17 +29,22 @@ Copy `.env.example` → `.env` locally.
 | Variable | Notes |
 |----------|--------|
 | `DATABASE_URL` | Postgres connection string (Railway plugin) |
-| `JWT_SECRET` | Long random string; used only on the server to sign admin JWTs |
-| `ADMIN_APP_PASSWORD` | Password for **SupaAdmin** sign-in (`POST /api/v1/auth/admin-login`). **Not** the old API key — the mobile app stores a **short-lived JWT**, not this password. |
+| **`ADMIN_API_KEY`** | **Recommended for SupaAdmin (EaAdmin-style):** long random secret. Same value must be passed into the admin APK with `--dart-define=ADMIN_API_KEY=…`. All admin routes accept header `X-Admin-Key: <value>`. |
 
-### Optional
+### Optional (JWT admin login)
+
+| Variable | Notes |
+|----------|--------|
+| `JWT_SECRET` | Signs admin JWTs from `POST /api/v1/auth/admin-login` |
+| `ADMIN_APP_PASSWORD` | Password for that JWT flow (SupaAdmin **Advanced → Sign in JWT**) |
+
+### Other optional
 
 | Variable | Notes |
 |----------|--------|
 | `PORT` | Railway sets this (often `8080`) |
 | `NODE_ENV` | `production` in deploy |
 | `CORS_ORIGIN` | `*` or your Flutter web origin |
-| `ADMIN_API_KEY` | **Legacy only** — for `curl`/scripts with header `X-Admin-Key`. **SupaAdmin mobile does not use this.** |
 
 ### Viewer app (read-only)
 
@@ -49,8 +54,10 @@ The user app calls **`GET /api/v1/public/config`** — no admin secret. Set the 
 
 1. `curl -sS https://YOUR-API/api/v1/health` → JSON OK  
 2. `curl -sS https://YOUR-API/api/v1/health/db` → `{ "ok": true, "database": "connected" }` (if this fails, fix `DATABASE_URL` before debugging admin sync)  
-3. In SupaAdmin: **Settings** → same API URL → **Admin password** = `ADMIN_APP_PASSWORD` → **Sign in & load from server**  
-4. Edits → **Push to DB** → viewer pull-to-refresh should show channels.
+3. **SupaAdmin (default):** Build with `--dart-define=ADMIN_API_KEY=<same as Railway>` (and optional `--dart-define=API_BASE_URL=…`). No password in the UI — edits sync with `X-Admin-Key`.  
+4. Edits auto-push to Postgres; viewer **`GET /api/v1/public/config`** shows channels after refresh.
+
+**Alternative:** SupaAdmin **Advanced → JWT** if you use `JWT_SECRET` + `ADMIN_APP_PASSWORD` only (no key in the APK).
 
 ## Endpoints
 

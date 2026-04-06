@@ -65,8 +65,12 @@ class AdminStore extends ChangeNotifier {
 
   bool get syncingToServer => _syncing;
 
-  /// Signed-in to API (JWT from POST /auth/admin-login). No API key stored in the app.
-  bool get hasAdminSession => resolvedAdminToken.isNotEmpty;
+  /// JWT and/or bundled `ADMIN_API_KEY` (EaAdmin-style `X-Admin-Key`).
+  bool get hasAdminSession =>
+      resolvedAdminToken.isNotEmpty || resolvedBundledAdminApiKey.isNotEmpty;
+
+  /// Same value as Railway `ADMIN_API_KEY` when set via dart-define or [admin_api_config].
+  String get resolvedAdminApiKey => resolvedBundledAdminApiKey;
 
   @Deprecated('Use hasAdminSession')
   bool get hasAdminApiKey => hasAdminSession;
@@ -143,6 +147,10 @@ class AdminStore extends ChangeNotifier {
       'Accept': 'application/json',
       if (contentType.isNotEmpty) 'Content-Type': contentType,
     };
+    final key = resolvedBundledAdminApiKey;
+    if (key.isNotEmpty) {
+      h['X-Admin-Key'] = key;
+    }
     final t = resolvedAdminToken;
     if (t.isNotEmpty) {
       h['Authorization'] = 'Bearer $t';
@@ -169,7 +177,10 @@ class AdminStore extends ChangeNotifier {
       final res = await http
           .post(
             uri,
-            headers: _authHeaders(contentType: 'application/json'),
+            headers: const {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
             body: jsonEncode({'password': password}),
           )
           .timeout(const Duration(seconds: 25));
@@ -310,12 +321,14 @@ class AdminStore extends ChangeNotifier {
 
     _loaded = true;
     notifyListeners();
-    // Do not pull from server here — that overwrote local deletes when the last push had failed.
+    // EaAdmin-style: bundled admin key → always refresh from Postgres on launch.
+    if (resolvedBundledAdminApiKey.isNotEmpty) {
+      await pullConfigFromServer();
+    }
   }
 
   Future<void> pullConfigFromServer() async {
-    final token = resolvedAdminToken;
-    if (token.isEmpty) {
+    if (resolvedAdminToken.isEmpty && resolvedBundledAdminApiKey.isEmpty) {
       return;
     }
     final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
@@ -333,14 +346,18 @@ class AdminStore extends ChangeNotifier {
           )
           .timeout(const Duration(seconds: 40));
       if (res.statusCode == 401 || res.statusCode == 403) {
-        await _clearJwtSession();
-        _lastSyncError = 'Session expired. Sign in again with your admin password.';
+        if (resolvedAdminToken.isNotEmpty) {
+          await _clearJwtSession();
+        }
+        _lastSyncError = resolvedBundledAdminApiKey.isNotEmpty
+            ? 'Unauthorized — ADMIN_API_KEY in this app must match Railway ADMIN_API_KEY.'
+            : 'Session expired. Sign in again (Advanced → JWT) or set ADMIN_API_KEY on server and rebuild app.';
         notifyListeners();
         return;
       }
       if (res.statusCode == 503) {
         _lastSyncError =
-            'API unavailable (503). On Railway set DATABASE_URL, JWT_SECRET, and ADMIN_APP_PASSWORD.';
+            'API unavailable (503). On Railway set DATABASE_URL and ADMIN_API_KEY (or JWT_SECRET + ADMIN_APP_PASSWORD).';
         notifyListeners();
         return;
       }
@@ -387,8 +404,10 @@ class AdminStore extends ChangeNotifier {
   Future<void> refreshUsersFromServer() => pullConfigFromServer();
 
   Future<void> _pushConfigToServer() async {
-    if (resolvedAdminToken.isEmpty) {
-      _lastSyncError = 'Sign in with your admin password — changes stay on this device until you do.';
+    if (resolvedAdminToken.isEmpty && resolvedBundledAdminApiKey.isEmpty) {
+      _lastSyncError =
+          'Sync needs ADMIN_API_KEY: set it on Railway, then rebuild SupaAdmin with '
+          '--dart-define=ADMIN_API_KEY=… or set kOptionalInSourceAdminApiKey in admin_api_config.dart.';
       notifyListeners();
       return;
     }
@@ -409,8 +428,12 @@ class AdminStore extends ChangeNotifier {
           )
           .timeout(const Duration(seconds: 45));
       if (res.statusCode == 401 || res.statusCode == 403) {
-        await _clearJwtSession();
-        _lastSyncError = 'Session expired. Sign in again.';
+        if (resolvedAdminToken.isNotEmpty) {
+          await _clearJwtSession();
+        }
+        _lastSyncError = resolvedBundledAdminApiKey.isNotEmpty
+            ? 'Unauthorized — check ADMIN_API_KEY matches Railway.'
+            : 'Session expired. Sign in again.';
       } else if (res.statusCode == 503) {
         _lastSyncError =
             'Database unavailable (503). Check Railway DATABASE_URL and admin env vars.';
@@ -586,8 +609,7 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> deleteUser(String id) async {
-    final token = resolvedAdminToken;
-    if (token.isNotEmpty) {
+    if (resolvedAdminToken.isNotEmpty || resolvedBundledAdminApiKey.isNotEmpty) {
       final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
       final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(id)}');
       try {
