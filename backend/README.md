@@ -54,8 +54,8 @@ The user app calls **`GET /api/v1/public/config`** — no admin secret. Set the 
 
 1. `curl -sS https://YOUR-API/api/v1/health` → JSON OK  
 2. `curl -sS https://YOUR-API/api/v1/health/db` → `{ "ok": true, "database": "connected" }` (if this fails, fix `DATABASE_URL` before debugging admin sync)  
-3. **SupaAdmin (default):** Build with `--dart-define=ADMIN_API_KEY=<same as Railway>` (and optional `--dart-define=API_BASE_URL=…`). No password in the UI — edits sync with `X-Admin-Key`.  
-4. Edits auto-push to Postgres; viewer **`GET /api/v1/public/config`** shows channels after refresh.
+3. **SupaAdmin:** Set the **same** secret in Railway `ADMIN_API_KEY` and in `supaadmin/lib/config/admin_api_config.dart` as `kRailwayAdminApiKey` (or pass `--dart-define=ADMIN_API_KEY=…` when building). There is **no** password or API URL screen — every save calls `POST /admin/import` with `X-Admin-Key`.  
+4. Viewer polls `/api/v1/public/config` (no-store headers) about every **45s** and on tab/app resume.
 
 **Alternative:** SupaAdmin **Advanced → JWT** if you use `JWT_SECRET` + `ADMIN_APP_PASSWORD` only (no key in the APK).
 

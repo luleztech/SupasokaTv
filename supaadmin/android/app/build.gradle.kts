@@ -22,8 +22,7 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.supaadmin"
-        // flutter_secure_storage ^10 requires API 23+ (Android 6).
-        minSdk = maxOf(flutter.minSdkVersion, 23)
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

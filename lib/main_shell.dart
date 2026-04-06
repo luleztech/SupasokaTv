@@ -11,8 +11,34 @@ import 'package:supasoka/screens/profile_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
-class MainShell extends StatelessWidget {
+/// Polls public config in the background so viewer content stays close to what the admin pushed.
+class MainShell extends StatefulWidget {
   const MainShell({super.key});
+
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+
+class _MainShellState extends State<MainShell> {
+  Timer? _configPoll;
+
+  @override
+  void initState() {
+    super.initState();
+    _configPoll = Timer.periodic(const Duration(seconds: 45), (_) {
+      if (!mounted) return;
+      final cs = context.read<ContentStore>();
+      if (cs.ready) {
+        unawaited(cs.refresh());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _configPoll?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -122,7 +148,9 @@ class _TabButton extends StatelessWidget {
                 width: 4,
                 height: 4,
                 decoration: BoxDecoration(color: t.accent, shape: BoxShape.circle),
-              ),
+              )
+            else
+              const SizedBox(height: 4),
           ],
         ),
       ),
