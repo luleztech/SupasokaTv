@@ -194,6 +194,33 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
+  /// Public `GET /api/v1/health/db` — same idea as EaMax `/health/db` for Railway troubleshooting.
+  Future<String?> testDatabaseReachable() async {
+    final base = resolvedApiBaseUrl.replaceAll(RegExp(r'/$'), '');
+    try {
+      final r = await http
+          .get(
+            Uri.parse('$base/api/v1/health/db'),
+            headers: const {'Accept': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode >= 200 && r.statusCode < 300) {
+        try {
+          final j = jsonDecode(r.body);
+          if (j is Map && j['ok'] == true && j['database'] == 'connected') {
+            return null;
+          }
+          return r.body.length > 200 ? '${r.body.substring(0, 200)}…' : r.body;
+        } catch (_) {
+          return 'Unexpected response body';
+        }
+      }
+      return 'Database check HTTP ${r.statusCode}: ${r.body.length > 160 ? '${r.body.substring(0, 160)}…' : r.body}';
+    } catch (e) {
+      return 'Cannot reach database endpoint — $e';
+    }
+  }
+
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     _apiBaseUrlPrefs = p.getString(_prefsApiBase);

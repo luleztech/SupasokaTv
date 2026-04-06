@@ -193,24 +193,48 @@ class _ServerSyncCardState extends State<_ServerSyncCard> {
           const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: store.syncingToServer
-                  ? null
-                  : () async {
-                      final msg = await context.read<AdminStore>().testApiUrlReachable();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            msg == null
-                                ? 'API URL inafunguka (health OK).'
-                                : msg,
-                          ),
-                        ),
-                      );
-                    },
-              icon: const Icon(Icons.wifi_tethering_rounded, size: 18),
-              label: const Text('Test API URL'),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton.icon(
+                  onPressed: store.syncingToServer
+                      ? null
+                      : () async {
+                          final msg = await context.read<AdminStore>().testApiUrlReachable();
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                msg == null ? 'API URL inafunguka (health OK).' : msg,
+                              ),
+                            ),
+                          );
+                        },
+                  icon: const Icon(Icons.wifi_tethering_rounded, size: 18),
+                  label: const Text('Test API URL'),
+                ),
+                TextButton.icon(
+                  onPressed: store.syncingToServer
+                      ? null
+                      : () async {
+                          final msg = await context.read<AdminStore>().testDatabaseReachable();
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                msg == null
+                                    ? 'Database imeunganishwa (SELECT 1 OK).'
+                                    : msg,
+                              ),
+                            ),
+                          );
+                        },
+                  icon: const Icon(Icons.storage_rounded, size: 18),
+                  label: const Text('Test database'),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 14),

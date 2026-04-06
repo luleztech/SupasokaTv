@@ -10,6 +10,33 @@ import 'package:supasoka/data/pay_plan.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v1';
 
+const _configFetchAttempts = 4;
+
+/// Retries transient failures (EaMax-style) before surfacing an error.
+Future<http.Response> _getPublicConfig(Uri uri) async {
+  Object? lastError;
+  for (var attempt = 0; attempt < _configFetchAttempts; attempt++) {
+    try {
+      return await http
+          .get(
+            uri,
+            headers: const {
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 25));
+    } catch (e) {
+      lastError = e;
+      if (attempt < _configFetchAttempts - 1) {
+        await Future<void>.delayed(Duration(milliseconds: 350 * (1 << attempt)));
+      }
+    }
+  }
+  throw lastError!;
+}
+
 int _asInt(dynamic v) {
   if (v == null) return 0;
   if (v is int) return v;
@@ -105,16 +132,7 @@ class ContentStore extends ChangeNotifier {
         },
       );
       try {
-        final res = await http
-            .get(
-              uri,
-              headers: const {
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'Accept': 'application/json',
-              },
-            )
-            .timeout(const Duration(seconds: 25));
+        final res = await _getPublicConfig(uri);
         final body = res.body.trim();
 
         if (res.statusCode == 200) {

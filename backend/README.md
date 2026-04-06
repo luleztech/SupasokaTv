@@ -48,13 +48,15 @@ The user app calls **`GET /api/v1/public/config`** — no admin secret. Set the 
 ### After deploy
 
 1. `curl -sS https://YOUR-API/api/v1/health` → JSON OK  
-2. In SupaAdmin: **Settings** → same API URL → **Admin password** = `ADMIN_APP_PASSWORD` → **Sign in & load from server**  
-3. Edits → **Push to DB** → viewer pull-to-refresh should show channels.
+2. `curl -sS https://YOUR-API/api/v1/health/db` → `{ "ok": true, "database": "connected" }` (if this fails, fix `DATABASE_URL` before debugging admin sync)  
+3. In SupaAdmin: **Settings** → same API URL → **Admin password** = `ADMIN_APP_PASSWORD` → **Sign in & load from server**  
+4. Edits → **Push to DB** → viewer pull-to-refresh should show channels.
 
 ## Endpoints
 
 - `GET /` — service banner  
 - `GET /api/v1/health` — JSON health (Railway healthcheck)  
+- `GET /api/v1/health/db` — verifies Postgres (`SELECT 1`); public, no auth  
 - `POST /api/v1/auth/admin-login` — `{ "password": "..." }` → `{ ok, token }` (JWT)  
 - `GET /api/v1/admin/export` — full config (requires admin JWT or legacy key)  
 - `POST /api/v1/admin/import` — write config to Postgres  
