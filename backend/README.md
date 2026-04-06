@@ -66,7 +66,7 @@ The user app calls **`GET /api/v1/public/config`** — no admin secret. Set the 
 - `GET /api/v1/health/db` — verifies Postgres (`SELECT 1`); public, no auth  
 - `POST /api/v1/auth/admin-login` — `{ "password": "..." }` → `{ ok, token }` (JWT)  
 - `GET /api/v1/admin/export` — full config (requires admin JWT or legacy key)  
-- `POST /api/v1/admin/import` — write config to Postgres  
+- `POST /api/v1/admin/import` — write config to Postgres (channels/carousel/etc. replaced; **users** are upserted only — viewer accounts from `POST /public/register-user` are **never** deleted by import; remove a user with `DELETE /admin/users/:id`)  
 - `GET /api/v1/public/config` — public config for the viewer app  
 
 ## Railway (API service)
