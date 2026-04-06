@@ -17,9 +17,8 @@ const _legacyAdminKey = 'supaadmin_admin_api_key';
 const _secureJwtKey = 'supaadmin_jwt_v1';
 const _securePasswordKey = 'supaadmin_admin_password_v1';
 
-const FlutterSecureStorage _adminSecureStorage = FlutterSecureStorage(
-  aOptions: AndroidOptions(encryptedSharedPreferences: true),
-);
+/// v10 uses KeyStore-backed ciphers; migration from older storage is automatic (`migrateOnAlgorithmChange`).
+const FlutterSecureStorage _adminSecureStorage = FlutterSecureStorage();
 
 /// Empty workspace — no demo channels/users; add real data in SupaAdmin or load from API.
 AppConfig _emptyProductionConfig() {
