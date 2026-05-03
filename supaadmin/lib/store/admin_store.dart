@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,8 +11,6 @@ import '../models/app_config.dart';
 const _prefsKey = 'supaadmin_app_config_v2';
 const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsJwt = 'supaadmin_jwt_v1';
-
-String _stripTrailingSlash(String s) => s.replaceAll(RegExp(r'/$'), '');
 
 AppConfig _emptyProductionConfig() {
   return AppConfig(

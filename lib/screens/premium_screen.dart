@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -169,6 +168,7 @@ class _PremiumScreenState extends State<PremiumScreen> with SingleTickerProvider
                           Text('📱 Phone Number (M-PESA)', style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2, letterSpacing: 1)),
                           const SizedBox(height: 8),
                           TextField(
+                            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                             onChanged: (v) => setState(() => _phone = v),
                             keyboardType: TextInputType.phone,
                             style: rajdhani(16, weight: FontWeight.w600).copyWith(color: t.text),

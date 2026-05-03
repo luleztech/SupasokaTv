@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS live_matches (
   img TEXT NOT NULL DEFAULT '',
   channel_id INTEGER REFERENCES channels (id) ON DELETE SET NULL,
   live_badge BOOLEAN NOT NULL DEFAULT TRUE,
+  match_time TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

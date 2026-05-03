@@ -11,7 +11,7 @@ import 'package:supasoka/screens/profile_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
-/// Polls public config in the background so viewer content stays close to what the admin pushed.
+/// Fast `/config-meta` poll + full fetch only when the server sync cursor changes (admin updates).
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -25,11 +25,17 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-    _configPoll = Timer.periodic(const Duration(seconds: 45), (_) {
+    // Catch admin sync (pricing, channels) sooner than waiting for the first interval tick.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final cs = context.read<ContentStore>();
+      if (cs.ready) unawaited(cs.pollConfigMeta());
+    });
+    _configPoll = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!mounted) return;
       final cs = context.read<ContentStore>();
       if (cs.ready) {
-        unawaited(cs.refresh());
+        unawaited(cs.pollConfigMeta());
       }
     });
   }
@@ -62,8 +68,8 @@ class _MainShellState extends State<MainShell> {
               index: nav.currentTab,
               children: const [
                 HomeScreen(),
-                ChannelsScreen(),
                 LiveScreen(),
+                ChannelsScreen(),
                 PaymentScreen(),
                 ProfileScreen(),
               ],
@@ -73,17 +79,17 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: t.navBg,
+          color: Colors.black.withValues(alpha: 0.95),
           border: Border(top: BorderSide(color: t.border)),
         ),
-        padding: EdgeInsets.only(top: 8, bottom: bottom + 4),
+        padding: EdgeInsets.only(top: 6, bottom: bottom + 6),
         child: Row(
           children: [
             _TabButton(i: 0, label: 'Home', outline: Ionicons.home_outline, solid: Ionicons.home, selected: nav.currentTab == 0),
-            _TabButton(i: 1, label: 'Vituo', outline: Ionicons.tv_outline, solid: Ionicons.tv, selected: nav.currentTab == 1),
-            _TabButton(i: 2, label: 'Live', outline: Ionicons.radio_outline, solid: Ionicons.radio, selected: nav.currentTab == 2),
-            _TabButton(i: 3, label: 'Malipo', outline: Ionicons.card_outline, solid: Ionicons.card, selected: nav.currentTab == 3),
-            _TabButton(i: 4, label: 'Akaunti', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
+            _TabButton(i: 1, label: 'Live', outline: Ionicons.radio_outline, solid: Ionicons.radio, selected: nav.currentTab == 1),
+            _TabButton(i: 2, label: 'Channels', outline: Ionicons.tv_outline, solid: Ionicons.tv, selected: nav.currentTab == 2),
+            _TabButton(i: 3, label: 'Fungua zote', outline: Ionicons.key_outline, solid: Ionicons.key, selected: nav.currentTab == 3),
+            _TabButton(i: 4, label: 'Profile', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
           ],
         ),
       ),
@@ -110,48 +116,50 @@ class _TabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
     final icon = selected ? solid : outline;
+    final active = t.accent;
+    final idle = const Color(0xFF71717a);
 
     return Expanded(
       child: InkWell(
         onTap: () {
           final changed = context.read<AppNav>().setTab(i);
-          if (changed) unawaited(context.read<ContentStore>().refresh());
+          if (changed) {
+            final store = context.read<ContentStore>();
+            // Unlock / pricing: always pull latest so admin price edits show immediately.
+            if (i == 3) {
+              unawaited(store.refresh());
+            } else {
+              unawaited(store.pollConfigMeta());
+            }
+          }
         },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 44,
-              height: 36,
-              transform: selected ? (Matrix4.identity()..translate(0.0, -4.0)) : Matrix4.identity(),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                gradient: selected ? LinearGradient(colors: [t.accent, t.accent2]) : null,
-              ),
-              alignment: Alignment.center,
-              child: Icon(icon, size: 22, color: selected ? Colors.black : t.text2),
+        child: AnimatedScale(
+          scale: selected ? 1.06 : 1,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 22, color: selected ? active : idle),
+                const SizedBox(height: 4),
+                Text(
+                  label.toUpperCase(),
+                  maxLines: 2,
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: label.length > 10 ? 8.5 : 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: label.length > 10 ? 0.15 : 0.3,
+                    height: 1.15,
+                    color: selected ? active : idle,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-                color: selected ? t.accent : t.text2,
-              ),
-            ),
-            SizedBox(height: selected ? 2 : 6),
-            if (selected)
-              Container(
-                width: 4,
-                height: 4,
-                decoration: BoxDecoration(color: t.accent, shape: BoxShape.circle),
-              )
-            else
-              const SizedBox(height: 4),
-          ],
+          ),
         ),
       ),
     );

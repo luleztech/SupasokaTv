@@ -144,8 +144,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
         throw new HttpError(400, 'Live match id must be a number', 'BAD_LIVE_ID');
       }
       await client.query(
-        `INSERT INTO live_matches (id, title, sport, sport_icon, img, channel_id, live_badge, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        `INSERT INTO live_matches (id, title, sport, sport_icon, img, channel_id, live_badge, sort_order, match_time)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
           rawId,
           asString(x.title, ''),
@@ -155,6 +155,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
           liveChannelId,
           asBool(x.liveBadge, true),
           sort,
+          asString(x.matchTime, ''),
         ],
       );
       sort += 1;
@@ -214,20 +215,24 @@ export async function importAppConfig(body: unknown): Promise<void> {
       [wa],
     );
 
-    const cfgVer =
-      typeof b.configVersion === 'number' && Number.isFinite(b.configVersion)
-        ? String(Math.trunc(b.configVersion))
-        : '1';
+    const verRow = await client.query(`SELECT value FROM app_settings WHERE key = 'configVersion'`);
+    let nextVer = 1;
+    const rawV = verRow.rows[0]?.value;
+    if (rawV != null && rawV !== '') {
+      const n = parseInt(String(rawV), 10);
+      if (Number.isFinite(n) && n > 0) nextVer = n + 1;
+    }
     await client.query(
       `INSERT INTO app_settings (key, value) VALUES ('configVersion', $1)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [cfgVer],
+      [String(nextVer)],
     );
 
+    const syncedMs = String(Date.now());
     await client.query(
       `INSERT INTO app_settings (key, value) VALUES ('configSyncedAt', $1)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [String(Date.now())],
+      [syncedMs],
     );
 
     const appUsers = (b.users as unknown[]) ?? [];
@@ -240,6 +245,11 @@ export async function importAppConfig(body: unknown): Promise<void> {
         premiumRaw === null || premiumRaw === undefined ? null : Number(premiumRaw);
       const profileUser = String(x.username ?? '').trim();
       const displayName = profileUser.length > 0 ? profileUser : uid;
+      const legacyUserId = x.userNumber != null
+        ? String(x.userNumber)
+        : x.legacyUserId != null
+          ? String(x.legacyUserId)
+          : null;
       await client.query(
         `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
          VALUES ($1, $2, $3, $4, $5, now())
@@ -252,7 +262,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
         [
           uid,
           displayName,
-          x.legacyUserId != null ? String(x.legacyUserId) : null,
+          legacyUserId,
           premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null,
           String(x.note ?? ''),
         ],

@@ -50,7 +50,7 @@ class NotificationsScreen extends StatelessWidget {
                 : ListView.separated(
                     physics: const BouncingScrollPhysics(),
                     itemCount: log.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (context, _) => const SizedBox(height: 10),
                     itemBuilder: (context, i) {
                       final n = log[i];
                       return StaggerEntrance(
@@ -152,9 +152,18 @@ class NotificationsScreen extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
+                  TextField(
+                    spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                    controller: title,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                  ),
                   const SizedBox(height: 12),
-                  TextField(controller: body, decoration: const InputDecoration(labelText: 'Body'), maxLines: 4),
+                  TextField(
+                    spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                    controller: body,
+                    decoration: const InputDecoration(labelText: 'Body'),
+                    maxLines: 4,
+                  ),
                   const SizedBox(height: 12),
                   InputDecorator(
                     decoration: const InputDecoration(labelText: 'Audience'),

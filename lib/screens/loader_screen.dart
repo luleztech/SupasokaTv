@@ -1,14 +1,22 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
-import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
 
+const _splashAccent = Color(0xFFFF4F4F);
+const _splashAccentSoft = Color(0xFFFF7A7A);
+const _splashBgTop = Color(0xFF06060A);
+const _splashBgBottom = Color(0xFF0E0E14);
+
+/// Cold-start splash: ambient motion, brand mark, syncs exit with [ContentStore.bootstrap].
 class LoaderScreen extends StatefulWidget {
   const LoaderScreen({super.key, required this.onDone});
 
@@ -19,67 +27,125 @@ class LoaderScreen extends StatefulWidget {
 }
 
 class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMixin {
-  late final AnimationController _logo = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
-  late final AnimationController _ring = AnimationController(vsync: this, duration: const Duration(seconds: 8))..repeat();
+  late final AnimationController _ambientCtrl;
+  late final AnimationController _introCtrl;
+  late final AnimationController _exitCtrl;
+  late final AnimationController _shimmerCtrl;
 
-  int _pct = 0;
-  String _status = kLoadingMessages.first;
-  Timer? _timer;
+  late final Animation<double> _introScale;
+  late final Animation<double> _introOpacity;
+  late final Animation<double> _exitFade;
+
   bool _bootStarted = false;
   bool _offline = false;
+  bool _navigating = false;
+  String _status = '';
+
+  final List<String> _messages = [
+    'Connecting…',
+    'Loading channels…',
+    'Almost there…',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _logo.forward();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+
+    _ambientCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    )..repeat();
+
+    _shimmerCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat();
+
+    _introCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+
+    _introScale = Tween<double>(begin: 0.88, end: 1.0).animate(
+      CurvedAnimation(parent: _introCtrl, curve: Curves.easeOutBack),
+    );
+    _introOpacity = CurvedAnimation(parent: _introCtrl, curve: const Interval(0.0, 0.65, curve: Curves.easeOut));
+
+    _exitCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _exitFade = CurvedAnimation(parent: _exitCtrl, curve: Curves.easeIn);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runBoot());
   }
 
-  Future<void> _start() async {
+  Future<void> _runBoot() async {
     if (_bootStarted) return;
     _bootStarted = true;
     if (!mounted) return;
+
+    setState(() => _status = _messages.first);
+    unawaited(_introCtrl.forward());
 
     final online = await _hasInternetConnection();
     if (!mounted) return;
     if (!online) {
       setState(() {
         _offline = true;
-        _status = 'Mtandao haupatikani';
+        _status = 'No connection';
       });
       _bootStarted = false;
       return;
     }
 
-    setState(() {
-      _offline = false;
-      _status = kLoadingMessages.first;
+    final minSplash = Future<void>.delayed(const Duration(milliseconds: 1500));
+    final load = context.read<ContentStore>().bootstrap();
+
+    var msgIdx = 0;
+    final ticker = Timer.periodic(const Duration(milliseconds: 480), (t) {
+      if (!mounted) return;
+      msgIdx = (msgIdx + 1) % _messages.length;
+      setState(() => _status = _messages[msgIdx]);
     });
 
-    await context.read<ContentStore>().bootstrap();
-    await UserIdentity.registerWithBackend();
+    try {
+      await Future.wait([minSplash, load]);
+    } finally {
+      ticker.cancel();
+    }
+
     if (!mounted) return;
-    _timer = Timer.periodic(const Duration(milliseconds: 45), (t) {
-      if (!mounted) return;
-      setState(() {
-        _pct = (_pct + 1).clamp(0, 100);
-        final mi = ((_pct / 100) * (kLoadingMessages.length - 1)).floor().clamp(0, kLoadingMessages.length - 1);
-        _status = kLoadingMessages[mi];
-      });
-      if (_pct >= 100) {
-        t.cancel();
-        Future.delayed(const Duration(milliseconds: 450), () {
-          if (mounted) widget.onDone();
-        });
-      }
+
+    final savedPhone = await UserIdentity.getSavedPhoneNumber();
+    await UserIdentity.registerWithBackend(phone: savedPhone);
+    if (!mounted) return;
+
+    setState(() => _status = 'Ready');
+    await _exitCtrl.forward();
+    _goDone();
+  }
+
+  void _goDone() {
+    if (_navigating || !mounted) return;
+    _navigating = true;
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (mounted) widget.onDone();
     });
   }
 
   Future<bool> _hasInternetConnection() async {
-    try {
-      final socket = await Socket.connect('1.1.1.1', 53, timeout: const Duration(seconds: 4));
-      socket.destroy();
+    if (kIsWeb) {
+      // `dart:http` to arbitrary hosts from `localhost` is blocked by browser CORS.
+      // A HEAD to example.com always fails on web → falsely showed "No internet".
+      // Proceed to [ContentStore.bootstrap]; load errors surface in-app if the API is unreachable.
       return true;
+    }
+    try {
+      final response = await http
+          .head(Uri.parse('https://www.example.com'))
+          .timeout(const Duration(seconds: 3));
+      return response.statusCode == 200;
     } catch (_) {
       return false;
     }
@@ -87,249 +153,322 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _logo.dispose();
-    _ring.dispose();
+    _ambientCtrl.dispose();
+    _shimmerCtrl.dispose();
+    _introCtrl.dispose();
+    _exitCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final w = MediaQuery.sizeOf(context).width;
-
     if (_offline) {
-      return Scaffold(body: _NoInternetModal(onRetry: _start));
+      return Scaffold(
+        backgroundColor: _splashBgTop,
+        body: _OfflineCard(onRetry: () {
+          setState(() {
+            _offline = false;
+            _status = '';
+          });
+          _bootStarted = false;
+          _runBoot();
+        }),
+      );
     }
 
+    final size = MediaQuery.sizeOf(context);
+
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment(-0.3, 0),
-            end: Alignment(0.7, 1),
-            colors: [Color(0xFF06020f), Color(0xFF050510), Color(0xFF08000a)],
-          ),
-        ),
+      backgroundColor: _splashBgTop,
+      body: FadeTransition(
+        opacity: Tween<double>(begin: 1.0, end: 0.0).animate(_exitFade),
         child: Stack(
+          fit: StackFit.expand,
           children: [
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ScaleTransition(
-                    scale: CurvedAnimation(parent: _logo, curve: Curves.elasticOut),
-                    child: Stack(
-                      alignment: Alignment.center,
+            AnimatedBuilder(
+              animation: _ambientCtrl,
+              builder: (context, _) {
+                final t = _ambientCtrl.value * math.pi * 2;
+                final dx = math.cos(t * 0.7) * 0.15;
+                final dy = math.sin(t * 0.5) * 0.12;
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment(-0.8 + dx, -1.0 + dy),
+                      end: Alignment(0.9 - dx, 1.2 + dy),
+                      colors: [
+                        _splashBgTop,
+                        const Color(0xFF12080C),
+                        _splashBgBottom,
+                      ],
+                      stops: const [0.0, 0.48, 1.0],
+                    ),
+                  ),
+                );
+              },
+            ),
+            // Soft bloom
+            Positioned(
+              top: size.height * 0.12,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: AnimatedBuilder(
+                  animation: _ambientCtrl,
+                  builder: (context, _) {
+                    final pulse = 0.55 + 0.45 * math.sin(_ambientCtrl.value * math.pi * 2);
+                    return Center(
+                      child: Container(
+                        width: size.width * 0.95,
+                        height: size.height * 0.42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: _splashAccent.withValues(alpha: 0.08 * pulse),
+                              blurRadius: 120,
+                              spreadRadius: 20,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            // Top vignette
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.center,
+                  colors: [Color(0xCC000000), Color(0x00000000)],
+                ),
+              ),
+            ),
+            SafeArea(
+              child: Center(
+                child: AnimatedBuilder(
+                  animation: Listenable.merge([_introCtrl, _shimmerCtrl]),
+                  builder: (context, _) {
+                    return Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        RotationTransition(
-                          turns: _ring,
-                          child: Container(
-                            width: 156,
-                            height: 156,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: const Color.fromRGBO(0, 229, 255, 0.18)),
+                        Transform.scale(
+                          scale: _introScale.value,
+                          child: Opacity(
+                            opacity: _introOpacity.value,
+                            child: _BrandMark(shimmer: _shimmerCtrl.value),
+                          ),
+                        ),
+                        const SizedBox(height: 36),
+                        Opacity(
+                          opacity: _introOpacity.value,
+                          child: ShaderMask(
+                            shaderCallback: (bounds) => const LinearGradient(
+                              colors: [_splashAccentSoft, _splashAccent, Color(0xFFB71C1C)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ).createShader(bounds),
+                            child: Text(
+                              'SUPASOKA',
+                              style: orbitron(26, weight: FontWeight.w900).copyWith(
+                                color: Colors.white,
+                                letterSpacing: 10,
+                              ),
                             ),
                           ),
                         ),
-                        Container(
-                          width: 112,
-                          height: 112,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(32),
-                            gradient: const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed), Color(0xFF00e5ff)]),
-                            boxShadow: [BoxShadow(color: const Color(0xFF00e5ff).withValues(alpha: 0.5), blurRadius: 24)],
-                          ),
-                          padding: const EdgeInsets.all(2),
-                          child: Container(
-                            decoration: BoxDecoration(color: const Color(0xFF0a0018), borderRadius: BorderRadius.circular(30)),
-                            child: Icon(Ionicons.football, size: 52, color: Colors.white),
+                        const SizedBox(height: 10),
+                        Opacity(
+                          opacity: _introOpacity.value * 0.85,
+                          child: Text(
+                            'Live TV  ·  Streams  ·  Anywhere',
+                            style: rajdhani(12, weight: FontWeight.w600).copyWith(
+                              color: Colors.white54,
+                              letterSpacing: 2.4,
+                            ),
                           ),
                         ),
-                        Positioned(
-                          bottom: -6,
-                          right: -6,
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed)]),
-                              border: Border.all(color: Color(0xFF06020f), width: 2),
+                        const SizedBox(height: 48),
+                        SizedBox(
+                          width: math.min(size.width * 0.72, 320),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(99),
+                            child: LinearProgressIndicator(
+                              minHeight: 3,
+                              backgroundColor: Colors.white.withValues(alpha: 0.06),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                _splashAccent.withValues(alpha: 0.85),
+                              ),
                             ),
-                            child: Icon(Ionicons.play, color: Colors.white, size: 16),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          _status,
+                          style: rajdhani(12, weight: FontWeight.w500).copyWith(
+                            color: Colors.white38,
+                            letterSpacing: 0.6,
                           ),
                         ),
                       ],
-                    ),
-                  ),
-                  const SizedBox(height: 28),
-                  ShaderMask(
-                    shaderCallback: (b) => const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed)]).createShader(b),
-                    child: Text(
-                      'SUPASOKA',
-                      style: orbitron(28, weight: FontWeight.w900).copyWith(
-                        color: Colors.white,
-                        letterSpacing: 8,
-                        shadows: const [Shadow(color: Color(0xFF00e5ff), blurRadius: 12)],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'LIVE TV  •  STREAMS',
-                    style: rajdhani(11, weight: FontWeight.w600).copyWith(
-                      color: const Color(0xFF00e5ff).withValues(alpha: 0.7),
-                      letterSpacing: 5,
-                    ),
-                  ),
-                  SizedBox(height: 48, width: w * 0.78, child: _ProgressBar(pct: _pct)),
-                  const SizedBox(height: 8),
-                  Text(
-                    _status,
-                    textAlign: TextAlign.center,
-                    style: rajdhani(11, weight: FontWeight.w600).copyWith(
-                      color: const Color(0xFF00e5ff).withValues(alpha: 0.65),
-                      letterSpacing: 2.5,
-                    ),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-
-class _NoInternetModal extends StatelessWidget {
-  const _NoInternetModal({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black,
-      child: Stack(
-        children: [
-          const Positioned.fill(
-            child: ColoredBox(color: Color(0xFF0B0B0B)),
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF11131B),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.18)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF00E5FF).withOpacity(0.16),
-                      blurRadius: 32,
-                      offset: const Offset(0, 18),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed)]),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF00E5FF).withOpacity(0.3),
-                            blurRadius: 16,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(Ionicons.cloud_offline_outline, size: 32, color: Colors.white),
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Hakuna Internet',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Washa data na uwe na MB ili uweze kufurahia huduma zetu. Ahsante.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 15,
-                        height: 1.6,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    ElevatedButton(
-                      onPressed: onRetry,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00E5FF),
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: const Text('Jaribu tena', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w700)),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Tafadhali hakikisha una mtandao kabla ya kuendelea.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
 }
 
-class _ProgressBar extends StatelessWidget {
-  const _ProgressBar({required this.pct});
+/// Glass tile + play glyph — reads fast at any size.
+class _BrandMark extends StatelessWidget {
+  const _BrandMark({required this.shimmer});
 
-  final int pct;
+  final double shimmer;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('LOADING', style: orbitron(9).copyWith(color: Colors.white38, letterSpacing: 3)),
-            ShaderMask(
-              shaderCallback: (b) => const LinearGradient(colors: [Color(0xFF00e5ff), Color(0xFF7c3aed)]).createShader(b),
-              child: Text('$pct%', style: orbitron(22, weight: FontWeight.w900).copyWith(color: Colors.white)),
-            ),
+    final gloss = shimmer % 1.0;
+    return Container(
+      width: 100,
+      height: 100,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: _splashAccent.withValues(alpha: 0.35),
+        ),
+        gradient: LinearGradient(
+          begin: Alignment(-1 + gloss * 2, -1),
+          end: Alignment(1 - gloss * 2, 1),
+          colors: [
+            const Color(0xFF2A1818).withValues(alpha: 0.95),
+            const Color(0xFF140A0A),
           ],
         ),
-        const SizedBox(height: 12),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(99),
-          child: LinearProgressIndicator(
-            value: pct / 100,
-            minHeight: 6,
-            backgroundColor: Colors.white.withValues(alpha: 0.08),
-            valueColor: const AlwaysStoppedAnimation(Color(0xFF00e5ff)),
+        boxShadow: [
+          BoxShadow(
+            color: _splashAccent.withValues(alpha: 0.18),
+            blurRadius: 40,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.10),
+                  Colors.transparent,
+                ],
+              ),
+            ),
+            child: Icon(
+              Icons.play_arrow_rounded,
+              size: 52,
+              color: _splashAccent.withValues(alpha: 0.95),
+              shadows: [
+                Shadow(
+                  color: _splashAccent.withValues(alpha: 0.45),
+                  blurRadius: 18,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OfflineCard extends StatelessWidget {
+  const _OfflineCard({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const ColoredBox(color: _splashBgTop),
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 400),
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(
+                  color: _splashAccent.withValues(alpha: 0.22),
+                ),
+                color: const Color(0xFF101018),
+                boxShadow: [
+                  BoxShadow(
+                    color: _splashAccent.withValues(alpha: 0.12),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [
+                          _splashAccent.withValues(alpha: 0.35),
+                          _splashAccent.withValues(alpha: 0.12),
+                        ],
+                      ),
+                    ),
+                    child: const Icon(Ionicons.cloud_offline_outline, size: 34, color: Colors.white),
+                  ),
+                  const SizedBox(height: 22),
+                  Text(
+                    'No internet',
+                    textAlign: TextAlign.center,
+                    style: orbitron(20, weight: FontWeight.w800).copyWith(color: Colors.white),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Turn on mobile data or Wi‑Fi, then try again.',
+                    textAlign: TextAlign.center,
+                    style: rajdhani(14).copyWith(color: Colors.white70, height: 1.45),
+                  ),
+                  const SizedBox(height: 26),
+                  FilledButton(
+                    onPressed: onRetry,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _splashAccent,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    child: Text('Retry', style: rajdhani(15, weight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ],

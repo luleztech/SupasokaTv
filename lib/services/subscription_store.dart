@@ -1,5 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:supasoka/config/api_config.dart';
+import 'package:supasoka/services/user_identity.dart';
 
 /// Local premium expiry (set after successful Malipo flow).
 class SubscriptionStore {
@@ -47,5 +51,45 @@ class SubscriptionStore {
     await p.setInt(_kUntilMs, end.millisecondsSinceEpoch);
     await p.setString(_kPlanId, planId);
     premiumUntilNotifier.value = end;
+  }
+
+  /// Sync premium status from backend (for admin-granted subscriptions).
+  static Future<void> syncPremiumFromBackend() async {
+    final base = apiConfigUrl.trim();
+    if (base.isEmpty) return;
+
+    final userId = await UserIdentity.getOrCreatePublicId();
+    final origin = base.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$origin/api/v1/public/user-premium/$userId');
+
+    try {
+      final res = await http.get(uri, headers: const {
+        'Cache-Control': 'no-cache',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 10));
+
+      if (res.statusCode == 200) {
+        final j = jsonDecode(res.body) as Map<String, dynamic>;
+        if (j['ok'] == true) {
+          final premiumUntilMs = j['premiumUntilMs'] as int?;
+          if (premiumUntilMs != null) {
+            final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+            final p = await SharedPreferences.getInstance();
+            await p.setInt(_kUntilMs, premiumUntilMs);
+            premiumUntilNotifier.value = end;
+          } else {
+            // No premium
+            final p = await SharedPreferences.getInstance();
+            await p.remove(_kUntilMs);
+            await p.remove(_kPlanId);
+            premiumUntilNotifier.value = null;
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');
+      }
+    }
   }
 }

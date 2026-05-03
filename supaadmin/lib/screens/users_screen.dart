@@ -53,7 +53,8 @@ class _UsersScreenState extends State<UsersScreen> {
     if (s.isEmpty) return true;
     return u.id.toLowerCase().contains(s) ||
         u.username.toLowerCase().contains(s) ||
-        u.note.toLowerCase().contains(s);
+        u.note.toLowerCase().contains(s) ||
+        (u.userNumber ?? '').toLowerCase().contains(s);
   }
 
   List<UserDto> _filtered(List<UserDto> all) =>
@@ -117,7 +118,7 @@ class _UsersScreenState extends State<UsersScreen> {
                   icon: Icons.group_rounded,
                 ),
                 const SizedBox(height: 14),
-                TextField(
+                TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                   controller: _searchCtrl,
                   focusNode: _searchFocus,
                   onChanged: (v) => setState(() => _searchQuery = v),
@@ -292,7 +293,7 @@ class _UserCard extends StatelessWidget {
   String _expiryLine(UserDto u) {
     if (u.premiumUntilMs == null) return 'Premium: —';
     final d = DateTime.fromMillisecondsSinceEpoch(u.premiumUntilMs!);
-    final two = (int n) => n.toString().padLeft(2, '0');
+    String two(int n) => n.toString().padLeft(2, '0');
     return 'Mwisho: ${two(d.day)}.${two(d.month)}.${d.year} ${two(d.hour)}:${two(d.minute)}';
   }
 
@@ -343,6 +344,13 @@ class _UserCard extends StatelessWidget {
                       user.id,
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                     ),
+                    if (user.userNumber != null && user.userNumber!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Namba: ${user.userNumber}',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 11),
+                      ),
+                    ],
                     if (joinedLabel != null) ...[
                       const SizedBox(height: 4),
                       Text(

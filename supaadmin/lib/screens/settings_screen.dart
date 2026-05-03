@@ -320,7 +320,7 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
             ],
           ),
           const SizedBox(height: 18),
-          TextField(
+          TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
             controller: _phone,
             keyboardType: TextInputType.phone,
             decoration: const InputDecoration(

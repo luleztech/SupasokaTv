@@ -72,7 +72,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                TextField(
+                TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                   controller: _passwordController,
                   obscureText: _obscurePassword,
                   decoration: InputDecoration(

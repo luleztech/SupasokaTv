@@ -1,4 +1,4 @@
-/// Build-time defaults for SupaAdmin. Runtime overrides live in SharedPreferences (Settings).
+// Build-time defaults for SupaAdmin. Runtime overrides live in SharedPreferences (Settings).
 
 const String kDefaultAdminApiBaseUrl = 'https://supasokatv-production.up.railway.app';
 

@@ -45,21 +45,20 @@ class CatPill extends StatelessWidget {
         child: Ink(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(99),
-            gradient: active ? LinearGradient(colors: [t.accent, t.accent2]) : null,
-            color: active ? null : t.card,
-            border: active ? null : Border.all(color: t.border),
+            color: active ? t.accent : t.card,
+            border: Border.all(color: active ? t.accent : t.border),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(pillIcon(icon), size: 13, color: active ? Colors.white : t.text2),
+              Icon(pillIcon(icon), size: 13, color: active ? Colors.black : const Color(0xFFa1a1aa)),
               const SizedBox(width: 6),
               Text(
                 label,
                 style: rajdhani(13, weight: FontWeight.w600).copyWith(
                   letterSpacing: 0.5,
-                  color: active ? Colors.white : t.text2,
+                  color: active ? Colors.black : const Color(0xFFa1a1aa),
                 ),
               ),
             ],

@@ -200,7 +200,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                   children: [
                     _SectionLabel(icon: Icons.tag_rounded, title: 'Identity'),
                     const SizedBox(height: 10),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _idCtrl,
                       enabled: isNew,
                       keyboardType: TextInputType.number,
@@ -211,7 +211,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _nameCtrl,
                       textCapitalization: TextCapitalization.words,
                       decoration: const InputDecoration(
@@ -222,7 +222,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     const SizedBox(height: 20),
                     _SectionLabel(icon: Icons.link_rounded, title: 'Stream URL'),
                     const SizedBox(height: 10),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _urlCtrl,
                       maxLines: 2,
                       decoration: const InputDecoration(
@@ -254,7 +254,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     ),
                     if (_drm == 'clearkey') ...[
                       const SizedBox(height: 14),
-                      TextField(
+                      TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                         controller: _clearKeyCtrl,
                         minLines: 2,
                         maxLines: 4,
@@ -311,7 +311,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     const SizedBox(height: 20),
                     _SectionLabel(icon: Icons.image_rounded, title: 'Thumbnail'),
                     const SizedBox(height: 10),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _imgCtrl,
                       maxLines: 3,
                       decoration: const InputDecoration(
@@ -330,7 +330,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                           child: Image.network(
                             _imgCtrl.text.trim(),
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
+                            errorBuilder: (context, error, stackTrace) => Container(
                               color: cs.surfaceContainerHighest,
                               alignment: Alignment.center,
                               child: Icon(Icons.broken_image_outlined, color: cs.onSurfaceVariant),
@@ -342,7 +342,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     const SizedBox(height: 20),
                     _SectionLabel(icon: Icons.visibility_rounded, title: 'Stats label'),
                     const SizedBox(height: 10),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _viewersCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Viewers (display)',

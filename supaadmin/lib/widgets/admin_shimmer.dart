@@ -145,8 +145,8 @@ class AdminShimmerLoadingPage extends StatelessWidget {
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   itemCount: 5,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (_, __) => Container(
+                  separatorBuilder: (context, _) => const SizedBox(height: 12),
+                  itemBuilder: (context, _) => Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(16),

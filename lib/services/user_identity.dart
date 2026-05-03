@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 
 const _prefsPublicId = 'supasoka_public_user_id';
+const _prefsPublicPhone = 'supasoka_public_user_phone';
 
 /// Suffix charset aligned with backend `^User-[A-Za-z2-9]{5}$` (no 0/O/1/l ambiguity).
 const _suffixChars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -38,8 +39,20 @@ class UserIdentity {
     return RegExp(r'^[A-Za-z2-9]{5}$').hasMatch(suffix);
   }
 
+  static Future<void> savePhoneNumber(String phone) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_prefsPublicPhone, phone.trim());
+  }
+
+  static Future<String?> getSavedPhoneNumber() async {
+    final p = await SharedPreferences.getInstance();
+    final phone = p.getString(_prefsPublicPhone)?.trim();
+    if (phone == null || phone.isEmpty) return null;
+    return phone;
+  }
+
   /// Upserts this device on the server so admins see new installs under Users.
-  static Future<void> registerWithBackend() async {
+  static Future<void> registerWithBackend({String? phone}) async {
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return;
 
@@ -48,6 +61,14 @@ class UserIdentity {
     final uri = Uri.parse('$origin/api/v1/public/register-user').replace(
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
+    final body = <String, dynamic>{
+      'publicId': publicId,
+      'profileUsername': publicId,
+    };
+    if (phone != null && phone.trim().isNotEmpty) {
+      body['phone'] = phone.trim();
+    }
+
     try {
       final res = await http
           .post(
@@ -57,23 +78,21 @@ class UserIdentity {
               'Cache-Control': 'no-cache',
               'Accept': 'application/json',
             },
-            body: jsonEncode({
-              'publicId': publicId,
-              'profileUsername': publicId,
-            }),
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 20));
       if (res.statusCode >= 200 && res.statusCode < 300) {
+        if (phone != null && phone.trim().isNotEmpty) {
+          await savePhoneNumber(phone);
+        }
         return;
       }
       if (kDebugMode) {
-        debugPrint(
-          'UserIdentity.registerWithBackend failed: HTTP ${res.statusCode} ${res.body.length > 120 ? '${res.body.substring(0, 120)}…' : res.body}',
-        );
+        debugPrint('UserIdentity.registerWithBackend: HTTP ${res.statusCode}');
       }
-    } catch (e, st) {
+    } catch (e, _) {
       if (kDebugMode) {
-        debugPrint('UserIdentity.registerWithBackend error: $e\n$st');
+        debugPrint('UserIdentity.registerWithBackend failed (${e.runtimeType})');
       }
     }
   }

@@ -214,7 +214,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                   children: [
                     _MalipoSectionLabel(icon: Icons.price_change_rounded, title: 'Bei na maonyesho'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _amountCtrl,
                       focusNode: _amountFocus,
                       decoration: const InputDecoration(
@@ -225,7 +225,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                       textInputAction: TextInputAction.next,
                     ),
                     const SizedBox(height: 16),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _priceLinesCtrl,
                       minLines: 2,
                       maxLines: 4,
@@ -237,7 +237,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _periodCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Kipindi',
@@ -246,7 +246,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _badgeCtrl,
                       textCapitalization: TextCapitalization.characters,
                       decoration: const InputDecoration(
@@ -263,7 +263,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                     const SizedBox(height: 24),
                     _MalipoSectionLabel(icon: Icons.layers_rounded, title: 'Taarifa za mpango'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _idCtrl,
                       enabled: isNew,
                       decoration: const InputDecoration(
@@ -274,7 +274,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                       textCapitalization: TextCapitalization.none,
                     ),
                     const SizedBox(height: 16),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _labelCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Jina fupi',
@@ -300,7 +300,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                         _ColorDot(color: c1),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: TextField(
+                          child: TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                             controller: _accent1Ctrl,
                             decoration: const InputDecoration(
                               labelText: 'Rangi ya kwanza',
@@ -316,7 +316,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                         _ColorDot(color: c2),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: TextField(
+                          child: TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                             controller: _accent2Ctrl,
                             decoration: const InputDecoration(
                               labelText: 'Rangi ya pili',

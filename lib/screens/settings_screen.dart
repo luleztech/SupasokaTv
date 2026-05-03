@@ -30,8 +30,8 @@ class SettingsScreen extends StatelessWidget {
     Navigator.of(context).push<void>(
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 380),
-        pageBuilder: (_, __, ___) => const _KuhusuSupasokaScreen(),
-        transitionsBuilder: (_, anim, __, child) {
+        pageBuilder: (context, animation, secondaryAnimation) => const _KuhusuSupasokaScreen(),
+        transitionsBuilder: (context, anim, secondaryAnimation, child) {
           final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
           return FadeTransition(
             opacity: curved,
@@ -158,7 +158,7 @@ class SettingsScreen extends StatelessWidget {
   Widget _themeRow(BuildContext context, ThemeController tc) {
     final t = tc.colors;
     const dots = [
-      _Dot(ThemeKey.dark, [Color(0xFF00e5ff), Color(0xFF7c3aed)]),
+      _Dot(ThemeKey.dark, [Color(0xFF1a0508), Color(0xFFe8002d)]),
       _Dot(ThemeKey.neon, [Color(0xFFff00ff), Color(0xFF00ffaa)]),
       _Dot(ThemeKey.gold, [Color(0xFFffd700), Color(0xFFff8c00)]),
       _Dot(ThemeKey.crimson, [Color(0xFFe8002d), Color(0xFFff6b6b)]),

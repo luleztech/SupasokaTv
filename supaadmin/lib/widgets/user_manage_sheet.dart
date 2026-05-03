@@ -203,6 +203,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
               'ID: ${u.id}',
               style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
             ),
+            if (u.userNumber != null && u.userNumber!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Namba: ${u.userNumber}',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
+              ),
+            ],
             if (u.premiumUntilMs != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -250,7 +257,7 @@ class _UserManageSheetState extends State<UserManageSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: TextField(
+                  child: TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                     controller: _customDays,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
@@ -284,7 +291,7 @@ class _UserManageSheetState extends State<UserManageSheet> {
               label: Text('Ondoa premium', style: TextStyle(color: cs.error)),
             ),
             const Divider(height: 32),
-            TextField(
+            TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
               controller: _note,
               maxLines: 2,
               decoration: const InputDecoration(

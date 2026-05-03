@@ -14,7 +14,7 @@ ThemeData adminTheme() {
     surface: const Color(0xFF12151f),
   );
 
-  return ThemeData(
+  final td = ThemeData(
     useMaterial3: true,
     colorScheme: base,
     scaffoldBackgroundColor: const Color(0xFF0a0c10),
@@ -118,6 +118,16 @@ ThemeData adminTheme() {
       headlineSmall: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.4),
       titleLarge: TextStyle(fontWeight: FontWeight.w700),
       titleMedium: TextStyle(fontWeight: FontWeight.w600),
+    ),
+  );
+  return td.copyWith(
+    textTheme: td.textTheme.apply(
+      decoration: TextDecoration.none,
+      decorationColor: Colors.transparent,
+    ),
+    primaryTextTheme: td.primaryTextTheme.apply(
+      decoration: TextDecoration.none,
+      decorationColor: Colors.transparent,
     ),
   );
 }

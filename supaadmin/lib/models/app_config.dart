@@ -337,6 +337,7 @@ class LiveMatchDto {
     required this.title,
     required this.channelId,
     this.liveBadge = true,
+    this.matchTime,
   });
 
   int id;
@@ -346,12 +347,15 @@ class LiveMatchDto {
   int channelId;
   /// Show a LIVE badge on the card in the viewer app.
   bool liveBadge;
+  /// Optional match time (e.g. "tarehe 00/00/2026 muda 00:00").
+  String? matchTime;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'channelId': channelId,
         'liveBadge': liveBadge,
+        if (matchTime != null) 'matchTime': matchTime,
       };
 
   factory LiveMatchDto.fromJson(Map<String, dynamic> j) {
@@ -362,6 +366,7 @@ class LiveMatchDto {
       title: j['title'] as String,
       channelId: c,
       liveBadge: j['liveBadge'] as bool? ?? true,
+      matchTime: j['matchTime'] as String?,
     );
   }
 }
@@ -370,6 +375,7 @@ class UserDto {
   UserDto({
     required this.id,
     required this.username,
+    this.userNumber,
     this.premiumUntilMs,
     this.note = '',
     this.createdAtMs,
@@ -378,6 +384,8 @@ class UserDto {
   /// Stable id (e.g. `User-xxxxx` from the viewer app).
   String id;
   String username;
+  /// User phone / legacy id from payment.
+  String? userNumber;
   /// When premium ends; `null` = free (no subscription end set).
   int? premiumUntilMs;
   String note;
@@ -387,6 +395,7 @@ class UserDto {
   Map<String, dynamic> toJson() => {
         'id': id,
         'username': username,
+        if (userNumber != null) 'userNumber': userNumber,
         'premiumUntilMs': premiumUntilMs,
         'note': note,
         if (createdAtMs != null) 'createdAtMs': createdAtMs,
@@ -395,6 +404,9 @@ class UserDto {
   factory UserDto.fromJson(Map<String, dynamic> j) => UserDto(
         id: '${j['id'] ?? ''}',
         username: '${j['username'] ?? j['profile_username'] ?? ''}',
+        userNumber: '${j['userNumber'] ?? j['legacyUserId'] ?? j['legacy_user_id'] ?? ''}'.trim().isEmpty
+            ? null
+            : '${j['userNumber'] ?? j['legacyUserId'] ?? j['legacy_user_id'] ?? ''}',
         premiumUntilMs: parseIntNullable(j['premiumUntilMs']),
         note: j['note'] as String? ?? '',
         createdAtMs: parseIntNullable(j['createdAtMs']),
@@ -403,6 +415,8 @@ class UserDto {
   UserDto copyWith({
     String? id,
     String? username,
+    String? userNumber,
+    bool clearUserNumber = false,
     int? premiumUntilMs,
     bool clearPremiumUntilMs = false,
     String? note,
@@ -412,6 +426,7 @@ class UserDto {
     return UserDto(
       id: id ?? this.id,
       username: username ?? this.username,
+      userNumber: clearUserNumber ? null : (userNumber ?? this.userNumber),
       premiumUntilMs: clearPremiumUntilMs ? null : (premiumUntilMs ?? this.premiumUntilMs),
       note: note ?? this.note,
       createdAtMs: clearCreatedAtMs ? null : (createdAtMs ?? this.createdAtMs),

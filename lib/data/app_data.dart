@@ -1,5 +1,5 @@
-/// Data models for content loaded at runtime from the API (`/api/v1/public/config`).
-/// Channels, images, carousel, matches, and malipo are not bundled in the app.
+// Data models for content loaded at runtime from the API (`/api/v1/public/config`).
+// Channels, images, carousel, matches, and malipo are not bundled in the app.
 
 class Channel {
   const Channel({
@@ -30,6 +30,7 @@ class LiveMatch {
     required this.sportIcon,
     required this.img,
     required this.channelId,
+    this.matchTime,
   });
 
   final int id;
@@ -38,6 +39,7 @@ class LiveMatch {
   final String sportIcon;
   final String img;
   final int channelId;
+  final String? matchTime;
 }
 
 class CategoryItem {

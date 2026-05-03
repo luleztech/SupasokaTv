@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/player/php_gateway_js.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/native_android_player.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -65,6 +66,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _loading = false;
         _error = 'Hakuna URL ya mfululizo kwa kituo hiki.';
       });
+      return;
+    }
+
+    if (NativeAndroidPlayer.supported) {
+      await NativeAndroidPlayer.open(url: url);
+      if (mounted) Navigator.of(context).pop();
       return;
     }
 

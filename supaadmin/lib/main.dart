@@ -32,6 +32,16 @@ Future<void> main() async {
         scrollBehavior: const MaterialScrollBehavior().copyWith(
           physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
         ),
+        builder: (context, child) {
+          return DefaultTextStyle.merge(
+            style: const TextStyle(
+              decoration: TextDecoration.none,
+              decorationColor: Colors.transparent,
+              decorationThickness: 0,
+            ),
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
         home: const AppLaunchGate(),
       ),
     ),

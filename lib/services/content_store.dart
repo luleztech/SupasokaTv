@@ -7,25 +7,44 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/data/pay_plan.dart';
+import 'package:supasoka/util/image_url.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v1';
+/// Last applied `configVersion:configSyncedAt` from API — compared to `/public/config-meta` for fast updates.
+const _prefsKeySyncSig = 'supasoka_public_config_sync_sig_v1';
 
 const _configFetchAttempts = 4;
+
+// User-facing only — never include URLs, hostnames, status codes, or exception text.
+const _msgNetwork =
+    "We can't update right now. Check your connection, then tap Retry.";
+const _msgService =
+    'The service is busy. Please try again in a moment.';
+const _msgSaved =
+    "You're seeing saved content. We'll sync when the connection is back.";
+const _msgEmptyList = 'No channels to show yet. Pull down to refresh.';
+
+const _metaPollHeaders = {
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Accept': 'application/json',
+  'User-Agent': 'Supasoka/1.1 (Flutter; viewer meta)',
+};
 
 /// Retries transient failures (EaMax-style) before surfacing an error.
 Future<http.Response> _getPublicConfig(Uri uri) async {
   Object? lastError;
+  const headers = {
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Accept': 'application/json',
+    'User-Agent': 'Supasoka/1.1 (Flutter; viewer)',
+    'Accept-Encoding': 'gzip',
+  };
   for (var attempt = 0; attempt < _configFetchAttempts; attempt++) {
     try {
       return await http
-          .get(
-            uri,
-            headers: const {
-              'Cache-Control': 'no-cache',
-              'Pragma': 'no-cache',
-              'Accept': 'application/json',
-            },
-          )
+          .get(uri, headers: headers)
           .timeout(const Duration(seconds: 25));
     } catch (e) {
       lastError = e;
@@ -35,6 +54,29 @@ Future<http.Response> _getPublicConfig(Uri uri) async {
     }
   }
   throw lastError!;
+}
+
+/// Maps any thrown client error to a single safe sentence (no URIs or stack traces).
+String _friendlyNetworkError(Object e) {
+  if (kDebugMode) {
+    debugPrint('Supasoka config fetch (internal): $e');
+  }
+  final s = e.toString().toLowerCase();
+  if (s.contains('failed to fetch') ||
+      s.contains('clientexception') ||
+      s.contains('socketexception') ||
+      s.contains('failed host lookup') ||
+      s.contains('connection refused') ||
+      s.contains('network is unreachable')) {
+    return _msgNetwork;
+  }
+  if (s.contains('handshakeexception') || s.contains('certificate_verify_failed')) {
+    return _msgNetwork;
+  }
+  if (s.contains('timeoutexception')) {
+    return _msgService;
+  }
+  return _msgNetwork;
 }
 
 int _asInt(dynamic v) {
@@ -105,20 +147,18 @@ class ContentStore extends ChangeNotifier {
       Future<void> applyCached() async {
         final raw = prefs.getString(_prefsKey);
         if (raw == null || raw.isEmpty) return;
-        final j = jsonDecode(raw) as Map<String, dynamic>;
-        _applyConfig(j);
+        try {
+          final j = jsonDecode(raw) as Map<String, dynamic>;
+          _applyConfig(j);
+          await _persistSyncSignature(j);
+        } catch (_) {
+          await prefs.remove(_prefsKey);
+        }
       }
 
       if (base.isEmpty) {
         await applyCached();
-        if (_channels.isEmpty) {
-          _loadError =
-              'API base URL is not set. Set kRailwayApiBaseUrl in lib/config/deployment.dart to your Railway '
-              'API public HTTPS URL (same host if root directory is backend/, or another hostname if you use two services). '
-              'Or: flutter build apk --dart-define=API_BASE_URL=https://…';
-        } else {
-          _loadError = 'API base URL not set; showing last downloaded config.';
-        }
+        _loadError = _channels.isEmpty ? _msgNetwork : _msgSaved;
         _ready = true;
         notifyListeners();
         return;
@@ -137,9 +177,10 @@ class ContentStore extends ChangeNotifier {
 
         if (res.statusCode == 200) {
           if (body.startsWith('<!') || body.startsWith('<html')) {
-            _loadError =
-                'Got HTML instead of JSON — this base URL is probably a static web server, not the Node API. '
-                'Use a separate Railway service for backend/ and set kRailwayApiBaseUrl to that service’s public URL.';
+            if (kDebugMode) {
+              debugPrint('Supasoka: config endpoint returned HTML (wrong host or proxy).');
+            }
+            _loadError = _msgService;
           } else {
             Map<String, dynamic>? j;
             try {
@@ -150,30 +191,33 @@ class ContentStore extends ChangeNotifier {
             if (j != null && j['ok'] == true) {
               _applyConfig(j);
               await prefs.setString(_prefsKey, res.body);
+              await _persistSyncSignature(j);
               _loadError = null;
               _ready = true;
               notifyListeners();
               return;
             }
-            _loadError = 'Invalid API response (expected JSON with ok: true). Check API base URL.';
+            if (kDebugMode) {
+              debugPrint('Supasoka: config JSON missing ok: true.');
+            }
+            _loadError = _msgService;
           }
-        } else if (res.statusCode == 404) {
-          _loadError =
-              'API not found (404). The backend URL may be wrong or the Railway service is missing. '
-              'Deploy backend/ and set kRailwayApiBaseUrl to that service’s public HTTPS URL.';
         } else {
-          _loadError = 'Server error (${res.statusCode}).';
+          if (kDebugMode) {
+            debugPrint('Supasoka: config HTTP ${res.statusCode}');
+          }
+          _loadError = _msgService;
         }
       } catch (e) {
-        _loadError = 'Could not load config: $e';
+        _loadError = _friendlyNetworkError(e);
       }
 
       await applyCached();
       if (_channels.isNotEmpty && _loadError != null) {
-        _loadError = '${_loadError!} Showing cached data.';
+        _loadError = _msgSaved;
       }
       if (_channels.isEmpty && _loadError == null) {
-        _loadError = 'No configuration available.';
+        _loadError = _msgEmptyList;
       }
       _ready = true;
       notifyListeners();
@@ -187,19 +231,75 @@ class ContentStore extends ChangeNotifier {
 
   Future<void> refresh() => bootstrap(silent: true);
 
+  /// Lightweight poll (called ~every 8s from [MainShell]). Full config fetch only when admin synced new data.
+  Future<void> pollConfigMeta() async {
+    if (!_ready || _refreshing) return;
+    final base = apiConfigUrl.trim();
+    if (base.isEmpty) return;
+
+    final origin = base.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$origin/api/v1/public/config-meta').replace(
+      queryParameters: {
+        '_': DateTime.now().millisecondsSinceEpoch.toString(),
+      },
+    );
+
+    try {
+      final res = await http
+          .get(uri, headers: _metaPollHeaders)
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return;
+
+      Map<String, dynamic>? j;
+      try {
+        j = jsonDecode(res.body) as Map<String, dynamic>?;
+      } catch (_) {
+        j = null;
+      }
+      if (j == null || j['ok'] != true) return;
+
+      final remoteSig = _syncSignatureFromJson(j);
+      final prefs = await SharedPreferences.getInstance();
+      final localSig = prefs.getString(_prefsKeySyncSig);
+      if (localSig != null && localSig == remoteSig) return;
+
+      await refresh();
+    } catch (_) {
+      // Offline or meta route missing on old API — ignore; full refresh happens on resume / pull-to-refresh.
+    }
+  }
+
+  String _syncSignatureFromJson(Map<String, dynamic> j) {
+    final cv = _asInt(j['configVersion']);
+    final cs = j['configSyncedAt'];
+    var syncedMs = 0;
+    if (cs is num) {
+      syncedMs = cs.toInt();
+    } else if (cs != null) {
+      syncedMs = int.tryParse(cs.toString()) ?? 0;
+    }
+    return '$cv:$syncedMs';
+  }
+
+  Future<void> _persistSyncSignature(Map<String, dynamic> j) async {
+    final sig = _syncSignatureFromJson(j);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeySyncSig, sig);
+  }
+
   void _applyConfig(Map<String, dynamic> j) {
     final chRaw = j['channels'] as List<dynamic>? ?? [];
     _channels = <Channel>[];
     for (final e in chRaw) {
       final m = Map<String, dynamic>.from(e as Map);
       if (m['enabled'] == false) continue;
-      final stream = (m['streamUrl'] ?? m['url'] ?? '') as String? ?? '';
+      final stream = stripUnsafeUrlWhitespace((m['streamUrl'] ?? m['url'] ?? '') as String? ?? '');
       _channels.add(
         Channel(
           id: _asInt(m['id']),
           name: m['name'] as String? ?? '',
           cat: m['cat'] as String? ?? 'movies',
-          img: m['img'] as String? ?? '',
+          img: sanitizeImageUrl(m['img'] as String? ?? ''),
           free: m['free'] as bool? ?? true,
           viewers: m['viewers'] as String? ?? '',
           streamUrl: stream,
@@ -215,7 +315,7 @@ class ContentStore extends ChangeNotifier {
         badgeIcon: m['badgeIcon'] as String? ?? '',
         title: m['title'] as String? ?? '',
         channelId: _asInt(m['channelId']),
-        img: m['img'] as String? ?? '',
+        img: sanitizeImageUrl(m['img'] as String? ?? ''),
       );
     }).toList();
 
@@ -227,8 +327,9 @@ class ContentStore extends ChangeNotifier {
         title: m['title'] as String? ?? '',
         sport: m['sport'] as String? ?? '',
         sportIcon: m['sportIcon'] as String? ?? '',
-        img: m['img'] as String? ?? '',
+        img: sanitizeImageUrl(m['img'] as String? ?? ''),
         channelId: _asInt(m['channelId']),
+        matchTime: m['matchTime'] as String?,
       );
     }).toList();
 

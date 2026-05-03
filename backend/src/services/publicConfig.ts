@@ -32,6 +32,7 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     pool.query(
       `SELECT id, title, sport, sport_icon AS "sportIcon", img,
               channel_id AS "channelId", live_badge AS "liveBadge",
+              match_time AS "matchTime",
               sort_order AS "sortOrder"
        FROM live_matches ORDER BY sort_order, id`,
     ),
@@ -71,5 +72,29 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     malipoPlans: malRes.rows,
     liveMatches: liveRes.rows,
     premiumPackages: pkgRes.rows,
+  };
+}
+
+/** Tiny payload for viewer poll — compares `configSyncedAt` without loading channels/media rows. */
+export async function fetchPublicConfigMeta(): Promise<{
+  configVersion: number;
+  configSyncedAt: number | null;
+}> {
+  const pool = getPool();
+  if (!pool) {
+    throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
+  }
+  const setRes = await pool.query(`SELECT key, value FROM app_settings WHERE key IN ('configVersion', 'configSyncedAt')`);
+  const settings: Record<string, string> = {};
+  for (const row of setRes.rows as { key: string; value: string }[]) {
+    settings[row.key] = row.value;
+  }
+  const cv = Number(settings.configVersion);
+  const syncedRaw = settings.configSyncedAt;
+  const syncedAt =
+    syncedRaw != null && syncedRaw !== '' ? Number(syncedRaw) : null;
+  return {
+    configVersion: Number.isFinite(cv) && cv > 0 ? cv : 1,
+    configSyncedAt: syncedAt != null && Number.isFinite(syncedAt) ? syncedAt : null,
   };
 }

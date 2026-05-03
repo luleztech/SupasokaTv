@@ -192,7 +192,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                   children: [
                     _CarouselSectionLabel(icon: Icons.new_releases_rounded, title: 'On-air badge'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _badgeCtrl,
                       textCapitalization: TextCapitalization.characters,
                       decoration: const InputDecoration(
@@ -202,7 +202,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _badgeIconCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Badge icon key',
@@ -213,7 +213,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                     const SizedBox(height: 24),
                     _CarouselSectionLabel(icon: Icons.title_rounded, title: 'Headline'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _titleCtrl,
                       minLines: 2,
                       maxLines: 4,
@@ -227,7 +227,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                     const SizedBox(height: 24),
                     _CarouselSectionLabel(icon: Icons.touch_app_rounded, title: 'Watch action'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _channelIdCtrl,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
@@ -239,7 +239,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                     const SizedBox(height: 24),
                     _CarouselSectionLabel(icon: Icons.image_rounded, title: 'Hero artwork'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _imgCtrl,
                       minLines: 2,
                       maxLines: 3,
@@ -259,7 +259,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                           child: Image.network(
                             _imgCtrl.text.trim(),
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
+                            errorBuilder: (context, error, stackTrace) => Container(
                               color: cs.surfaceContainerHighest,
                               alignment: Alignment.center,
                               child: Icon(Icons.broken_image_outlined, color: cs.onSurfaceVariant),

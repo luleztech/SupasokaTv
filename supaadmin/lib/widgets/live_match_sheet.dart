@@ -46,6 +46,7 @@ class _LiveMatchBody extends StatefulWidget {
 class _LiveMatchBodyState extends State<_LiveMatchBody> {
   late final TextEditingController _idCtrl;
   late final TextEditingController _titleCtrl;
+  late final TextEditingController _timeCtrl;
   late int _channelId;
   late bool _liveBadge;
 
@@ -56,6 +57,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
     final channels = widget.store.config.channels;
     _idCtrl = TextEditingController(text: e == null ? '${widget.store.nextLiveId()}' : '${e.id}');
     _titleCtrl = TextEditingController(text: e?.title ?? '');
+    _timeCtrl = TextEditingController(text: e?.matchTime ?? '');
     _channelId = _coerceChannelId(
       channels,
       e?.channelId ?? (channels.isEmpty ? 0 : channels.first.id),
@@ -67,6 +69,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
   void dispose() {
     _idCtrl.dispose();
     _titleCtrl.dispose();
+    _timeCtrl.dispose();
     super.dispose();
   }
 
@@ -90,6 +93,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
       return;
     }
     final id = int.tryParse(_idCtrl.text.trim()) ?? widget.store.nextLiveId();
+    final matchTime = _timeCtrl.text.trim().isEmpty ? null : _timeCtrl.text.trim();
     HapticFeedback.mediumImpact();
     await widget.store.upsertLive(
       LiveMatchDto(
@@ -97,6 +101,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
         title: title,
         channelId: _channelId,
         liveBadge: _liveBadge,
+        matchTime: matchTime,
       ),
     );
     if (mounted) Navigator.of(context).pop();
@@ -202,7 +207,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
                   children: [
                     _LiveSectionLabel(icon: Icons.tag_rounded, title: 'Kitambulisho'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _idCtrl,
                       enabled: isNew,
                       keyboardType: TextInputType.number,
@@ -215,7 +220,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
                     const SizedBox(height: 24),
                     _LiveSectionLabel(icon: Icons.sports_rounded, title: 'Jina la mechi'),
                     const SizedBox(height: 12),
-                    TextField(
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _titleCtrl,
                       minLines: 1,
                       maxLines: 3,
@@ -224,6 +229,20 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
                         labelText: 'K.m. Timu A vs Timu B',
                         hintText: 'Andika jina la mechi pekee',
                         prefixIcon: Icon(Icons.title_rounded),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    _LiveSectionLabel(icon: Icons.access_time_rounded, title: 'Muda wa mechi (hiari)'),
+                    const SizedBox(height: 12),
+                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                      controller: _timeCtrl,
+                      minLines: 1,
+                      maxLines: 2,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'K.m. tarehe 15/06/2026 muda 14:30',
+                        hintText: 'Weka muda wa mechi au acha wazi',
+                        prefixIcon: Icon(Icons.schedule_rounded),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -257,7 +276,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
                       )
                     else ...[
                       DropdownButtonFormField<int>(
-                        value: selected?.id,
+                        initialValue: selected?.id,
                         decoration: const InputDecoration(
                           labelText: 'Chagua chaneli',
                           prefixIcon: Icon(Icons.play_circle_outline_rounded),
@@ -347,7 +366,7 @@ class _ChannelPreviewCard extends StatelessWidget {
               child: Image.network(
                 channel.img,
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => ColoredBox(
+                errorBuilder: (context, error, stackTrace) => ColoredBox(
                   color: cs.surfaceContainerHighest,
                   child: Icon(Icons.image_not_supported_outlined, color: cs.onSurfaceVariant),
                 ),

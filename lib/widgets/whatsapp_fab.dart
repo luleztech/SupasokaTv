@@ -18,6 +18,8 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
   late final AnimationController _entry = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
   late final Animation<double> _floatY = Tween<double>(begin: 0, end: -9).animate(CurvedAnimation(parent: _bob, curve: Curves.easeInOut));
 
+  static const double _fabSize = 56;
+
   @override
   void initState() {
     super.initState();
@@ -34,9 +36,23 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
   }
 
   Future<void> _open(String digits) async {
-    final u = Uri.parse('https://wa.me/$digits');
-    if (await canLaunchUrl(u)) {
-      await launchUrl(u, mode: LaunchMode.externalApplication);
+    final whatsappUri = Uri.parse('whatsapp://send?phone=$digits');
+    final webUri = Uri.parse('https://wa.me/$digits');
+
+    try {
+      final ok = await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+
+    try {
+      final ok = await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to open WhatsApp. Please ensure it is installed.')),
+      );
     }
   }
 
@@ -49,35 +65,42 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
     final digits = store.customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
     final bottom = MediaQuery.paddingOf(context).bottom + kTabBarBaseHeight + 18;
 
+    // Fixed hit target: ScaleTransition can shrink the child to zero hit area during the entry
+    // animation — wrap with an opaque GestureDetector so taps always register.
     return Positioned(
       right: 18,
       bottom: bottom,
-      child: ScaleTransition(
-        scale: CurvedAnimation(parent: _entry, curve: Curves.elasticOut),
-        child: AnimatedBuilder(
-          animation: _floatY,
-          builder: (context, child) => Transform.translate(
-            offset: Offset(0, _floatY.value),
-            child: child,
-          ),
-          child: Material(
-            elevation: 16,
-            shadowColor: const Color(0xFF25d366),
-            shape: const CircleBorder(),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: () => _open(digits),
-              child: Ink(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF2bde73), Color(0xFF25d366), Color(0xFF128c7e)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _open(digits),
+        child: SizedBox(
+          width: _fabSize,
+          height: _fabSize,
+          child: ScaleTransition(
+            scale: CurvedAnimation(parent: _entry, curve: Curves.elasticOut),
+            child: AnimatedBuilder(
+              animation: _floatY,
+              builder: (context, child) => Transform.translate(
+                offset: Offset(0, _floatY.value),
+                child: child,
+              ),
+              child: Material(
+                elevation: 16,
+                shadowColor: const Color(0xFF25d366),
+                shape: const CircleBorder(),
+                clipBehavior: Clip.antiAlias,
+                child: Ink(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF2bde73), Color(0xFF25d366), Color(0xFF128c7e)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
                   ),
+                  width: _fabSize,
+                  height: _fabSize,
+                  child: const Icon(Ionicons.logo_whatsapp, color: Colors.white, size: 30),
                 ),
-                width: 56,
-                height: 56,
-                child: Icon(Ionicons.logo_whatsapp, color: Colors.white, size: 30),
               ),
             ),
           ),

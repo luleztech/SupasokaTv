@@ -55,7 +55,7 @@ class LiveMatchesScreen extends StatelessWidget {
                     ? ListView.separated(
                         physics: const BouncingScrollPhysics(),
                         itemCount: list.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (context, _) => const SizedBox(height: 10),
                         itemBuilder: (context, i) {
                           final m = list[i];
                           return StaggerEntrance(
@@ -204,7 +204,7 @@ class _LiveCard extends StatelessWidget {
                           ? Image.network(
                               ch.img,
                               fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => ColoredBox(
+                              errorBuilder: (context, error, stackTrace) => ColoredBox(
                                 color: cs.surfaceContainerHighest,
                                 child: Icon(Icons.live_tv_rounded, color: cs.onSurfaceVariant),
                               ),

@@ -5,6 +5,7 @@ import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/player_screen.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
@@ -72,7 +73,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
   void _openChannel(BuildContext context, int channelId) {
     final store = context.read<ContentStore>();
     final ch = store.channelById(channelId);
-    if (ch != null && !ch.free) {
+    final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    if (ch != null && !ch.free && !isPremium) {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PaymentScreen()));
     } else {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlayerScreen(channelId: channelId)));
@@ -87,10 +89,20 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     final keys = _filterKeys(channels);
     final fk = keys.contains(_filterKey) ? _filterKey : 'all';
     final w = MediaQuery.sizeOf(context).width;
-    final cellW = (w - 32 - 14) / 2;
+    const hPad = 16.0;
+    const gap = 14.0;
+    // One column on typical phones = much wider tiles; two columns on tablets / wide phones.
+    final crossAxis = w >= 560 ? 2 : 1;
+    final cellW = crossAxis == 1 ? (w - hPad * 2) : (w - hPad * 2 - gap) / 2;
     final list = _filtered(channels, fk);
+    final tileH = channelGridCellHeight(cellW);
 
-    return ColoredBox(
+    return ValueListenableBuilder<DateTime?>(
+      valueListenable: SubscriptionStore.premiumUntilNotifier,
+      builder: (context, _, __) {
+        final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+
+        return ColoredBox(
       color: t.bg1,
       child: RefreshIndicator(
         color: t.accent,
@@ -134,6 +146,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
+                            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                             focusNode: _searchFocus,
                             onChanged: (v) => setState(() => _query = v),
                             style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text),
@@ -165,7 +178,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   scrollDirection: Axis.horizontal,
                   itemCount: keys.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  separatorBuilder: (context, _) => const SizedBox(width: 8),
                   itemBuilder: (context, i) {
                     final opt = keys[i];
                     final active = fk == opt;
@@ -177,15 +190,16 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                         child: Ink(
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(99),
-                            gradient: active ? LinearGradient(colors: [t.accent, t.accent2]) : null,
-                            color: active ? null : t.card,
-                            border: active ? null : Border.all(color: t.border),
+                            color: active ? t.accent : t.card,
+                            border: Border.all(color: active ? t.accent : t.border),
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
                           child: Center(
                             child: Text(
                               _filterLabel(opt),
-                              style: rajdhani(13, weight: FontWeight.w600).copyWith(color: active ? Colors.black : t.text2),
+                              style: rajdhani(13, weight: FontWeight.w600).copyWith(
+                                color: active ? Colors.black : const Color(0xFFa1a1aa),
+                              ),
                             ),
                           ),
                         ),
@@ -226,18 +240,23 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
               )
             else
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 90),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
                 sliver: SliverGrid(
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 14,
-                    crossAxisSpacing: 14,
-                    childAspectRatio: cellW / kChannelCardGridHeight,
+                    crossAxisCount: crossAxis,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 10,
+                    childAspectRatio: cellW / tileH,
                   ),
                   delegate: SliverChildBuilderDelegate(
                     (context, i) {
                       final ch = list[i];
-                      return ChannelCard(channel: ch, onPress: () => _openChannel(context, ch.id));
+                      return ChannelCard(
+                        channel: ch,
+                        locked: !ch.free && !isPremium,
+                        compactGrid: true,
+                        onPress: () => _openChannel(context, ch.id),
+                      );
                     },
                     childCount: list.length,
                   ),
@@ -246,6 +265,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
           ],
         ),
       ),
+    );
+      },
     );
   }
 }

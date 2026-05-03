@@ -48,7 +48,7 @@ class PricingScreen extends StatelessWidget {
                     ? ListView.separated(
                         physics: const BouncingScrollPhysics(),
                         itemCount: list.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (context, _) => const SizedBox(height: 10),
                         itemBuilder: (context, i) {
                           final m = list[i];
                           return _MalipoPlanCard(

@@ -156,7 +156,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               children: [
                 _MenuTile(
                   t: t,
-                  g: const [Color(0xFF00e5ff), Color(0xFF7c3aed)],
+                  g: [t.accent, t.accent2],
                   icon: Ionicons.settings_outline,
                   title: 'Settings',
                   subtitle: 'Themes, preferences',
@@ -165,7 +165,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 10),
                 _MenuTile(
                   t: t,
-                  g: const [Color(0xFF00e676), Color(0xFF00bfa5)],
+                  g: [t.free, const Color(0xFF34d399)],
                   icon: Ionicons.share_social_outline,
                   title: 'Share App',
                   subtitle: 'Invite your friends',
@@ -174,7 +174,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 10),
                 _MenuTile(
                   t: t,
-                  g: const [Color(0xFFff6b6b), Color(0xFFee0979)],
+                  g: [t.red, t.accent2],
                   icon: Ionicons.call_outline,
                   title: 'Support',
                   subtitle: 'Help & contact',
@@ -250,13 +250,8 @@ class _SubscriptionCard extends StatelessWidget {
                     ),
                   ),
                 ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
           if (isPremium) ...[
             Divider(height: 1, thickness: 1, color: t.border),
@@ -281,8 +276,8 @@ class _SubscriptionCard extends StatelessWidget {
                   const SizedBox(height: 10),
                   Text(
                     _countdownSwahili(remaining),
-                    style: rajdhani(12, weight: FontWeight.w500).copyWith(
-                      color: t.text2,
+                    style: rajdhani(16, weight: FontWeight.w600).copyWith(
+                      color: t.text,
                       height: 1.35,
                     ),
                   ),

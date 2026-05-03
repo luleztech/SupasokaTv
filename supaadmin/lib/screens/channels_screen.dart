@@ -158,7 +158,7 @@ class _ChannelCard extends StatelessWidget {
                       child: Image.network(
                         channel.img,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => ColoredBox(
+                        errorBuilder: (context, error, stackTrace) => ColoredBox(
                           color: cs.surfaceContainerHighest,
                           child: Icon(Icons.image_not_supported_outlined, color: cs.onSurfaceVariant),
                         ),

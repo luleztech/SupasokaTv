@@ -101,7 +101,7 @@ class CarouselScreen extends StatelessWidget {
                                     child: Image.network(
                                       s.img,
                                       fit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) => ColoredBox(
+                                      errorBuilder: (context, error, stackTrace) => ColoredBox(
                                         color: Theme.of(context).colorScheme.surfaceContainerHighest,
                                         child: const Icon(Icons.broken_image_outlined),
                                       ),
