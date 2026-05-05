@@ -1,4 +1,5 @@
 import { getPool } from '../db/pool';
+import { jsonSafe } from '../lib/jsonSafe';
 import { HttpError } from '../middleware/errorHandler';
 import { fetchPublicConfig } from './publicConfig';
 import { listUsersForAdmin } from './userDirectory';
@@ -45,9 +46,9 @@ export async function fetchAdminExportConfig(): Promise<Record<string, unknown>>
     };
   });
 
-  return {
+  return jsonSafe({
     ...base,
     notificationLog,
     users,
-  };
+  }) as Record<string, unknown>;
 }

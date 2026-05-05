@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { jsonSafe } from '../../lib/jsonSafe';
 import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
 import { requireAdmin } from '../../middleware/adminAuth';
@@ -11,7 +10,7 @@ export const adminRouter = Router();
 adminRouter.get('/export', requireAdmin, async (_req, res, next) => {
   try {
     const config = await fetchAdminExportConfig();
-    res.json(jsonSafe({ ok: true, ...config }));
+    res.json({ ok: true, ...config });
   } catch (e) {
     next(e);
   }

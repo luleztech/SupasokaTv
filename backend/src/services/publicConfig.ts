@@ -1,4 +1,6 @@
 import { getPool } from '../db/pool';
+import { jsonSafe } from '../lib/jsonSafe';
+import { logger } from '../lib/logger';
 import { HttpError } from '../middleware/errorHandler';
 
 /** Mirrors SupaAdmin `AppConfig` content fields (+ ok wrapper in route). */
@@ -8,7 +10,9 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
 
-  const [chRes, carRes, malRes, liveRes, pkgRes, setRes] = await Promise.all([
+  let chRes, carRes, malRes, liveRes, pkgRes, setRes;
+  try {
+    [chRes, carRes, malRes, liveRes, pkgRes, setRes] = await Promise.all([
     pool.query(
       `SELECT id, name, cat, img, free, viewers,
               stream_url AS "streamUrl",
@@ -42,7 +46,11 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
        FROM premium_packages ORDER BY sort_order, id`,
     ),
     pool.query(`SELECT key, value FROM app_settings`),
-  ]);
+    ]);
+  } catch (err) {
+    logger.error({ err }, 'fetchPublicConfig_query_failed');
+    throw new HttpError(503, 'Could not read configuration from the database', 'CONFIG_DB');
+  }
 
   const settings: Record<string, string> = {};
   for (const row of setRes.rows as { key: string; value: string }[]) {
@@ -63,7 +71,8 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
       ? Number(settings.configSyncedAt)
       : null;
 
-  return {
+  // Strip bigint (e.g. malipo accent BIGINT) so Express res.json never throws.
+  return jsonSafe({
     configVersion: Number.isFinite(cv) && cv > 0 ? cv : 1,
     ...(syncedAt != null && Number.isFinite(syncedAt) ? { configSyncedAt: syncedAt } : {}),
     customerCareWhatsapp: settings.customerCareWhatsapp ?? '212600000000',
@@ -72,7 +81,7 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     malipoPlans: malRes.rows,
     liveMatches: liveRes.rows,
     premiumPackages: pkgRes.rows,
-  };
+  }) as Record<string, unknown>;
 }
 
 /** Tiny payload for viewer poll — compares `configSyncedAt` without loading channels/media rows. */
