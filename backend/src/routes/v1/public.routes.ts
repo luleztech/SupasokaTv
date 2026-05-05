@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { jsonSafe } from '../../lib/jsonSafe';
 import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicConfig';
 import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
 
@@ -10,7 +11,7 @@ publicRouter.get('/config', async (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ ok: true, ...config });
+    res.json(jsonSafe({ ok: true, ...config }));
   } catch (e) {
     next(e);
   }
