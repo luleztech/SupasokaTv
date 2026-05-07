@@ -34,6 +34,8 @@ Future<void> main() async {
   await SubscriptionStore.syncPremiumFromBackend(); // Sync premium on app start
   final isPremiumAtBoot = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
   await PushNotificationService.syncAudienceTopics(isPremium: isPremiumAtBoot);
+  final publicIdAtBoot = await UserIdentity.getOrCreatePublicId();
+  await PushNotificationService.syncDirectUserTopic(publicIdAtBoot);
   final contentStore = ContentStore();
   runApp(SupasokaApp(themeController: themeController, contentStore: contentStore));
 }
@@ -122,7 +124,12 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         context.read<ContentStore>().refresh();
-        unawaited(UserIdentity.registerWithBackend());
+        unawaited(
+          UserIdentity.registerWithBackend().then((_) async {
+            final pid = await UserIdentity.getOrCreatePublicId();
+            return PushNotificationService.syncDirectUserTopic(pid);
+          }),
+        );
         unawaited(
           SubscriptionStore.syncPremiumFromBackend().then((_) {
             final isPremium =

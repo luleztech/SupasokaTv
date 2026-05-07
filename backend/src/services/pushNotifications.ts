@@ -59,6 +59,11 @@ function topicForTarget(target: string): string {
   return 'all_users';
 }
 
+function topicForUser(publicId: string): string {
+  const clean = publicId.trim().replace(/[^a-zA-Z0-9\-_.~%]/g, '_');
+  return `user_${clean}`;
+}
+
 export function checkPushConfiguration(): { ok: true } {
   ensureFirebaseApp();
   return { ok: true };
@@ -86,6 +91,37 @@ export async function sendPushToTopic(input: {
       priority: 'high',
       notification: {
         // Must match viewer app Android channel id for heads-up / status-bar alerts.
+        channelId: 'supasoka_high_importance',
+        defaultSound: true,
+      },
+    },
+  });
+  return { topic, messageId };
+}
+
+export async function sendPushToUser(input: {
+  publicId: string;
+  title: string;
+  body: string;
+}): Promise<{ topic: string; messageId: string }> {
+  ensureFirebaseApp();
+  const title = input.title.trim();
+  const body = input.body.trim();
+  const publicId = input.publicId.trim();
+  if (!title) throw new Error('title is required');
+  if (!publicId) throw new Error('publicId is required');
+  const topic = topicForUser(publicId);
+
+  const messageId = await getMessaging().send({
+    topic,
+    notification: { title, body },
+    data: {
+      source: 'supaadmin',
+      target: `user:${publicId}`,
+    },
+    android: {
+      priority: 'high',
+      notification: {
         channelId: 'supasoka_high_importance',
         defaultSound: true,
       },

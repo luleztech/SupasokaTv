@@ -14,11 +14,12 @@ import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/cat_pill.dart';
 import 'package:supasoka/widgets/channel_card.dart';
+import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 import 'package:supasoka/widgets/whatsapp_fab.dart';
 
 /// Wider horizontal channel cards on Home (was 168).
-const double _kRailTileWidth = 248;
+const double _kRailTileWidth = 212;
 
 double get _kRailHeight => channelRailCellHeight(_kRailTileWidth);
 
@@ -128,7 +129,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final browseSlivers = <Widget>[];
 
-        if (_query.trim().isNotEmpty) {
+        if (!store.ready && channels.isEmpty) {
+          browseSlivers.add(
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 16 / 10,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) => const ShimmerBox(radius: 16),
+                  childCount: 6,
+                ),
+              ),
+            ),
+          );
+        } else if (_query.trim().isNotEmpty) {
           if (filtered.isEmpty) {
             browseSlivers.add(
               SliverFillRemaining(

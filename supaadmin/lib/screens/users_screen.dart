@@ -75,6 +75,33 @@ class _UsersScreenState extends State<UsersScreen> {
     if (ok == true) await store.deleteUser(u.id);
   }
 
+  Future<void> _sendExpiredReminder(BuildContext context, AdminStore store, UserDto u) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tuma ukumbusho?'),
+        content: Text('Tuma ukumbusho wa malipo kwa "${u.username}"?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Tuma')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await store.sendExpiredReminder(u);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ujumbe wa ukumbusho umetumwa kwa ${u.username}.')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imeshindikana kutuma ukumbusho: $e')),
+      );
+    }
+  }
+
   String _statusShort(UserDto u) {
     if (UserDto.isPremiumNow(u.premiumUntilMs)) return 'Premium';
     if (u.premiumUntilMs != null) return 'Imeisha';
@@ -227,8 +254,10 @@ class _UsersScreenState extends State<UsersScreen> {
                               joinedLabel: u.createdAtMs != null ? _fmtJoinedMs(u.createdAtMs!) : null,
                               statusLabel: _statusShort(u),
                               statusColor: _statusColor(context, u),
+                              isExpired: UserDto.isExpired(u.premiumUntilMs),
                               onManage: () => showUserManageSheet(context, u),
                               onDelete: () => _confirmDelete(context, store, u),
+                              onRemindExpired: () => _sendExpiredReminder(context, store, u),
                             ),
                           ),
                         );
@@ -280,16 +309,20 @@ class _UserCard extends StatelessWidget {
     this.joinedLabel,
     required this.statusLabel,
     required this.statusColor,
+    required this.isExpired,
     required this.onManage,
     required this.onDelete,
+    required this.onRemindExpired,
   });
 
   final UserDto user;
   final String? joinedLabel;
   final String statusLabel;
   final Color statusColor;
+  final bool isExpired;
   final VoidCallback onManage;
   final VoidCallback onDelete;
+  final VoidCallback onRemindExpired;
 
   String _expiryLine(UserDto u) {
     if (u.premiumUntilMs == null) return 'Premium: —';
@@ -401,6 +434,12 @@ class _UserCard extends StatelessWidget {
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (isExpired)
+                    IconButton.filledTonal(
+                      tooltip: 'Tuma ukumbusho wa malipo',
+                      onPressed: onRemindExpired,
+                      icon: Icon(Icons.notifications_active_rounded, color: cs.primary),
+                    ),
                   FilledButton.tonal(
                     onPressed: onManage,
                     child: const Text('Dhibiti'),

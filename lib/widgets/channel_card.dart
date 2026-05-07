@@ -10,7 +10,7 @@ import 'package:supasoka/widgets/safe_network_image.dart';
 double channelCardCellHeight(double cellWidth) => cellWidth * 4 / 3 + 76;
 
 /// Poster trimmed vs 3:4 — title overlays inside poster; keep in sync with [ChannelCard] `compactGrid`.
-const double _kChannelGridPosterTrim = 34;
+const double _kChannelGridPosterTrim = 52;
 
 /// Same computation as [ChannelCard] grid [LayoutBuilder] (must stay in sync).
 double _channelGridPosterHeight(double cellWidth) =>

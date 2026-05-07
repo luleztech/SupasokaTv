@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
 import 'package:supasoka/util/image_url.dart';
+import 'package:supasoka/widgets/pro_shimmer.dart';
 
 /// Cached network image with URL cleanup, browser-like headers, and silent error UI
 /// (avoids decode spam when a CDN returns HTML or a URL was saved with line breaks).
@@ -51,7 +52,9 @@ class SafeNetworkImage extends StatelessWidget {
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         'User-Agent': kBrowserPlaybackUserAgent,
       },
-      placeholder: (context, imageUrl) => ColoredBox(color: bg),
+      placeholder: (context, imageUrl) => ProShimmer(
+        child: ColoredBox(color: bg),
+      ),
       errorWidget: (context, imageUrl, error) => ColoredBox(color: bg),
       fadeInDuration: const Duration(milliseconds: 200),
       fadeOutDuration: Duration.zero,

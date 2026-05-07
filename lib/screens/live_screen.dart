@@ -11,6 +11,7 @@ import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
+import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 
 class LiveScreen extends StatelessWidget {
@@ -85,7 +86,23 @@ class LiveScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           liveHeading(),
-                          if (matches.isEmpty)
+                          if (!store.ready && matches.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                              child: GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 12,
+                                  childAspectRatio: cellW / tileH,
+                                ),
+                                itemCount: 6,
+                                itemBuilder: (context, i) => const ShimmerBox(radius: 16),
+                              ),
+                            )
+                          else if (matches.isEmpty)
                             SizedBox(
                               height: math.max(120.0, constraints.maxHeight - headingReserve),
                               child: Padding(

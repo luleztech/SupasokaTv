@@ -16,7 +16,7 @@ class WhatsAppFab extends StatefulWidget {
 class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin {
   late final AnimationController _bob = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))..repeat(reverse: true);
   late final AnimationController _entry = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
-  late final Animation<double> _floatY = Tween<double>(begin: 0, end: -9).animate(CurvedAnimation(parent: _bob, curve: Curves.easeInOut));
+  late final Animation<double> _floatY = Tween<double>(begin: 0, end: -5).animate(CurvedAnimation(parent: _bob, curve: Curves.easeInOut));
 
   static const double _fabSize = 56;
 
@@ -63,7 +63,7 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
       return const SizedBox.shrink();
     }
     final digits = store.customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
-    final bottom = MediaQuery.paddingOf(context).bottom + kTabBarBaseHeight + 18;
+    final bottom = MediaQuery.paddingOf(context).bottom + kTabBarBaseHeight + 8;
 
     // Fixed hit target: ScaleTransition can shrink the child to zero hit area during the entry
     // animation — wrap with an opaque GestureDetector so taps always register.

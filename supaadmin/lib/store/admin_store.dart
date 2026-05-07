@@ -541,6 +541,33 @@ class AdminStore extends ChangeNotifier {
         }
         throw Exception('Push send failed (${res.statusCode}): $reason');
       }
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map) {
+          final n = decoded['notification'];
+          if (n is Map) {
+            final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
+            _config.notificationLog.removeWhere((x) => x.id == entry.id);
+            _config.notificationLog.insert(0, entry);
+          } else {
+            final id = DateTime.now().millisecondsSinceEpoch.toString();
+            _config.notificationLog.insert(
+              0,
+              NotificationEntryDto(
+                id: id,
+                title: title,
+                body: body,
+                target: target,
+                createdAt: DateTime.now().toUtc().toIso8601String(),
+              ),
+            );
+          }
+          notifyListeners();
+          final p = await SharedPreferences.getInstance();
+          await p.setString(_prefsKey, _config.toJsonString());
+          return;
+        }
+      } catch (_) {}
     }
     final id = DateTime.now().millisecondsSinceEpoch.toString();
     _config.notificationLog.insert(
@@ -553,7 +580,9 @@ class AdminStore extends ChangeNotifier {
         createdAt: DateTime.now().toUtc().toIso8601String(),
       ),
     );
-    await _persist();
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_prefsKey, _config.toJsonString());
   }
 
   Future<String> checkPushHealth() async {
@@ -598,9 +627,79 @@ class AdminStore extends ChangeNotifier {
     throw Exception(reason);
   }
 
+  Future<void> sendExpiredReminder(UserDto user) async {
+    if (!hasAdminSession) {
+      throw Exception('Not logged in. Please login again.');
+    }
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/notify-user/${Uri.encodeComponent(user.id)}');
+    const title = 'Kifurushi chako kimeisha';
+    final body =
+        'Mpendwa mteja, kifurushi chako kimeisha muda wake. Tafadhali lipia uendelee kufurahia vipindi vyetu bora sana.';
+    final res = await http
+        .post(
+          uri,
+          headers: _authHeaders(contentType: 'application/json'),
+          body: jsonEncode({'title': title, 'body': body}),
+        )
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      String reason = '';
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map) {
+          final err = decoded['error'];
+          if (err is String) {
+            reason = err;
+          } else if (err is Map && err['message'] != null) {
+            reason = '${err['message']}';
+          }
+        }
+      } catch (_) {}
+      throw Exception(reason.isEmpty ? 'HTTP ${res.statusCode}' : reason);
+    }
+    try {
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map) {
+        final n = decoded['notification'];
+        if (n is Map) {
+          final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
+          _config.notificationLog.removeWhere((x) => x.id == entry.id);
+          _config.notificationLog.insert(0, entry);
+          notifyListeners();
+          final p = await SharedPreferences.getInstance();
+          await p.setString(_prefsKey, _config.toJsonString());
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> deleteNotification(String id) async {
+    if (hasAdminSession) {
+      final parsed = int.tryParse(id);
+      if (parsed != null && parsed > 0) {
+        final base = resolvedApiBaseUrl;
+        final uri = Uri.parse('$base/api/v1/admin/notifications/$parsed');
+        try {
+          final res = await http
+              .delete(
+                uri,
+                headers: _authHeaders(),
+              )
+              .timeout(const Duration(seconds: 25));
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            throw Exception('Delete failed (${res.statusCode})');
+          }
+        } catch (e) {
+          _snack('Delete notification failed: $e');
+          return;
+        }
+      }
+    }
     _config.notificationLog.removeWhere((n) => n.id == id);
-    await _persist();
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_prefsKey, _config.toJsonString());
   }
 
   Future<void> upsertUser(UserDto u) async {

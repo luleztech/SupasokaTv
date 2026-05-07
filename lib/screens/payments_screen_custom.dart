@@ -18,7 +18,7 @@ import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
 import 'package:supasoka/data/pay_plan.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:supasoka/widgets/whatsapp_fab.dart';
 
 const _accentCta = Color(0xFF22C55E);
 const _accentCtaDark = Color(0xFF16A34A);
@@ -72,7 +72,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     with SingleTickerProviderStateMixin {
   String? _selectedBundle;
   final _phoneCtrl = TextEditingController();
-  String? _whatsapp;
   String? _userId;
   bool _submitting = false;
   bool _statusOpen = false;
@@ -176,14 +175,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Future<void> _load() async {
-    try {
-      final w = await settingsApi.getWhatsAppNumber();
-      final n = w['number']?.toString();
-      if (n != null && n.isNotEmpty) {
-        setState(() => _whatsapp = n.replaceAll(RegExp(r'\s+'), ''));
-      }
-    } catch (_) {}
-
     final uid = await getOrCreateUserId();
     if (uid != null && uid.isNotEmpty) {
       setState(() => _userId = uid);
@@ -517,26 +508,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     await widget.onPaymentSuccess?.call();
   }
 
-  Future<void> _openWhatsApp() async {
-    if (_whatsapp == null || _whatsapp!.isEmpty) {
-      _showStatus(
-        'Hakuna namba ya WhatsApp',
-        'Tafadhali wasiliana na admin kuongeza namba ya WhatsApp kwenye sehemu ya Settings.',
-        _PayDialogTone.error,
-      );
-      return;
-    }
-    final phone = _whatsapp!.startsWith('+') ? _whatsapp!.substring(1) : _whatsapp!;
-    final uri = Uri.parse('https://wa.me/$phone');
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      _showStatus(
-        'Tatizo',
-        'Imeshindwa kufungua WhatsApp kwenye kifaa chako.',
-        _PayDialogTone.error,
-      );
-    }
-  }
-
   Future<void> _send() async {
     if (_selectedBundle == null) {
       _showStatus('Chagua bundle', 'Tafadhali chagua bundle unayotaka kulipa.', _PayDialogTone.error);
@@ -821,77 +792,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                           )
                         : const SizedBox.shrink(key: ValueKey('no-pay-button')),
                   ),
-                  const SizedBox(height: 14),
-                  _Reveal(
-                    controller: _entryCtrlSafe,
-                    delay: 0.36,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(18),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFF86EFAC), Color(0xFF4ADE80), Color(0xFF22C55E)],
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF4ADE80).withValues(alpha: 0.34),
-                            blurRadius: 22,
-                            offset: const Offset(0, 10),
-                          ),
-                          BoxShadow(
-                            color: const Color(0xFF86EFAC).withValues(alpha: 0.20),
-                            blurRadius: 12,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: _openWhatsApp,
-                          borderRadius: BorderRadius.circular(18),
-                          child: Ink(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 40,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.20),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(
-                                    Icons.chat_rounded,
-                                    color: Color(0xFF065F46),
-                                    size: 22,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                const Expanded(
-                                  child: Text(
-                                    'Msaada wa haraka - WhatsApp',
-                                    style: TextStyle(
-                                      color: Color(0xFF064E3B),
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.1,
-                                    ),
-                                  ),
-                                ),
-                                const Icon(
-                                  Icons.arrow_forward_rounded,
-                                  color: Color(0xFF065F46),
-                                  size: 22,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
                   if (kDebugMode && _pollingOrderId != null) ...[
                     const SizedBox(height: 10),
                     TextButton(
@@ -975,6 +875,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                 ),
               ),
             ),
+          const WhatsAppFab(),
         ],
       ),
     );

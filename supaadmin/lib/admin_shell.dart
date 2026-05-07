@@ -20,7 +20,7 @@ class AdminShell extends StatefulWidget {
 class _AdminShellState extends State<AdminShell> {
   int _index = 0;
   int _prevIndex = 0;
-  bool _navOpen = false;
+  bool _railExtended = true;
 
   static const _kWideBreakpoint = 960.0;
   static const _kNavAnim = Duration(milliseconds: 320);
@@ -37,14 +37,10 @@ class _AdminShellState extends State<AdminShell> {
     _Nav(Icons.settings_outlined, Icons.settings_rounded, 'Settings'),
   ];
 
-  void _toggleNav() => setState(() => _navOpen = !_navOpen);
-
   void _selectNav(int i) {
-    final wide = MediaQuery.sizeOf(context).width >= _kWideBreakpoint;
     setState(() {
       _prevIndex = _index;
       _index = i;
-      if (!wide) _navOpen = false;
     });
   }
 
@@ -85,39 +81,18 @@ class _AdminShellState extends State<AdminShell> {
     );
 
     final rail = _SideRail(
-      extended: wide,
+      extended: wide && _railExtended,
       showLabels: showLabels,
       selectedIndex: _index,
       onDestinationSelected: _selectNav,
       destinations: _destinations,
-      onCollapse: wide ? _toggleNav : null,
-    );
-
-    final contentStack = Stack(
-      fit: StackFit.expand,
-      children: [
-        Padding(
-          padding: EdgeInsets.only(
-            top: !_navOpen ? 52 : 0,
-          ),
-          child: page,
-        ),
-        if (!_navOpen)
-          Positioned(
-            top: 4,
-            left: 8,
-            child: SafeArea(
-              bottom: false,
-              child: _NavToggleButton(
-                isOpen: wide && _navOpen,
-                onPressed: _toggleNav,
-              ),
-            ),
-          ),
-      ],
+      onToggleExtended: wide
+          ? () => setState(() => _railExtended = !_railExtended)
+          : null,
     );
 
     return Scaffold(
+      extendBody: true,
       body: DecoratedBox(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -134,100 +109,25 @@ class _AdminShellState extends State<AdminShell> {
           child: wide
               ? Row(
                   children: [
-                    ClipRect(
-                      child: AnimatedContainer(
-                        duration: _kNavAnim,
-                        curve: _kNavCurve,
-                        alignment: Alignment.centerLeft,
-                        width: _navOpen ? 212.0 : 0,
-                        child: SizedBox(width: 212, child: rail),
-                      ),
+                    AnimatedContainer(
+                      duration: _kNavAnim,
+                      curve: _kNavCurve,
+                      width: _railExtended ? 212 : 86,
+                      child: rail,
                     ),
-                    Expanded(child: contentStack),
+                    Expanded(child: page),
                   ],
                 )
-              : Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    contentStack,
-                    AnimatedOpacity(
-                      opacity: _navOpen ? 1 : 0,
-                      duration: _kNavAnim,
-                      curve: _kNavCurve,
-                      child: IgnorePointer(
-                        ignoring: !_navOpen,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _toggleNav,
-                          child: Container(
-                            color: Colors.black.withValues(alpha: 0.52),
-                          ),
-                        ),
-                      ),
-                    ),
-                    AnimatedSlide(
-                      duration: _kNavAnim,
-                      curve: _kNavCurve,
-                      offset: _navOpen ? Offset.zero : const Offset(-1, 0),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: SizedBox(
-                            width: 78,
-                            height: double.infinity,
-                            child: rail,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              : page,
         ),
       ),
-    );
-  }
-}
-
-/// Floating hamburger / menu-open control with smooth scale on press.
-class _NavToggleButton extends StatelessWidget {
-  const _NavToggleButton({
-    required this.isOpen,
-    required this.onPressed,
-  });
-
-  final bool isOpen;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Material(
-      color: const Color(0xFF141824).withValues(alpha: 0.92),
-      elevation: 6,
-      shadowColor: Colors.black.withValues(alpha: 0.45),
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            switchInCurve: Curves.easeOut,
-            switchOutCurve: Curves.easeIn,
-            transitionBuilder: (child, anim) {
-              return ScaleTransition(scale: anim, child: child);
-            },
-            child: Icon(
-              isOpen ? Icons.menu_open_rounded : Icons.menu_rounded,
-              key: ValueKey(isOpen),
-              color: cs.primary,
-              size: 26,
+      bottomNavigationBar: wide
+          ? null
+          : _GlassBottomNav(
+              selectedIndex: _index,
+              destinations: _destinations,
+              onSelected: _selectNav,
             ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -239,7 +139,7 @@ class _SideRail extends StatelessWidget {
     required this.selectedIndex,
     required this.onDestinationSelected,
     required this.destinations,
-    this.onCollapse,
+    this.onToggleExtended,
   });
 
   final bool extended;
@@ -247,7 +147,7 @@ class _SideRail extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
   final List<_Nav> destinations;
-  final VoidCallback? onCollapse;
+  final VoidCallback? onToggleExtended;
 
   @override
   Widget build(BuildContext context) {
@@ -295,13 +195,13 @@ class _SideRail extends StatelessWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (onCollapse != null) ...[
+                    if (onToggleExtended != null) ...[
                       IconButton(
                         visualDensity: VisualDensity.compact,
-                        tooltip: 'Hide menu',
-                        onPressed: onCollapse,
+                        tooltip: extended ? 'Compact menu' : 'Expand menu',
+                        onPressed: onToggleExtended,
                         icon: Icon(
-                          Icons.menu_open_rounded,
+                          extended ? Icons.first_page_rounded : Icons.last_page_rounded,
                           color: cs.primary.withValues(alpha: 0.9),
                           size: 22,
                         ),
@@ -368,4 +268,92 @@ class _Nav {
   final IconData outlined;
   final IconData filled;
   final String label;
+}
+
+class _GlassBottomNav extends StatelessWidget {
+  const _GlassBottomNav({
+    required this.selectedIndex,
+    required this.destinations,
+    required this.onSelected,
+  });
+
+  final int selectedIndex;
+  final List<_Nav> destinations;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+        child: Container(
+          height: 72,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF131A2A).withValues(alpha: 0.94),
+                const Color(0xFF0E1118).withValues(alpha: 0.94),
+              ],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.38),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            scrollDirection: Axis.horizontal,
+            itemCount: destinations.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 6),
+            itemBuilder: (context, i) {
+              final d = destinations[i];
+              final active = i == selectedIndex;
+              return InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => onSelected(i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.symmetric(horizontal: active ? 14 : 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    color: active ? cs.primary.withValues(alpha: 0.23) : Colors.transparent,
+                    border: Border.all(
+                      color: active ? cs.primary.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.07),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(active ? d.filled : d.outlined, size: 20, color: active ? Colors.white : Colors.white70),
+                      if (active) ...[
+                        const SizedBox(width: 7),
+                        Text(
+                          d.label,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }

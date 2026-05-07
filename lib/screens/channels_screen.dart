@@ -10,6 +10,7 @@ import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/channel_card.dart';
+import 'package:supasoka/widgets/pro_shimmer.dart';
 
 class ChannelsScreen extends StatefulWidget {
   const ChannelsScreen({super.key});
@@ -89,10 +90,10 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     final keys = _filterKeys(channels);
     final fk = keys.contains(_filterKey) ? _filterKey : 'all';
     final w = MediaQuery.sizeOf(context).width;
-    const hPad = 16.0;
-    const gap = 12.0;
+    const hPad = 12.0;
+    const gap = 8.0;
     /// Grid cell stays full [cellW]; card is inset so it visually feels less “huge”.
-    const channelCardHorizontalInset = 10.0;
+    const channelCardHorizontalInset = 4.0;
     // Keep tile height in sync with `ChannelCard(compactGrid: true)` to avoid RenderFlex overflow
     // stripes (yellow/black) on web/desktop.
     const channelGridHeightTrim = 0.0;
@@ -230,7 +231,23 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                   ),
                 ),
               ),
-            if (list.isEmpty)
+            if (!store.ready && list.isEmpty)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
+                sliver: SliverGrid(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxis,
+                    mainAxisSpacing: 6,
+                    crossAxisSpacing: 8,
+                    childAspectRatio: cellW / tileH,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) => const ShimmerBox(radius: 16),
+                    childCount: 8,
+                  ),
+                ),
+              )
+            else if (list.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
                 child: Center(
@@ -250,8 +267,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                 sliver: SliverGrid(
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: crossAxis,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 6,
+                    crossAxisSpacing: 8,
                     childAspectRatio: cellW / tileH,
                   ),
                   delegate: SliverChildBuilderDelegate(

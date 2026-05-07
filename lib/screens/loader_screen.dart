@@ -445,13 +445,13 @@ class _OfflineCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 22),
                   Text(
-                    'No internet',
+                    'Hakuna muunganiko wa internet',
                     textAlign: TextAlign.center,
-                    style: orbitron(20, weight: FontWeight.w800).copyWith(color: Colors.white),
+                    style: orbitron(18, weight: FontWeight.w800).copyWith(color: Colors.white),
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Turn on mobile data or Wi‑Fi, then try again.',
+                    'Mpendwa mteja hakuna muunganiko wa internet hakikisha umewasha data katika simu yako na una MB.',
                     textAlign: TextAlign.center,
                     style: rajdhani(14).copyWith(color: Colors.white70, height: 1.45),
                   ),

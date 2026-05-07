@@ -12,6 +12,7 @@ const _androidChannelDescription = 'Match alerts and app updates';
 
 final _localNotifications = FlutterLocalNotificationsPlugin();
 const _prefsNotifPrompted = 'supasoka_notif_prompted_v1';
+const _prefsDirectTopic = 'supasoka_direct_user_topic_v1';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -142,5 +143,22 @@ class PushNotificationService {
       await messaging.subscribeToTopic('free_users');
       await messaging.unsubscribeFromTopic('premium_users');
     }
+  }
+
+  static Future<void> syncDirectUserTopic(String publicId) async {
+    if (kIsWeb) return;
+    final raw = publicId.trim();
+    if (raw.isEmpty) return;
+    final topic = 'user_${raw.replaceAll(RegExp(r'[^a-zA-Z0-9\\-_.~%]'), '_')}';
+    final prefs = await SharedPreferences.getInstance();
+    final old = prefs.getString(_prefsDirectTopic);
+    final messaging = FirebaseMessaging.instance;
+    if (old != null && old.isNotEmpty && old != topic) {
+      try {
+        await messaging.unsubscribeFromTopic(old);
+      } catch (_) {}
+    }
+    await messaging.subscribeToTopic(topic);
+    await prefs.setString(_prefsDirectTopic, topic);
   }
 }

@@ -16,6 +16,8 @@ Map<String, String> playbackHttpHeaders(String rawUrl) {
   return {
     'Referer': referer,
     'Origin': origin,
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+    'Connection': 'keep-alive',
     'Accept-Language': 'en-US,en;q=0.9,sw;q=0.8',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,application/dash+xml,application/vnd.apple.mpegurl;q=0.8,*/*;q=0.7',
   };
