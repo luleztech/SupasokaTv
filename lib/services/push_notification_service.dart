@@ -71,9 +71,10 @@ class PushNotificationService {
     final settings = await FirebaseMessaging.instance.getNotificationSettings();
     final alreadyAllowed = settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
+    // Keep asking (via in-app dialog) until OS notification permission is granted.
+    // Some users skip once, then never get asked again with the old one-shot flag.
     if (alreadyAllowed) return false;
-    final prefs = await SharedPreferences.getInstance();
-    return !(prefs.getBool(_prefsNotifPrompted) ?? false);
+    return true;
   }
 
   static Future<bool> requestPermissionFromPrompt() async {
@@ -88,8 +89,10 @@ class PushNotificationService {
     final allowed = settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
     if (allowed) {
-      final token = await FirebaseMessaging.instance.getToken();
+      final messaging = FirebaseMessaging.instance;
+      final token = await messaging.getToken();
       if (kDebugMode) debugPrint('FCM token (after prompt): $token');
+      await messaging.subscribeToTopic('all_users');
     }
     return allowed;
   }

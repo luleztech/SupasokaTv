@@ -245,6 +245,9 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
 
     if (granted == true) {
       await PushNotificationService.requestPermissionFromPrompt();
+      final isPremium =
+          SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+      await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
     } else {
       await PushNotificationService.markPermissionPromptSeen();
     }

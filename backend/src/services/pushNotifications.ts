@@ -82,7 +82,14 @@ export async function sendPushToTopic(input: {
       target: input.target.trim() || 'all',
       source: 'supaadmin',
     },
-    android: { priority: 'high' },
+    android: {
+      priority: 'high',
+      notification: {
+        // Must match viewer app Android channel id for heads-up / status-bar alerts.
+        channelId: 'supasoka_high_importance',
+        defaultSound: true,
+      },
+    },
   });
   return { topic, messageId };
 }

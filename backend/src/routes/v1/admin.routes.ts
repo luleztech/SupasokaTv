@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getPool } from '../../db/pool';
 import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
 import { HttpError } from '../../middleware/errorHandler';
@@ -56,6 +57,14 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
       return;
     }
     const out = await sendPushToTopic({ title, body, target });
+    const pool = getPool();
+    if (pool) {
+      await pool.query(
+        `INSERT INTO notifications (title, body, target, created_at)
+         VALUES ($1, $2, $3, now())`,
+        [title, body, target || 'all'],
+      );
+    }
     res.json({ ok: true, ...out });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
