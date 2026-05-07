@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../admin_messenger.dart';
+import '../admin_messenger.dart' show adminFormatError, adminScaffoldMessengerKey;
 import '../config/admin_api_config.dart';
 import '../models/app_config.dart';
 
@@ -508,7 +508,8 @@ class AdminStore extends ChangeNotifier {
     return _config.liveMatches.map((m) => m.id).reduce((a, b) => a > b ? a : b) + 1;
   }
 
-  Future<void> sendNotification({required String title, required String body, required String target}) async {
+  /// Returns `true` when the server stored a notification row (push history).
+  Future<bool> sendNotification({required String title, required String body, required String target}) async {
     if (hasAdminSession) {
       final base = resolvedApiBaseUrl;
       final uri = Uri.parse('$base/api/v1/admin/notify');
@@ -544,28 +545,36 @@ class AdminStore extends ChangeNotifier {
       try {
         final decoded = jsonDecode(res.body);
         if (decoded is Map) {
+          final persistFail = decoded['notificationPersistError'] != null &&
+              decoded['notificationPersistError'].toString().trim().isNotEmpty;
           final n = decoded['notification'];
           if (n is Map) {
             final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
             _config.notificationLog.removeWhere((x) => x.id == entry.id);
             _config.notificationLog.insert(0, entry);
-          } else {
-            final id = DateTime.now().millisecondsSinceEpoch.toString();
-            _config.notificationLog.insert(
-              0,
-              NotificationEntryDto(
-                id: id,
-                title: title,
-                body: body,
-                target: target,
-                createdAt: DateTime.now().toUtc().toIso8601String(),
-              ),
-            );
+            notifyListeners();
+            final p = await SharedPreferences.getInstance();
+            await p.setString(_prefsKey, _config.toJsonString());
+            return true;
           }
+          if (persistFail) {
+            return false;
+          }
+          final id = DateTime.now().millisecondsSinceEpoch.toString();
+          _config.notificationLog.insert(
+            0,
+            NotificationEntryDto(
+              id: id,
+              title: title,
+              body: body,
+              target: target,
+              createdAt: DateTime.now().toUtc().toIso8601String(),
+            ),
+          );
           notifyListeners();
           final p = await SharedPreferences.getInstance();
           await p.setString(_prefsKey, _config.toJsonString());
-          return;
+          return false;
         }
       } catch (_) {}
     }
@@ -583,6 +592,7 @@ class AdminStore extends ChangeNotifier {
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsKey, _config.toJsonString());
+    return false;
   }
 
   Future<String> checkPushHealth() async {
@@ -661,6 +671,10 @@ class AdminStore extends ChangeNotifier {
     try {
       final decoded = jsonDecode(res.body);
       if (decoded is Map) {
+        final persistRaw = decoded['notificationPersistError'];
+        if (persistRaw != null && persistRaw.toString().trim().isNotEmpty) {
+          _snack('Ujumbe umetumwa lakini historia haijahifadhiwa: ${persistRaw.toString().trim()}');
+        }
         final n = decoded['notification'];
         if (n is Map) {
           final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
@@ -674,29 +688,81 @@ class AdminStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> deleteNotification(String id) async {
-    if (hasAdminSession) {
-      final parsed = int.tryParse(id);
-      if (parsed != null && parsed > 0) {
-        final base = resolvedApiBaseUrl;
-        final uri = Uri.parse('$base/api/v1/admin/notifications/$parsed');
-        try {
-          final res = await http
-              .delete(
-                uri,
-                headers: _authHeaders(),
-              )
-              .timeout(const Duration(seconds: 25));
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            throw Exception('Delete failed (${res.statusCode})');
+  /// Sends the standard expired-subscription reminder to many viewers at once (server: `/notify-expired-batch`).
+  Future<ExpiredBatchOutcome> sendExpiredRemindersBatch(List<UserDto> users) async {
+    if (!hasAdminSession) {
+      throw Exception('Not logged in. Please login again.');
+    }
+    final ids = users.map((u) => u.id.trim()).where((id) => id.isNotEmpty).toList();
+    if (ids.isEmpty) {
+      return ExpiredBatchOutcome(sent: 0, failed: 0);
+    }
+    const title = 'Kifurushi chako kimeisha';
+    const body =
+        'Mpendwa mteja, kifurushi chako kimeisha muda wake. Tafadhali lipia uendelee kufurahia vipindi vyetu bora sana.';
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/notify-expired-batch');
+    final res = await http
+        .post(
+          uri,
+          headers: _authHeaders(contentType: 'application/json'),
+          body: jsonEncode({'ids': ids, 'title': title, 'body': body}),
+        )
+        .timeout(const Duration(seconds: 120));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      String reason = '';
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map) {
+          final err = decoded['error'];
+          if (err is String) {
+            reason = err;
+          } else if (err is Map && err['message'] != null) {
+            reason = '${err['message']}';
           }
-        } catch (e) {
-          _snack('Delete notification failed: $e');
-          return;
         }
+      } catch (_) {}
+      throw Exception(reason.isEmpty ? 'HTTP ${res.statusCode}' : reason);
+    }
+    try {
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map) {
+        final persistRaw = decoded['notificationPersistError'];
+        if (persistRaw != null && persistRaw.toString().trim().isNotEmpty) {
+          _snack('Baadhi ya historia hazijahifadhiwa: ${persistRaw.toString().trim()}');
+        }
+        final sent = decoded['sent'];
+        final failed = decoded['failed'];
+        final s = sent is int ? sent : int.tryParse('$sent') ?? 0;
+        final f = failed is int ? failed : int.tryParse('$failed') ?? 0;
+        return ExpiredBatchOutcome(sent: s, failed: f);
+      }
+    } catch (_) {}
+    return ExpiredBatchOutcome(sent: 0, failed: ids.length);
+  }
+
+  Future<void> deleteNotification(String id) async {
+    final trimmed = id.trim();
+    if (trimmed.isEmpty) return;
+    if (hasAdminSession) {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/notifications/${Uri.encodeComponent(trimmed)}');
+      try {
+        final res = await http
+            .delete(
+              uri,
+              headers: _authHeaders(),
+            )
+            .timeout(const Duration(seconds: 25));
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw Exception('Delete failed (${res.statusCode})');
+        }
+      } catch (e) {
+        _snack('Delete notification failed: ${adminFormatError(e)}');
+        return;
       }
     }
-    _config.notificationLog.removeWhere((n) => n.id == id);
+    _config.notificationLog.removeWhere((n) => n.id == trimmed);
     notifyListeners();
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsKey, _config.toJsonString());
@@ -759,4 +825,11 @@ class AdminStore extends ChangeNotifier {
     final next = AppConfig.fromJsonString(raw);
     await replaceConfig(next);
   }
+}
+
+class ExpiredBatchOutcome {
+  ExpiredBatchOutcome({required this.sent, required this.failed});
+
+  final int sent;
+  final int failed;
 }

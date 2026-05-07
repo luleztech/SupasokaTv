@@ -594,7 +594,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   @override
   Widget build(BuildContext context) {
-    final bottom = 48.0 + widget.bottomPadding;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    /// Keep scroll content above the floating WhatsApp button (size 56 + gap + breathing room).
+    final bottom =
+        24 + 56 + kWhatsAppFabGapAboveBottom + safeBottom + widget.bottomPadding;
     final ac = widget.accentColor;
     final bundles = _bundlesFromStore(context.watch<ContentStore>().malipoPayPlans);
     if (_selectedBundle != null && !bundles.any((b) => b.id == _selectedBundle)) {

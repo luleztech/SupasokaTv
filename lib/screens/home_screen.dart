@@ -574,36 +574,38 @@ class _ChannelRail extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: t.card.withValues(alpha: 0.35),
-                border: Border.all(color: t.border.withValues(alpha: 0.45)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 5,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      color: t.accent,
-                      borderRadius: BorderRadius.circular(99),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: t.card.withValues(alpha: 0.35),
+                  border: Border.all(color: t.border.withValues(alpha: 0.45)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 5,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: t.accent,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
+                    const SizedBox(width: 10),
+                    Text(
                       title.toUpperCase(),
-                      style: rajdhani(16, weight: FontWeight.w800).copyWith(
+                      style: rajdhani(14.5, weight: FontWeight.w800).copyWith(
                         color: t.text2.withValues(alpha: 0.95),
-                        letterSpacing: 1.05,
-                        height: 1.12,
+                        letterSpacing: 0.9,
+                        height: 1.1,
                         fontStyle: FontStyle.italic,
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

@@ -4,10 +4,15 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-const double kTabBarBaseHeight = 62;
+/// Visual gap from the bottom of the hosting viewport to the FAB (tab screens sit *above*
+/// [Scaffold.bottomNavigationBar], so do not add tab-bar height here — that pushed the icon mid-screen).
+const double kWhatsAppFabGapAboveBottom = 20;
 
 class WhatsAppFab extends StatefulWidget {
-  const WhatsAppFab({super.key});
+  const WhatsAppFab({super.key, this.gapAboveBottom = kWhatsAppFabGapAboveBottom});
+
+  /// Distance from the FAB’s bottom edge to the bottom of the parent [Stack] / viewport.
+  final double gapAboveBottom;
 
   @override
   State<WhatsAppFab> createState() => _WhatsAppFabState();
@@ -63,7 +68,8 @@ class _WhatsAppFabState extends State<WhatsAppFab> with TickerProviderStateMixin
       return const SizedBox.shrink();
     }
     final digits = store.customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
-    final bottom = MediaQuery.paddingOf(context).bottom + kTabBarBaseHeight + 8;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final bottom = widget.gapAboveBottom + safeBottom;
 
     // Fixed hit target: ScaleTransition can shrink the child to zero hit area during the entry
     // animation — wrap with an opaque GestureDetector so taps always register.

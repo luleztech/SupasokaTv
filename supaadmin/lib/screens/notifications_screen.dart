@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../admin_messenger.dart';
 import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
 import '../widgets/stagger_entrance.dart';
@@ -197,20 +198,27 @@ class NotificationsScreen extends StatelessWidget {
                         if (title.text.trim().isEmpty) return;
                         setSt(() => sending = true);
                         try {
-                          await store.sendNotification(
+                          final saved = await store.sendNotification(
                             title: title.text.trim(),
                             body: body.text.trim(),
                             target: target,
                           );
-                          if (!context.mounted) return;
+                          if (!ctx.mounted) return;
                           Navigator.pop(ctx);
+                          if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Imehifadhiwa')),
+                            SnackBar(
+                              content: Text(
+                                saved
+                                    ? 'Imehifadhiwa na kutumwa.'
+                                    : 'Ujumbe umetumwa, lakini historia haijahifadhiwa kwenye seva. Jaribu tena baada ya muda mfupi.',
+                              ),
+                            ),
                           );
                         } catch (e) {
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Imeshindikana kutuma: $e')),
+                            SnackBar(content: Text('Imeshindikana kutuma: ${adminFormatError(e)}')),
                           );
                         } finally {
                           if (ctx.mounted) {
@@ -262,7 +270,7 @@ class NotificationsScreen extends StatelessWidget {
       if (!context.mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Push check failed: $e')),
+        SnackBar(content: Text('Push check failed: ${adminFormatError(e)}')),
       );
     }
   }

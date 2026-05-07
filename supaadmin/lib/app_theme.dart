@@ -76,8 +76,20 @@ ThemeData adminTheme() {
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      backgroundColor: const Color(0xFF252a38),
+      elevation: 8,
+      backgroundColor: const Color(0xFF2f3548),
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+      ),
+      contentTextStyle: const TextStyle(
+        color: Color(0xFFfafafa),
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        height: 1.4,
+      ),
+      actionTextColor: const Color(0xFFc4b5fd),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(

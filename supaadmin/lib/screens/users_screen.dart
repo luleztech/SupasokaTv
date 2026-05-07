@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../admin_messenger.dart';
 import '../models/app_config.dart';
 import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
@@ -75,6 +76,45 @@ class _UsersScreenState extends State<UsersScreen> {
     if (ok == true) await store.deleteUser(u.id);
   }
 
+  Future<void> _sendExpiredReminderToAll(
+    BuildContext context,
+    AdminStore store,
+    List<UserDto> expiredUsers,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tuma kwa wote walioisha?'),
+        content: Text(
+          'Tuma ukumbusho wa malipo kwa watumiaji ${expiredUsers.length} walio na premium iliyoisha?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Tuma wote')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final outcome = await store.sendExpiredRemindersBatch(expiredUsers);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            outcome.failed == 0
+                ? 'Imetumwa kwa watumiaji ${outcome.sent}.'
+                : 'Imetumwa: ${outcome.sent}. Imeshindikana: ${outcome.failed}.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imeshindikana: ${adminFormatError(e)}')),
+      );
+    }
+  }
+
   Future<void> _sendExpiredReminder(BuildContext context, AdminStore store, UserDto u) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -97,7 +137,7 @@ class _UsersScreenState extends State<UsersScreen> {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imeshindikana kutuma ukumbusho: $e')),
+        SnackBar(content: Text('Imeshindikana kutuma ukumbusho: ${adminFormatError(e)}')),
       );
     }
   }
@@ -120,6 +160,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final store = context.watch<AdminStore>();
     // Hide seeded/demo/legacy rows — Supasoka viewers register as `User-xxxxx`.
     final all = store.config.users.where((u) => u.id.startsWith('User-')).toList();
+    final expiredForBulk = all.where((u) => UserDto.isExpired(u.premiumUntilMs)).toList();
     final list = _filtered(all);
     final cs = Theme.of(context).colorScheme;
     final emptyMsg = all.isEmpty
@@ -219,6 +260,17 @@ class _UsersScreenState extends State<UsersScreen> {
               ],
             ),
           ),
+          if (expiredForBulk.length > 1) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                onPressed: () => _sendExpiredReminderToAll(context, store, expiredForBulk),
+                icon: const Icon(Icons.notifications_active_rounded),
+                label: Text('Tuma ukumbusho — wote walioisha (${expiredForBulk.length})'),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Expanded(
             child: RefreshIndicator(
