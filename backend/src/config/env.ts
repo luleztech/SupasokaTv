@@ -21,4 +21,12 @@ export const env = {
   /** ZenoPay server-side verification (keep secret on backend only). */
   zenoApiKey: process.env.ZENO_API_KEY ?? '',
   zenoApiBase: process.env.ZENO_API_BASE ?? 'https://zenoapi.com',
+  /** FCM service-account credentials for backend push broadcast. */
+  fcmProjectId: process.env.FCM_PROJECT_ID ?? '',
+  fcmClientEmail: process.env.FCM_CLIENT_EMAIL ?? '',
+  fcmPrivateKey: (process.env.FCM_PRIVATE_KEY ?? '').replace(/\\n/g, '\n'),
+  /** Optional: absolute path to Firebase service-account json (local/dev). */
+  fcmServiceAccountPath: process.env.FCM_SERVICE_ACCOUNT_PATH ?? '',
+  /** Optional: full Firebase service-account json string (single env var). */
+  fcmServiceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON ?? '',
 } as const;

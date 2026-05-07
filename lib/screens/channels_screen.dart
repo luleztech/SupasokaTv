@@ -93,7 +93,9 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     const gap = 12.0;
     /// Grid cell stays full [cellW]; card is inset so it visually feels less “huge”.
     const channelCardHorizontalInset = 10.0;
-    const channelGridHeightTrim = 56.0;
+    // Keep tile height in sync with `ChannelCard(compactGrid: true)` to avoid RenderFlex overflow
+    // stripes (yellow/black) on web/desktop.
+    const channelGridHeightTrim = 0.0;
     // One column on typical phones = much wider tiles; two columns on tablets / wide phones.
     final crossAxis = w >= 420 ? 2 : 1;
     final cellW = crossAxis == 1 ? (w - hPad * 2) : (w - hPad * 2 - gap) / 2;

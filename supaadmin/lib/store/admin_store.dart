@@ -509,6 +509,24 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> sendNotification({required String title, required String body, required String target}) async {
+    if (hasAdminSession) {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/notify');
+      final res = await http
+          .post(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({
+              'title': title,
+              'body': body,
+              'target': target,
+            }),
+          )
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('Push send failed (${res.statusCode})');
+      }
+    }
     final id = DateTime.now().millisecondsSinceEpoch.toString();
     _config.notificationLog.insert(
       0,

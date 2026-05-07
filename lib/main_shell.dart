@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
@@ -77,20 +78,44 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.95),
-          border: Border(top: BorderSide(color: t.border)),
-        ),
-        padding: EdgeInsets.only(top: 6, bottom: bottom + 6),
-        child: Row(
-          children: [
-            _TabButton(i: 0, label: 'Home', outline: Ionicons.home_outline, solid: Ionicons.home, selected: nav.currentTab == 0),
-            _TabButton(i: 1, label: 'Live', outline: Ionicons.radio_outline, solid: Ionicons.radio, selected: nav.currentTab == 1),
-            _TabButton(i: 2, label: 'Channels', outline: Ionicons.tv_outline, solid: Ionicons.tv, selected: nav.currentTab == 2),
-            _TabButton(i: 3, label: 'Fungua zote', outline: Ionicons.key_outline, solid: Ionicons.key, selected: nav.currentTab == 3),
-            _TabButton(i: 4, label: 'Profile', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
-          ],
+      bottomNavigationBar: Padding(
+        padding: EdgeInsets.fromLTRB(12, 0, 12, bottom + 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    const Color(0xFF0B0D12).withValues(alpha: 0.92),
+                    const Color(0xFF131722).withValues(alpha: 0.88),
+                  ],
+                ),
+                border: Border.all(color: t.border.withValues(alpha: 0.55)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.40),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+              child: Row(
+                children: [
+                  _TabButton(i: 0, label: 'Home', outline: Ionicons.home_outline, solid: Ionicons.home, selected: nav.currentTab == 0),
+                  _TabButton(i: 1, label: 'Live', outline: Ionicons.radio_outline, solid: Ionicons.radio, selected: nav.currentTab == 1),
+                  _TabButton(i: 2, label: 'Channels', outline: Ionicons.tv_outline, solid: Ionicons.tv, selected: nav.currentTab == 2),
+                  _TabButton(i: 3, label: 'Fungua zote', outline: Ionicons.key_outline, solid: Ionicons.key, selected: nav.currentTab == 3),
+                  _TabButton(i: 4, label: 'Profile', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -117,10 +142,13 @@ class _TabButton extends StatelessWidget {
     final t = context.watch<ThemeController>().colors;
     final icon = selected ? solid : outline;
     final active = t.accent;
+    const activeIcon = Colors.white;
     final idle = const Color(0xFF71717a);
+    final activeText = Color.lerp(const Color(0xFFD9FEE7), Colors.white, 0.35)!;
 
     return Expanded(
       child: InkWell(
+        borderRadius: BorderRadius.circular(16),
         onTap: () {
           final changed = context.read<AppNav>().setTab(i);
           if (changed) {
@@ -133,28 +161,67 @@ class _TabButton extends StatelessWidget {
             }
           }
         },
-        child: AnimatedScale(
-          scale: selected ? 1.06 : 1,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: selected
+                ? LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      active.withValues(alpha: 0.22),
+                      active.withValues(alpha: 0.10),
+                    ],
+                  )
+                : null,
+            border: Border.all(
+              color: selected ? active.withValues(alpha: 0.35) : Colors.transparent,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: active.withValues(alpha: 0.26),
+                      blurRadius: 16,
+                      spreadRadius: -5,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : null,
+          ),
+          child: AnimatedScale(
+            scale: selected ? 1.04 : 1,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 22, color: selected ? active : idle),
+                Icon(icon, size: 21, color: selected ? activeIcon : idle),
                 const SizedBox(height: 4),
                 Text(
                   label.toUpperCase(),
-                  maxLines: 2,
+                  maxLines: 1,
                   textAlign: TextAlign.center,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: label.length > 10 ? 8.5 : 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: label.length > 10 ? 0.15 : 0.3,
-                    height: 1.15,
-                    color: selected ? active : idle,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.35,
+                    height: 1.1,
+                    color: selected ? activeText : idle,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  width: selected ? 16 : 0,
+                  height: 2.2,
+                  decoration: BoxDecoration(
+                    color: active,
+                    borderRadius: BorderRadius.circular(99),
                   ),
                 ),
               ],

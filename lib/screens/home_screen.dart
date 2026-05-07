@@ -189,16 +189,16 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
         } else {
-          final liveNow = channels.take(8).toList();
-          if (liveNow.isNotEmpty) {
+          final freeTop = channels.where((ch) => ch.free).take(12).toList();
+          if (freeTop.isNotEmpty) {
             browseSlivers.add(
               SliverToBoxAdapter(
                 child: _ChannelRail(
-                  title: '⚡ LIVE NOW ON SUPASOKA',
+                  title: '🆓 FREE CHANNELS',
                   tileWidth: _kRailTileWidth,
                   railHeight: _kRailHeight,
-                  channels: liveNow,
-                  lockedFor: (ch) => !ch.free && !isPremium,
+                  channels: freeTop,
+                  lockedFor: (_) => false,
                   onChannel: (ch) => _openChannel(context, ch.id),
                 ),
               ),
@@ -225,8 +225,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Stack(
       children: [
-        ColoredBox(
-          color: t.bg1,
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                t.bg2.withValues(alpha: 0.96),
+                t.bg1,
+                t.bg1,
+              ],
+            ),
+          ),
           child: RefreshIndicator(
             color: t.accent,
             onRefresh: () => context.read<ContentStore>().refresh(),
@@ -331,48 +341,63 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (carouselSlides.isNotEmpty)
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: SizedBox(
-                          height: 420,
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              PageView.builder(
-                                controller: _carousel,
-                                itemCount: carouselSlides.length,
-                                onPageChanged: (i) => setState(() => _carouselIndex = i),
-                                itemBuilder: (context, i) {
-                                  return _CarouselSlide(item: carouselSlides[i], colors: t);
-                                },
-                              ),
-                              Positioned(
-                                left: 18,
-                                bottom: 18,
-                                child: Row(
-                                  children: List.generate(carouselSlides.length, (i) {
-                                    final active = i == _carouselIndex;
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setState(() => _carouselIndex = i);
-                                        _carousel.animateToPage(i, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: const Duration(milliseconds: 300),
-                                        margin: const EdgeInsets.only(right: 6),
-                                        height: 2,
-                                        width: active ? 32 : 14,
-                                        decoration: BoxDecoration(
-                                          color: active ? t.accent : const Color(0xFF52525b),
-                                          borderRadius: BorderRadius.circular(99),
-                                        ),
-                                      ),
-                                    );
-                                  }),
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: t.border.withValues(alpha: 0.6)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: t.accent.withValues(alpha: 0.14),
+                              blurRadius: 24,
+                              spreadRadius: -6,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: SizedBox(
+                            height: 360,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                PageView.builder(
+                                  controller: _carousel,
+                                  itemCount: carouselSlides.length,
+                                  onPageChanged: (i) => setState(() => _carouselIndex = i),
+                                  itemBuilder: (context, i) {
+                                    return _CarouselSlide(item: carouselSlides[i], colors: t);
+                                  },
                                 ),
-                              ),
-                            ],
+                                Positioned(
+                                  left: 18,
+                                  right: 18,
+                                  bottom: 14,
+                                  child: Row(
+                                    children: List.generate(carouselSlides.length, (i) {
+                                      final active = i == _carouselIndex;
+                                      return GestureDetector(
+                                        onTap: () {
+                                          setState(() => _carouselIndex = i);
+                                          _carousel.animateToPage(i, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+                                        },
+                                        child: AnimatedContainer(
+                                          duration: const Duration(milliseconds: 300),
+                                          margin: const EdgeInsets.only(right: 6),
+                                          height: 3,
+                                          width: active ? 32 : 14,
+                                          decoration: BoxDecoration(
+                                            color: active ? t.accent : const Color(0xFF52525b),
+                                            borderRadius: BorderRadius.circular(99),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -380,11 +405,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 10, 0, 22),
-                    child: SizedBox(
-                      height: 44,
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
+                    child: Container(
+                      height: 52,
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        color: t.card.withValues(alpha: 0.45),
+                        border: Border.all(color: t.border.withValues(alpha: 0.55)),
+                      ),
                       child: ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
                         scrollDirection: Axis.horizontal,
                         itemCount: cats.length,
                         separatorBuilder: (context, _) => const SizedBox(width: 10),
@@ -523,30 +554,38 @@ class _ChannelRail extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 3),
-            child: Row(
-              children: [
-                Container(
-                  width: 5,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: t.accent,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title.toUpperCase(),
-                    style: rajdhani(17, weight: FontWeight.w800).copyWith(
-                      color: const Color(0xFFa1a1aa),
-                      letterSpacing: 1.15,
-                      height: 1.12,
-                      fontStyle: FontStyle.italic,
+            padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: t.card.withValues(alpha: 0.35),
+                border: Border.all(color: t.border.withValues(alpha: 0.45)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 5,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: t.accent,
+                      borderRadius: BorderRadius.circular(99),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title.toUpperCase(),
+                      style: rajdhani(16, weight: FontWeight.w800).copyWith(
+                        color: t.text2.withValues(alpha: 0.95),
+                        letterSpacing: 1.05,
+                        height: 1.12,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           SizedBox(
