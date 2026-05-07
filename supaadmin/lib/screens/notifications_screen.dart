@@ -24,6 +24,11 @@ class NotificationsScreen extends StatelessWidget {
               title: 'Push notifications',
               icon: Icons.notifications_active_rounded,
               actions: [
+                OutlinedButton.icon(
+                  onPressed: () => _checkPushHealth(context, store),
+                  icon: const Icon(Icons.health_and_safety_rounded),
+                  label: const Text('Check push'),
+                ),
                 FilledButton.icon(
                   onPressed: () => _compose(context, store),
                   icon: const Icon(Icons.send_rounded),
@@ -191,12 +196,27 @@ class NotificationsScreen extends StatelessWidget {
                     : () async {
                         if (title.text.trim().isEmpty) return;
                         setSt(() => sending = true);
-                        await store.sendNotification(title: title.text.trim(), body: body.text.trim(), target: target);
-                        if (!context.mounted) return;
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Imehifadhiwa')),
-                        );
+                        try {
+                          await store.sendNotification(
+                            title: title.text.trim(),
+                            body: body.text.trim(),
+                            target: target,
+                          );
+                          if (!context.mounted) return;
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Imehifadhiwa')),
+                          );
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Imeshindikana kutuma: $e')),
+                          );
+                        } finally {
+                          if (ctx.mounted) {
+                            setSt(() => sending = false);
+                          }
+                        }
                       },
                 child: sending
                     ? const SizedBox(
@@ -211,5 +231,39 @@ class NotificationsScreen extends StatelessWidget {
         );
       },
     );
+  }
+
+  Future<void> _checkPushHealth(BuildContext context, AdminStore store) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 12),
+            Expanded(child: Text('Checking push configuration...')),
+          ],
+        ),
+      ),
+    );
+    try {
+      final msg = await store.checkPushHealth();
+      if (!context.mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Push check failed: $e')),
+      );
+    }
   }
 }

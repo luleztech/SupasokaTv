@@ -13,11 +13,29 @@ export function createApp(): express.Application {
 
   app.disable('x-powered-by');
   app.use(helmet());
-  const corsOptions =
-    env.corsOrigin === '*'
-      ? { origin: true as const }
-      : { origin: env.corsOrigin as string | string[], credentials: true as const };
-  app.use(cors(corsOptions));
+  app.use(
+    cors({
+      credentials: true,
+      origin: (origin, callback) => {
+        // Non-browser or same-origin requests.
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        // Always allow local SupaAdmin web dev origins.
+        if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+          callback(null, true);
+          return;
+        }
+        if (env.corsOrigin === '*') {
+          callback(null, true);
+          return;
+        }
+        const allowed = Array.isArray(env.corsOrigin) ? env.corsOrigin : [env.corsOrigin];
+        callback(null, allowed.includes(origin));
+      },
+    }),
+  );
   app.use(express.json({ limit: '5mb' }));
   app.use(
     pinoHttp({

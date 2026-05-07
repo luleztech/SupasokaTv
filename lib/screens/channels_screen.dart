@@ -96,8 +96,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     // Keep tile height in sync with `ChannelCard(compactGrid: true)` to avoid RenderFlex overflow
     // stripes (yellow/black) on web/desktop.
     const channelGridHeightTrim = 0.0;
-    // One column on typical phones = much wider tiles; two columns on tablets / wide phones.
-    final crossAxis = w >= 420 ? 2 : 1;
+    // Keep two columns on almost all phones to avoid oversized cards in release builds.
+    final crossAxis = w >= 320 ? 2 : 1;
     final cellW = crossAxis == 1 ? (w - hPad * 2) : (w - hPad * 2 - gap) / 2;
     final list = _filtered(channels, fk);
     final innerW = (cellW - channelCardHorizontalInset * 2).clamp(40.0, double.infinity);

@@ -273,41 +273,35 @@ class _LiveMatchCard extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(
-                            height: 15,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                match.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: rajdhani(12, weight: FontWeight.w700).copyWith(
-                                  color: Colors.white,
-                                  height: 1.0,
-                                ),
-                              ),
+                          Text(
+                            match.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: rajdhani(11.5, weight: FontWeight.w700).copyWith(
+                              color: Colors.white,
+                              height: 1.08,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 5),
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               Icon(Ionicons.tv_outline, size: 14, color: t.accent),
                               const SizedBox(width: 5),
                               Expanded(
-                                flex: 3,
+                                flex: 4,
                                 child: Text(
                                   channel.name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: rajdhani(11, weight: FontWeight.w600).copyWith(
+                                  style: rajdhani(10.5, weight: FontWeight.w600).copyWith(
                                     color: Colors.white.withValues(alpha: 0.88),
                                   ),
                                 ),
                               ),
                               if (match.matchTime != null && match.matchTime!.trim().isNotEmpty)
                                 Flexible(
-                                  flex: 2,
+                                  flex: 3,
                                   child: Row(
                                     mainAxisAlignment: MainAxisAlignment.end,
                                     mainAxisSize: MainAxisSize.min,
@@ -320,7 +314,7 @@ class _LiveMatchCard extends StatelessWidget {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           textAlign: TextAlign.end,
-                                          style: rajdhani(10, weight: FontWeight.w600).copyWith(
+                                          style: rajdhani(9.5, weight: FontWeight.w600).copyWith(
                                             color: Colors.white.withValues(alpha: 0.75),
                                           ),
                                         ),

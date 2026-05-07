@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
+import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
 import { deleteUserById, listUsersForAdmin } from '../../services/userDirectory';
-import { sendPushToTopic } from '../../services/pushNotifications';
+import { checkPushConfiguration, sendPushToTopic } from '../../services/pushNotifications';
 
 export const adminRouter = Router();
 
@@ -57,6 +58,25 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
     const out = await sendPushToTopic({ title, body, target });
     res.json({ ok: true, ...out });
   } catch (e) {
-    next(e);
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toLowerCase().includes('fcm credentials missing')) {
+      next(new HttpError(503, 'Push is not configured on server. Set FCM credentials env vars.', 'PUSH_NOT_CONFIGURED'));
+      return;
+    }
+    next(new HttpError(502, `Push send failed: ${msg}`, 'PUSH_SEND_FAILED'));
+  }
+});
+
+adminRouter.get('/notify-health', requireAdmin, async (_req, res, next) => {
+  try {
+    checkPushConfiguration();
+    res.json({ ok: true, message: 'Push configuration looks valid.' });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toLowerCase().includes('fcm credentials missing')) {
+      next(new HttpError(503, 'Push is not configured on server. Set FCM credentials env vars.', 'PUSH_NOT_CONFIGURED'));
+      return;
+    }
+    next(new HttpError(502, `Push health check failed: ${msg}`, 'PUSH_HEALTH_FAILED'));
   }
 });

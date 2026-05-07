@@ -524,7 +524,22 @@ class AdminStore extends ChangeNotifier {
           )
           .timeout(const Duration(seconds: 25));
       if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw Exception('Push send failed (${res.statusCode})');
+        String reason = '';
+        try {
+          final decoded = jsonDecode(res.body);
+          if (decoded is Map) {
+            final err = decoded['error'];
+            if (err is String) {
+              reason = err;
+            } else if (err is Map && err['message'] != null) {
+              reason = '${err['message']}';
+            }
+          }
+        } catch (_) {}
+        if (reason.trim().isEmpty) {
+          reason = 'HTTP ${res.statusCode}';
+        }
+        throw Exception('Push send failed (${res.statusCode}): $reason');
       }
     }
     final id = DateTime.now().millisecondsSinceEpoch.toString();
@@ -539,6 +554,48 @@ class AdminStore extends ChangeNotifier {
       ),
     );
     await _persist();
+  }
+
+  Future<String> checkPushHealth() async {
+    if (!hasAdminSession) {
+      throw Exception('Not logged in. Please login again.');
+    }
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/notify-health');
+    final res = await http
+        .get(
+          uri,
+          headers: {
+            ..._authHeaders(),
+            'Cache-Control': 'no-cache',
+          },
+        )
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded['message'] != null) {
+          return '${decoded['message']}';
+        }
+      } catch (_) {}
+      return 'Push configuration looks valid.';
+    }
+    String reason = '';
+    try {
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        if (err is String) {
+          reason = err;
+        } else if (err is Map && err['message'] != null) {
+          reason = '${err['message']}';
+        }
+      }
+    } catch (_) {}
+    if (reason.trim().isEmpty) {
+      reason = 'HTTP ${res.statusCode}';
+    }
+    throw Exception(reason);
   }
 
   Future<void> deleteNotification(String id) async {

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api.dart';
 import 'package:supasoka/config/api_config.dart';
@@ -13,8 +14,10 @@ import 'package:supasoka/config/payment_helpers.dart'
         isPaymentTerminalFailure,
         normalizedPaymentStatus;
 import 'package:supasoka/services/subscription_store.dart';
+import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
+import 'package:supasoka/data/pay_plan.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const _accentCta = Color(0xFF22C55E);
@@ -98,7 +101,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return created;
   }
 
-  final _bundles = const [
+  static const _fallbackBundles = [
     _Bundle(
       id: 'week',
       name: 'Kwa Wiki',
@@ -127,6 +130,30 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       priceLine: 'Tsh.12,000/= miezi mitatu',
     ),
   ];
+
+  List<_Bundle> _bundlesFromStore(List<PayPlan> plans) {
+    if (plans.isEmpty) return _fallbackBundles;
+    final out = <_Bundle>[];
+    for (final p in plans) {
+      final amountRaw = p.amount.replaceAll(RegExp(r'[^0-9]'), '');
+      final amount = int.tryParse(amountRaw);
+      if (amount == null || amount <= 0) continue;
+      final priceDigits = amount.toString();
+      final priceLine = p.priceLines.trim().isNotEmpty ? p.priceLines.trim().replaceAll('\n', '.') : 'Tsh.$priceDigits/=';
+      out.add(
+        _Bundle(
+          id: p.id,
+          name: p.label.trim().isEmpty ? p.period : p.label,
+          price: priceDigits,
+          duration: p.period,
+          value: amount,
+          popular: p.popular,
+          priceLine: priceLine,
+        ),
+      );
+    }
+    return out.isEmpty ? _fallbackBundles : out;
+  }
 
   bool _phoneValid(String raw) {
     final clean = raw.replaceAll(RegExp(r'\s+'), '');
@@ -533,7 +560,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       return;
     }
 
-    final bundle = _bundles.firstWhere((b) => b.id == _selectedBundle);
+    final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
+    final bundle = bundles.firstWhere(
+      (b) => b.id == _selectedBundle,
+      orElse: () => bundles.first,
+    );
     setState(() => _submitting = true);
     try {
       final result = await paymentsApi.startZenoPayment(
@@ -594,6 +625,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   Widget build(BuildContext context) {
     final bottom = 48.0 + widget.bottomPadding;
     final ac = widget.accentColor;
+    final bundles = _bundlesFromStore(context.watch<ContentStore>().malipoPayPlans);
+    if (_selectedBundle != null && !bundles.any((b) => b.id == _selectedBundle)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _selectedBundle = null);
+      });
+    }
     final canPay = _phoneOk && _selectedBundle != null && !_submitting;
 
     return Material(
@@ -723,7 +761,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         children: [
                           _PayStepTitle(number: '02', title: 'Chagua muda', accent: ac),
                           const SizedBox(height: 16),
-                          ..._bundles.map(
+                          ...bundles.map(
                             (b) => Padding(
                               padding: const EdgeInsets.only(bottom: 12),
                               child: _PriceOptionTile(

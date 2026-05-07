@@ -23,6 +23,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -77,6 +78,7 @@ flutter {
 
 dependencies {
     val media3 = "1.4.1"
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")

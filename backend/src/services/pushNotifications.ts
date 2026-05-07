@@ -59,6 +59,11 @@ function topicForTarget(target: string): string {
   return 'all_users';
 }
 
+export function checkPushConfiguration(): { ok: true } {
+  ensureFirebaseApp();
+  return { ok: true };
+}
+
 export async function sendPushToTopic(input: {
   title: string;
   body: string;
