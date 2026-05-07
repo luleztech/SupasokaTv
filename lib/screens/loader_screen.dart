@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
+import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -37,7 +38,6 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   late final Animation<double> _exitFade;
 
   bool _bootStarted = false;
-  bool _offline = false;
   bool _navigating = false;
   String _status = '';
 
@@ -88,18 +88,14 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     setState(() => _status = _messages.first);
     unawaited(_introCtrl.forward());
 
-    final online = await _hasInternetConnection();
-    if (!mounted) return;
-    if (!online) {
-      setState(() {
-        _offline = true;
-        _status = 'No connection';
-      });
-      _bootStarted = false;
-      return;
+    if (!await _hasInternetConnection()) {
+      if (!mounted) return;
+      await _promptUntilOnline();
+      if (!mounted) return;
     }
 
-    final minSplash = Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (!mounted) return;
+    final minSplash = Future<void>.delayed(const Duration(milliseconds: 700));
     final load = context.read<ContentStore>().bootstrap();
 
     var msgIdx = 0;
@@ -134,17 +130,69 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
     });
   }
 
-  Future<bool> _hasInternetConnection() async {
-    if (kIsWeb) {
-      // `dart:http` to arbitrary hosts from `localhost` is blocked by browser CORS.
-      // A HEAD to example.com always fails on web → falsely showed "No internet".
-      // Proceed to [ContentStore.bootstrap]; load errors surface in-app if the API is unreachable.
-      return true;
+  /// Blocking modal until the device can reach the API or a public host (user taps “Jaribu tena”).
+  Future<void> _promptUntilOnline() async {
+    while (mounted) {
+      if (await _hasInternetConnection()) return;
+      if (!mounted) return;
+
+      // Ensure navigator overlay is ready (first cold-start frame).
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        useRootNavigator: true,
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.78),
+        builder: (ctx) => PopScope(
+          canPop: false,
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+            child: _InternetRequiredDialog(
+              onRetry: () => Navigator.of(ctx).pop(),
+            ),
+          ),
+        ),
+      );
     }
+  }
+
+  Future<bool> _hasInternetConnection() async {
+    final origin = apiConfigUrl.trim().replaceAll(RegExp(r'/$'), '');
+    if (origin.isNotEmpty) {
+      try {
+        final uri = Uri.parse('$origin/api/v1/public/config-meta').replace(
+          queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+        );
+        final res = await http.get(
+          uri,
+          headers: const {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+          },
+        ).timeout(Duration(seconds: kIsWeb ? 10 : 5));
+        if (res.statusCode == 200) return true;
+      } catch (_) {}
+    }
+
+    if (kIsWeb) {
+      // Same-origin / CORS-configured API request above is the reliable probe on web.
+      // Do not assume "online" here — that hid this modal entirely for `flutter run -d chrome`.
+      if (origin.isEmpty) return true;
+      return false;
+    }
+
     try {
       final response = await http
           .head(Uri.parse('https://www.example.com'))
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 2));
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -162,20 +210,6 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    if (_offline) {
-      return Scaffold(
-        backgroundColor: _splashBgTop,
-        body: _OfflineCard(onRetry: () {
-          setState(() {
-            _offline = false;
-            _status = '';
-          });
-          _bootStarted = false;
-          _runBoot();
-        }),
-      );
-    }
-
     final size = MediaQuery.sizeOf(context);
 
     return Scaffold(
@@ -395,83 +429,72 @@ class _BrandMark extends StatelessWidget {
   }
 }
 
-class _OfflineCard extends StatelessWidget {
-  const _OfflineCard({required this.onRetry});
+class _InternetRequiredDialog extends StatelessWidget {
+  const _InternetRequiredDialog({required this.onRetry});
 
   final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        const ColoredBox(color: _splashBgTop),
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 400),
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: _splashAccent.withValues(alpha: 0.22),
-                ),
-                color: const Color(0xFF101018),
-                boxShadow: [
-                  BoxShadow(
-                    color: _splashAccent.withValues(alpha: 0.12),
-                    blurRadius: 40,
-                    offset: const Offset(0, 20),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [
-                          _splashAccent.withValues(alpha: 0.35),
-                          _splashAccent.withValues(alpha: 0.12),
-                        ],
-                      ),
-                    ),
-                    child: const Icon(Ionicons.cloud_offline_outline, size: 34, color: Colors.white),
-                  ),
-                  const SizedBox(height: 22),
-                  Text(
-                    'Hakuna muunganiko wa internet',
-                    textAlign: TextAlign.center,
-                    style: orbitron(18, weight: FontWeight.w800).copyWith(color: Colors.white),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Mpendwa mteja hakuna muunganiko wa internet hakikisha umewasha data katika simu yako na una MB.',
-                    textAlign: TextAlign.center,
-                    style: rajdhani(14).copyWith(color: Colors.white70, height: 1.45),
-                  ),
-                  const SizedBox(height: 26),
-                  FilledButton(
-                    onPressed: onRetry,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _splashAccent,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                    child: Text('Retry', style: rajdhani(15, weight: FontWeight.w700)),
-                  ),
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 400),
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: _splashAccent.withValues(alpha: 0.22),
+        ),
+        color: const Color(0xFF101018),
+        boxShadow: [
+          BoxShadow(
+            color: _splashAccent.withValues(alpha: 0.12),
+            blurRadius: 40,
+            offset: const Offset(0, 20),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  _splashAccent.withValues(alpha: 0.35),
+                  _splashAccent.withValues(alpha: 0.12),
                 ],
               ),
             ),
+            child: const Icon(Ionicons.cloud_offline_outline, size: 34, color: Colors.white),
           ),
-        ),
-      ],
+          const SizedBox(height: 22),
+          Text(
+            'Hakuna muunganiko wa internet',
+            textAlign: TextAlign.center,
+            style: orbitron(18, weight: FontWeight.w800).copyWith(color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Washa data ya simu au Wi‑Fi, kisha ujaribu tena. Bila mtandao huwezi kupakia channels.',
+            textAlign: TextAlign.center,
+            style: rajdhani(14).copyWith(color: Colors.white70, height: 1.45),
+          ),
+          const SizedBox(height: 26),
+          FilledButton(
+            onPressed: onRetry,
+            style: FilledButton.styleFrom(
+              backgroundColor: _splashAccent,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            child: Text('Jaribu tena', style: rajdhani(15, weight: FontWeight.w700)),
+          ),
+        ],
+      ),
     );
   }
 }

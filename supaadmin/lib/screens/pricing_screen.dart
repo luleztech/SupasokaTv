@@ -44,8 +44,12 @@ class PricingScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: narrow
-                    ? ListView.separated(
+                child: list.isEmpty
+                    ? _MalipoEmptyCallout(
+                        onAdd: () => showMalipoPlanSheet(context, store, null),
+                      )
+                    : narrow
+                        ? ListView.separated(
                         physics: const BouncingScrollPhysics(),
                         itemCount: list.length,
                         separatorBuilder: (context, _) => const SizedBox(height: 10),
@@ -71,6 +75,7 @@ class PricingScreen extends StatelessWidget {
                               ),
                               columns: const [
                                 DataColumn(label: Text('Kitambulisho')),
+                                DataColumn(label: Text('Jina')),
                                 DataColumn(label: Text('Kipindi')),
                                 DataColumn(label: Text('Beji')),
                                 DataColumn(label: Text('Kiasi')),
@@ -99,6 +104,10 @@ class PricingScreen extends StatelessWidget {
 
     return [
       DataCell(Text(m.id), onTap: edit),
+      DataCell(
+        Text(m.label.trim().isEmpty ? '—' : m.label),
+        onTap: edit,
+      ),
       DataCell(Text(m.period), onTap: edit),
       DataCell(
         Text(m.badge.isEmpty ? '—' : m.badge),
@@ -140,7 +149,9 @@ class PricingScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Futa mpango?'),
-        content: Text('Una uhakika unataka kuondoa mpango wa "${m.period}"?'),
+        content: Text(
+          'Una uhakika unataka kuondoa mpango wa "${m.label.trim().isNotEmpty ? m.label : m.period}"?',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Futa')),
@@ -148,6 +159,68 @@ class PricingScreen extends StatelessWidget {
       ),
     );
     if (ok == true) await store.deleteMalipo(m.id);
+  }
+}
+
+class _MalipoEmptyCallout extends StatelessWidget {
+  const _MalipoEmptyCallout({required this.onAdd});
+
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            gradient: LinearGradient(
+              colors: [
+                cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                cs.surface.withValues(alpha: 0.15),
+              ],
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(26, 30, 26, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.price_change_outlined, size: 48, color: cs.primary.withValues(alpha: 0.95)),
+                const SizedBox(height: 18),
+                Text(
+                  'Hakuna mipango ya malipo',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.3,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Ongeza mpango wa kwanza (bei TZS, jina na kipindi). Baada ya uhifadhi, uhakikishe seva imesasishwa ili bei ionekane kwenye programu ya mtazamaji.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.52),
+                    height: 1.45,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                FilledButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Ongeza mpango wa kwanza'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -165,6 +238,8 @@ class _MalipoPlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final title = m.label.trim().isNotEmpty ? m.label : m.period;
+    final showPeriodSubtitle = m.label.trim().isNotEmpty && m.label.trim() != m.period.trim();
 
     return Material(
       color: Colors.transparent,
@@ -226,7 +301,21 @@ class _MalipoPlanCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Text(m.period, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                    ),
+                    if (showPeriodSubtitle) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        m.period,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.52),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Text(
                       m.amount,
@@ -236,14 +325,9 @@ class _MalipoPlanCard extends StatelessWidget {
                         color: cs.primary,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      m.period,
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontWeight: FontWeight.w600),
-                    ),
                     const SizedBox(height: 6),
                     Text(
-                      'Gusa kuhariri bei, kipindi na beji',
+                      'Gusa kuhariri bei, jina, kipindi na beji',
                       style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.35)),
                     ),
                   ],

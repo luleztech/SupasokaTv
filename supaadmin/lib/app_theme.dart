@@ -78,7 +78,6 @@ ThemeData adminTheme() {
       behavior: SnackBarBehavior.floating,
       elevation: 8,
       backgroundColor: const Color(0xFF2f3548),
-      surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),

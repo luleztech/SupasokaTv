@@ -111,7 +111,7 @@ class _MainShellState extends State<MainShell> {
                   _TabButton(i: 1, label: 'Live', outline: Ionicons.radio_outline, solid: Ionicons.radio, selected: nav.currentTab == 1),
                   _TabButton(i: 2, label: 'Channels', outline: Ionicons.tv_outline, solid: Ionicons.tv, selected: nav.currentTab == 2),
                   _TabButton(i: 3, label: 'Fungua zote', outline: Ionicons.key_outline, solid: Ionicons.key, selected: nav.currentTab == 3),
-                  _TabButton(i: 4, label: 'Profile', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
+                  _TabButton(i: 4, label: 'Mtumiaji', outline: Ionicons.person_outline, solid: Ionicons.person, selected: nav.currentTab == 4),
                 ],
               ),
             ),

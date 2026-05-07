@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -28,16 +29,35 @@ Future<void> main() async {
     statusBarIconBrightness: Brightness.light,
     statusBarBrightness: Brightness.dark,
   ));
+  // Keep only fast local reads before first frame — Firebase + network sync runs after [runApp].
   final themeController = await ThemeController.load();
-  await PushNotificationService.initialize();
   await SubscriptionStore.refreshNotifierFromPrefs();
-  await SubscriptionStore.syncPremiumFromBackend(); // Sync premium on app start
-  final isPremiumAtBoot = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
-  await PushNotificationService.syncAudienceTopics(isPremium: isPremiumAtBoot);
-  final publicIdAtBoot = await UserIdentity.getOrCreatePublicId();
-  await PushNotificationService.syncDirectUserTopic(publicIdAtBoot);
   final contentStore = ContentStore();
   runApp(SupasokaApp(themeController: themeController, contentStore: contentStore));
+  unawaited(_initializeDeferredServices());
+}
+
+/// Push, premium sync, and topics — must not block cold start / splash first paint.
+Future<void> _initializeDeferredServices() async {
+  try {
+    await PushNotificationService.initialize();
+  } catch (e, st) {
+    if (kDebugMode) {
+      debugPrint('Deferred FCM init failed: $e\n$st');
+    }
+  }
+  try {
+    await SubscriptionStore.syncPremiumFromBackend();
+    final isPremium =
+        SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
+    final publicId = await UserIdentity.getOrCreatePublicId();
+    await PushNotificationService.syncDirectUserTopic(publicId);
+  } catch (e, st) {
+    if (kDebugMode) {
+      debugPrint('Deferred subscription/topics sync failed: $e\n$st');
+    }
+  }
 }
 
 class SupasokaApp extends StatelessWidget {

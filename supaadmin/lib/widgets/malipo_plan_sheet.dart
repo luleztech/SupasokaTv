@@ -59,6 +59,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
   /// Nullable + lazy init so Flutter web hot reload cannot leave fields as JS `undefined`
   /// (which throws on `.text`).
   TextEditingController? _priceCtrl;
+  TextEditingController? _labelCtrl;
   TextEditingController? _periodCtrl;
   TextEditingController? _badgeCtrl;
   FocusNode? _priceFocus;
@@ -68,6 +69,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
     final e = widget.existing;
     final existingDigits = e == null ? '' : (_digitsAsInt(e.amount)?.toString() ?? '');
     _priceCtrl ??= TextEditingController(text: existingDigits);
+    _labelCtrl ??= TextEditingController(text: e?.label ?? '');
     _periodCtrl ??= TextEditingController(text: e?.period ?? '');
     _badgeCtrl ??= TextEditingController(text: e?.badge ?? '');
     _priceFocus ??= FocusNode();
@@ -91,6 +93,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
   @override
   void dispose() {
     _priceCtrl?.dispose();
+    _labelCtrl?.dispose();
     _periodCtrl?.dispose();
     _badgeCtrl?.dispose();
     _priceFocus?.dispose();
@@ -100,6 +103,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
   Future<void> _save() async {
     _ensureControllers();
     final price = _priceCtrl!;
+    final labelC = _labelCtrl!;
     final periodC = _periodCtrl!;
     final badgeC = _badgeCtrl!;
     final tzs = _digitsAsInt(price.text);
@@ -120,6 +124,8 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
       }
       return;
     }
+    final labelText = labelC.text.trim();
+    final labelForDto = labelText.isNotEmpty ? labelText : period;
 
     HapticFeedback.mediumImpact();
 
@@ -132,7 +138,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
 
     final dto = MalipoPlanDto(
       id: id,
-      label: period,
+      label: labelForDto,
       priceLines: priceLines,
       amount: amountDisplay,
       period: period,
@@ -231,7 +237,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Bei kwa TZS, kipindi kinachoonekana kwenye kadi, na beji ya hiari.',
+                          'Bei kwa TZS, jina la kadi, kipindi, na beji ya hiari.',
                           style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.48),
                             fontSize: 13,
@@ -294,11 +300,31 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                     const SizedBox(height: 20),
                     TextField(
                       spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                      controller: _labelCtrl!,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Jina la mpango',
+                        hintText: 'Wiki 1 · Mwezi 1',
+                        prefixIcon: Icon(Icons.title_rounded),
+                        filled: true,
+                        fillColor: Color(0xFF121722),
+                      ),
+                      textInputAction: TextInputAction.next,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Kama ukiacha tupu, tutatumia “Kipindi” kama jina la kadi.',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.38), fontSize: 11.5, height: 1.35),
+                    ),
+                    const SizedBox(height: 20),
+                    TextField(
+                      spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _periodCtrl!,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: const InputDecoration(
                         labelText: 'Kipindi',
-                        hintText: 'Wiki 1 · Mwezi 1',
+                        hintText: 'Mfano: 7 siku · mwezi mmoja',
                         prefixIcon: Icon(Icons.schedule_rounded),
                         filled: true,
                         fillColor: Color(0xFF121722),

@@ -18,10 +18,8 @@ import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
 import 'package:supasoka/data/pay_plan.dart';
-import 'package:supasoka/widgets/whatsapp_fab.dart';
 
 const _accentCta = Color(0xFF22C55E);
-const _accentCtaDark = Color(0xFF16A34A);
 const _accentBlue = Color(0xFF2563EB);
 
 const _tzPrefixes = [
@@ -100,45 +98,16 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return created;
   }
 
-  static const _fallbackBundles = [
-    _Bundle(
-      id: 'week',
-      name: 'Kwa Wiki',
-      price: '2,000',
-      duration: '7 siku',
-      value: 2000,
-      popular: false,
-      priceLine: 'Tsh.2,000/= wiki moja',
-    ),
-    _Bundle(
-      id: 'month',
-      name: 'Mwezi',
-      price: '5,000',
-      duration: '30 siku',
-      value: 5000,
-      popular: true,
-      priceLine: 'Tsh.5,000/= mwezi mmoja',
-    ),
-    _Bundle(
-      id: 'year',
-      name: 'Miezi 3',
-      price: '12,000',
-      duration: 'miezi 3',
-      value: 12000,
-      popular: false,
-      priceLine: 'Tsh.12,000/= miezi mitatu',
-    ),
-  ];
-
   List<_Bundle> _bundlesFromStore(List<PayPlan> plans) {
-    if (plans.isEmpty) return _fallbackBundles;
     final out = <_Bundle>[];
     for (final p in plans) {
       final amountRaw = p.amount.replaceAll(RegExp(r'[^0-9]'), '');
       final amount = int.tryParse(amountRaw);
       if (amount == null || amount <= 0) continue;
       final priceDigits = amount.toString();
-      final priceLine = p.priceLines.trim().isNotEmpty ? p.priceLines.trim().replaceAll('\n', '.') : 'Tsh.$priceDigits/=';
+      final priceLine = p.priceLines.trim().isNotEmpty
+          ? p.priceLines.trim().replaceAll('\n', '. ')
+          : 'TSh $priceDigits/=';
       out.add(
         _Bundle(
           id: p.id,
@@ -148,10 +117,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           value: amount,
           popular: p.popular,
           priceLine: priceLine,
+          accent1: p.accent1,
+          accent2: p.accent2,
+          badge: p.badge,
         ),
       );
     }
-    return out.isEmpty ? _fallbackBundles : out;
+    return out;
   }
 
   bool _phoneValid(String raw) {
@@ -509,6 +481,15 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Future<void> _send() async {
+    final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
+    if (bundles.isEmpty) {
+      _showStatus(
+        'Mipango hayajapatikana',
+        'Bei zinasimamiwa na msimamizi kwenye SupaAdmin (Malipo). Sasisha ukurasa huu baada ya kuweka mipango.',
+        _PayDialogTone.info,
+      );
+      return;
+    }
     if (_selectedBundle == null) {
       _showStatus('Chagua bundle', 'Tafadhali chagua bundle unayotaka kulipa.', _PayDialogTone.error);
       return;
@@ -531,17 +512,29 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       return;
     }
 
-    final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
-    final bundle = bundles.firstWhere(
-      (b) => b.id == _selectedBundle,
-      orElse: () => bundles.first,
-    );
+    _Bundle? bundle;
+    for (final b in bundles) {
+      if (b.id == _selectedBundle) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) {
+      _showStatus(
+        'Chagua mpango tena',
+        'Mipango yalisasishwa. Chagua bei/kipindi tena.',
+        _PayDialogTone.info,
+      );
+      return;
+    }
+    final plan = bundle;
+
     setState(() => _submitting = true);
     try {
       final result = await paymentsApi.startZenoPayment(
         externalId: _userId!,
-        bundle: bundle.id,
-        amount: bundle.value,
+        bundle: plan.id,
+        amount: plan.value,
         phone: clean,
         email: '$_userId@eamax.app',
         name: _userId!,
@@ -552,19 +545,19 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (orderId.isNotEmpty) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pendingPaymentOrderId', orderId);
-        await prefs.setString('pendingPaymentPlanId', bundle.id);
+        await prefs.setString('pendingPaymentPlanId', plan.id);
         await prefs.setString('pendingPaymentPhone', clean);
         if (!mounted) return;
         setState(() {
           _pollingOrderId = orderId;
           _notFoundStreak = 0;
           _paymentUiPhase = _PaymentUiPhase.instruction;
-          _pendingBundleLabel = bundle.name;
+          _pendingBundleLabel = plan.name;
         });
       } else {
         final msg = serverMsg.isNotEmpty
             ? serverMsg
-            : 'Ombi la malipo la Tsh.${bundle.price} (${bundle.name}) limepokelewa kwa $clean. Ikiwa hutooni ujumbe kwenye simu, jaribu tena au wasiliana na msaada.';
+            : 'Ombi la malipo la Tsh.${plan.price} (${plan.name}) limepokelewa kwa $clean. Ikiwa hutooni ujumbe kwenye simu, jaribu tena au wasiliana na msaada.';
         _showStatus('Tumepokea ombi', msg, _PayDialogTone.info);
       }
     } catch (e) {
@@ -595,11 +588,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   @override
   Widget build(BuildContext context) {
     final safeBottom = MediaQuery.paddingOf(context).bottom;
-    /// Keep scroll content above the floating WhatsApp button (size 56 + gap + breathing room).
-    final bottom =
-        24 + 56 + kWhatsAppFabGapAboveBottom + safeBottom + widget.bottomPadding;
+    final bottom = 28 + safeBottom + widget.bottomPadding;
     final ac = widget.accentColor;
-    final bundles = _bundlesFromStore(context.watch<ContentStore>().malipoPayPlans);
+    final content = context.watch<ContentStore>();
+    final bundles = _bundlesFromStore(content.malipoPayPlans);
     if (_selectedBundle != null && !bundles.any((b) => b.id == _selectedBundle)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -616,9 +608,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           SafeArea(
             top: true,
             bottom: false,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(22, 8, 22, bottom),
-              child: Column(
+            child: RefreshIndicator(
+              color: _accentCta,
+              onRefresh: () => context.read<ContentStore>().refresh(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(22, 8, 22, bottom),
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _Reveal(
@@ -735,17 +731,24 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         children: [
                           _PayStepTitle(number: '02', title: 'Chagua muda', accent: ac),
                           const SizedBox(height: 16),
-                          ...bundles.map(
-                            (b) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _PriceOptionTile(
-                                bundle: b,
-                                accent: ac,
-                                selected: _selectedBundle == b.id,
-                                onTap: () => setState(() => _selectedBundle = b.id),
+                          if (bundles.isEmpty)
+                            _MalipoPlansEmptyPanel(
+                              accent: ac,
+                              refreshing: content.refreshing,
+                              onRefresh: () => context.read<ContentStore>().refresh(),
+                            )
+                          else
+                            ...bundles.map(
+                              (b) => Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _PriceOptionTile(
+                                  bundle: b,
+                                  accent: ac,
+                                  selected: _selectedBundle == b.id,
+                                  onTap: () => setState(() => _selectedBundle = b.id),
+                                ),
                               ),
                             ),
-                          ),
                         ],
                       ),
                       ),
@@ -760,36 +763,16 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                     child: canPay
                         ? Padding(
                             key: const ValueKey('pay-button'),
-                            padding: const EdgeInsets.only(top: 12),
+                            padding: const EdgeInsets.only(top: 16),
                             child: TweenAnimationBuilder<double>(
-                              tween: Tween(begin: 0.97, end: 1.0),
-                              duration: const Duration(milliseconds: 230),
-                              curve: Curves.easeOutBack,
+                              tween: Tween(begin: 0.98, end: 1.0),
+                              duration: const Duration(milliseconds: 280),
+                              curve: Curves.easeOutCubic,
                               builder: (_, scale, child) =>
                                   Transform.scale(scale: scale, child: child),
-                              child: SizedBox(
-                                height: 58,
-                                child: FilledButton.icon(
-                                  onPressed: _send,
-                                  icon: _submitting
-                                      ? const SizedBox(
-                                          width: 22,
-                                          height: 22,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Icon(Icons.bolt_rounded),
-                                  label: Text(_submitting ? 'Inatuma...' : 'Lipia sasa'),
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: _accentCtaDark,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                  ),
-                                ),
+                              child: _PremiumPayCta(
+                                submitting: _submitting,
+                                onPressed: _send,
                               ),
                             ),
                           )
@@ -804,6 +787,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                   ],
                 ],
               ),
+            ),
             ),
           ),
           if (_paymentUiPhase == _PaymentUiPhase.instruction && _pollingOrderId != null)
@@ -876,10 +860,115 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                     ),
                   ),
                 ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Full-width premium CTA — gradient, glow, clear hierarchy (Fungua zote tab only; no WhatsApp FAB here).
+class _PremiumPayCta extends StatelessWidget {
+  const _PremiumPayCta({required this.submitting, required this.onPressed});
+
+  final bool submitting;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    const gradient = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFF4ADE80),
+        Color(0xFF22C55E),
+        Color(0xFF15803D),
+      ],
+      stops: [0.0, 0.48, 1.0],
+    );
+    return SizedBox(
+      width: double.infinity,
+      height: 60,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: gradient,
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF22C55E).withValues(alpha: 0.42),
+              blurRadius: 22,
+              spreadRadius: -4,
+              offset: const Offset(0, 12),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: submitting ? null : onPressed,
+            borderRadius: BorderRadius.circular(20),
+            splashColor: Colors.white.withValues(alpha: 0.18),
+            highlightColor: Colors.white.withValues(alpha: 0.08),
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+              ),
+              child: Center(
+                child: submitting
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Inatuma…',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.bolt_rounded, color: Colors.white.withValues(alpha: 0.95), size: 26),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Lipia sasa',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.98),
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.35,
+                            ),
+                          ),
+                        ],
+                      ),
               ),
             ),
-          const WhatsAppFab(),
-        ],
+          ),
+        ),
       ),
     );
   }
@@ -1205,6 +1294,82 @@ class _PayStepTitle extends StatelessWidget {
   }
 }
 
+class _MalipoPlansEmptyPanel extends StatelessWidget {
+  const _MalipoPlansEmptyPanel({
+    required this.accent,
+    required this.refreshing,
+    required this.onRefresh,
+  });
+
+  final Color accent;
+  final bool refreshing;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 22),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _payLine),
+        color: _paySurface2.withValues(alpha: 0.65),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(
+            Icons.settings_suggest_rounded,
+            size: 42,
+            color: accent.withValues(alpha: 0.85),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'Hakuna vifurushi',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Vifurushi vitaonekana pale admin akiweka kwasasa furahia channel za bure ahsante',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13.5,
+              height: 1.45,
+              color: _payMuted.withValues(alpha: 0.95),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.tonalIcon(
+            onPressed: refreshing ? null : () => onRefresh(),
+            icon: refreshing
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: accent.withValues(alpha: 0.9),
+                    ),
+                  )
+                : const Icon(Icons.sync_rounded, size: 20),
+            label: Text(refreshing ? 'inatafuta...' : 'Jaribu tena'),
+            style: FilledButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: accent.withValues(alpha: 0.22),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PriceOptionTile extends StatelessWidget {
   const _PriceOptionTile({
     required this.bundle,
@@ -1219,46 +1384,123 @@ class _PriceOptionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lineAccent = bundle.accent1;
+    final lineAccent2 = bundle.accent2;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(20),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: selected ? _accentCta.withValues(alpha: 0.65) : _payLine,
-              width: selected ? 1.5 : 1,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: Ink(
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: selected ? _accentCta.withValues(alpha: 0.65) : _payLine,
+                width: selected ? 1.5 : 1,
+              ),
+              color: _paySurface,
             ),
-            color: _paySurface,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        bundle.priceLine,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                        ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 5,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [lineAccent, lineAccent2],
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${bundle.name}  ·  ${bundle.duration}',
-                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: _payMuted),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-                if (selected) const Icon(Icons.check_rounded, color: _accentCta),
-              ],
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        bundle.priceLine,
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                    if (bundle.badge.trim().isNotEmpty)
+                                      Container(
+                                        margin: const EdgeInsets.only(left: 8),
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(999),
+                                          border: Border.all(
+                                            color: lineAccent.withValues(alpha: 0.55),
+                                          ),
+                                          color: lineAccent.withValues(alpha: 0.14),
+                                        ),
+                                        child: Text(
+                                          bundle.badge.trim(),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: 0.5,
+                                            color: lineAccent.withValues(alpha: 1),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${bundle.name}  ·  ${bundle.duration}',
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w500,
+                                    color: _payMuted,
+                                  ),
+                                ),
+                                if (bundle.popular) ...[
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Icon(Icons.star_rounded, size: 15, color: accent.withValues(alpha: 0.9)),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Mpango maarufu',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: accent.withValues(alpha: 0.85),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (selected)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 6),
+                              child: Icon(Icons.check_rounded, color: _accentCta),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1276,6 +1518,9 @@ class _Bundle {
     required this.value,
     required this.popular,
     required this.priceLine,
+    required this.accent1,
+    required this.accent2,
+    this.badge = '',
   });
   final String id;
   final String name;
@@ -1284,6 +1529,9 @@ class _Bundle {
   final int value;
   final bool popular;
   final String priceLine;
+  final Color accent1;
+  final Color accent2;
+  final String badge;
 }
 
 class _Reveal extends StatelessWidget {
