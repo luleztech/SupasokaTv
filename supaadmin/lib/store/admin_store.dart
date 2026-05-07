@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -49,6 +50,7 @@ class AdminStore extends ChangeNotifier {
 
   String? _lastSyncError;
   bool _syncing = false;
+  Timer? _syncRetryTimer;
 
   AppConfig get config => _config;
 
@@ -131,6 +133,7 @@ class AdminStore extends ChangeNotifier {
     if (hasAdminSession) {
       await pullConfigFromServer();
     }
+    _ensureAutoSyncRetryLoop();
   }
 
   Future<String?> login(String password) async {
@@ -179,6 +182,28 @@ class AdminStore extends ChangeNotifier {
     if (hasAdminSession) {
       await pullConfigFromServer();
     }
+    _ensureAutoSyncRetryLoop();
+  }
+
+  @override
+  void dispose() {
+    _syncRetryTimer?.cancel();
+    super.dispose();
+  }
+
+  void _ensureAutoSyncRetryLoop() {
+    _syncRetryTimer?.cancel();
+    if (!hasAdminSession) return;
+    _syncRetryTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!hasAdminSession || _syncing) return;
+      if (_lastSyncError == null || _lastSyncError!.isEmpty) return;
+      _pushConfigToServer();
+    });
+  }
+
+  void _normalizeConfigForServer() {
+    final validChannelIds = _config.channels.map((c) => c.id).toSet();
+    _config.carousel.removeWhere((s) => !validChannelIds.contains(s.channelId));
   }
 
   Future<void> pullConfigFromServer() async {
@@ -302,6 +327,7 @@ class AdminStore extends ChangeNotifier {
     }
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/admin/import');
+    _normalizeConfigForServer();
     _syncing = true;
     _lastSyncError = null;
     notifyListeners();
@@ -351,6 +377,7 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> _persist() async {
+    _normalizeConfigForServer();
     if (hasAdminSession) {
       await _mergeRegisteredUsersFromApi();
     }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:chewie/chewie.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
@@ -9,11 +10,16 @@ import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/player/php_gateway_js.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
+import 'package:supasoka/player/playback_http_headers.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
+/// Shown for any stream/decoder failure — never expose URLs, stack traces, or PlatformException text.
+const _kPlaybackUnavailableCopy =
+    'Mafundi wetu wanafanyia kazi. Channel itarejea hivi punde.';
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key, required this.channelId});
@@ -22,6 +28,24 @@ class PlayerScreen extends StatefulWidget {
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
+}
+
+enum _PlayerIssue {
+  /// Config / list problem — still non-technical (no IDs or URLs).
+  missingChannel,
+  noStreamUrl,
+  playbackUnavailable,
+}
+
+String _copyForIssue(_PlayerIssue issue) {
+  switch (issue) {
+    case _PlayerIssue.missingChannel:
+      return 'Kituo hakipatikani. Jaribu tena baadaye.';
+    case _PlayerIssue.noStreamUrl:
+      return 'Kituo hiki hakina mfululizo kwa sasa.';
+    case _PlayerIssue.playbackUnavailable:
+      return _kPlaybackUnavailableCopy;
+  }
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
@@ -33,8 +57,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   WebViewController? _web;
 
   bool _loading = true;
-  String? _error;
+  _PlayerIssue? _issue;
   bool _useWebView = false;
+  /// On web, retry once with WebView when video_player (HLS/DASH) fails.
+  bool _webFallbackAttempted = false;
 
   @override
   void initState() {
@@ -56,7 +82,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (ch == null) {
       setState(() {
         _loading = false;
-        _error = 'Kituo hakipatikani. Pakia upya orodha.';
+        _issue = _PlayerIssue.missingChannel;
       });
       return;
     }
@@ -64,19 +90,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (url.isEmpty) {
       setState(() {
         _loading = false;
-        _error = 'Hakuna URL ya mfululizo kwa kituo hiki.';
+        _issue = _PlayerIssue.noStreamUrl;
       });
       return;
     }
 
     if (NativeAndroidPlayer.supported) {
-      await NativeAndroidPlayer.open(url: url);
+      await NativeAndroidPlayer.open(
+        url: url,
+        headers: playbackHttpHeaders(url),
+      );
       if (mounted) Navigator.of(context).pop();
       return;
     }
 
     final isPhpGateway = StreamUrlClassifier.isPhpLikeUrl(url);
-    final hasDirectStream = StreamUrlClassifier.hasObviousM3u8(url) || StreamUrlClassifier.hasObviousMpd(url);
+    final hasDirectStream = StreamUrlClassifier.hasObviousM3u8(url) ||
+        StreamUrlClassifier.hasObviousMpd(url) ||
+        StreamUrlClassifier.hasObviousTs(url);
     _useWebView = isPhpGateway && !hasDirectStream;
     if (_useWebView) {
       await _initWebView(url);
@@ -87,8 +118,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _initWebView(String url) async {
     try {
-      // Build controller in steps so closures can close over `controller` after it exists
-      // (cascade + onPageFinished caused "referenced before declared" on web compile).
       final controller = WebViewController();
       await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       await controller.setUserAgent(kBrowserPlaybackUserAgent);
@@ -101,43 +130,110 @@ class _PlayerScreenState extends State<PlayerScreen> {
           },
           onWebResourceError: (WebResourceError error) {
             if (!mounted) return;
-            if (_error == null && error.errorCode != -3) {
-              setState(() => _error = error.description);
-            }
+            // -3 is often cancelled navigation; ignore for UX.
+            if (error.errorCode == -3) return;
+            setState(() {
+              _loading = false;
+              _issue = _PlayerIssue.playbackUnavailable;
+            });
           },
         ),
       );
 
-      await controller.loadRequest(Uri.parse(url));
+      final headers = playbackHttpHeaders(url);
+      await controller.loadRequest(
+        Uri.parse(url),
+        headers: Map<String, String>.from(headers),
+      );
       if (!mounted) return;
       setState(() {
         _web = controller;
         _loading = false;
-        _error = null;
+        _issue = null;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'WebView: $e';
+        _issue = _PlayerIssue.playbackUnavailable;
       });
     }
+  }
+
+  VideoFormat? _formatHintForUrl(String url) {
+    if (StreamUrlClassifier.hasObviousM3u8(url)) return VideoFormat.hls;
+    if (StreamUrlClassifier.hasObviousMpd(url)) return VideoFormat.dash;
+    return null;
+  }
+
+  void _onNativeVideoEvent() {
+    final v = _video;
+    if (v == null || !mounted || _useWebView) return;
+    if (!v.value.hasError) return;
+
+    assert(() {
+      debugPrint('Supasoka player: native stream error (details omitted in UI)');
+      return true;
+    }());
+
+    final url = _channel?.streamUrl.trim() ?? '';
+    if (url.isEmpty) {
+      _disposeNativeControllers();
+      setState(() {
+        _loading = false;
+        _issue = _PlayerIssue.playbackUnavailable;
+      });
+      return;
+    }
+
+    if (kIsWeb && !_webFallbackAttempted) {
+      _webFallbackAttempted = true;
+      unawaited(_switchFromNativeToWebView(url));
+      return;
+    }
+
+    _disposeNativeControllers();
+    setState(() {
+      _loading = false;
+      _issue = _PlayerIssue.playbackUnavailable;
+    });
+  }
+
+  Future<void> _switchFromNativeToWebView(String url) async {
+    _video?.removeListener(_onNativeVideoEvent);
+    _chewie?.dispose();
+    _chewie = null;
+    await _video?.dispose();
+    _video = null;
+    if (!mounted) return;
+    _useWebView = true;
+    setState(() {
+      _loading = true;
+      _issue = null;
+    });
+    await _initWebView(url);
+  }
+
+  void _disposeNativeControllers() {
+    _video?.removeListener(_onNativeVideoEvent);
+    _chewie?.dispose();
+    _chewie = null;
+    _video?.dispose();
+    _video = null;
   }
 
   Future<void> _initNativePlayer(String url) async {
     final t = context.read<ThemeController>().colors;
     try {
       final uri = Uri.parse(url);
-      final formatHint = StreamUrlClassifier.hasObviousM3u8(url)
-          ? VideoFormat.hls
-          : StreamUrlClassifier.hasObviousMpd(url)
-              ? VideoFormat.dash
-              : null;
+      final formatHint = _formatHintForUrl(url);
 
+      final headers = playbackHttpHeaders(url);
       final video = formatHint != null
-          ? VideoPlayerController.networkUrl(uri, formatHint: formatHint)
-          : VideoPlayerController.networkUrl(uri);
+          ? VideoPlayerController.networkUrl(uri, formatHint: formatHint, httpHeaders: headers)
+          : VideoPlayerController.networkUrl(uri, httpHeaders: headers);
       await video.initialize();
+      video.addListener(_onNativeVideoEvent);
 
       final chewie = ChewieController(
         videoPlayerController: video,
@@ -154,20 +250,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
           bufferedColor: Colors.white38,
         ),
         aspectRatio: video.value.aspectRatio > 0 ? video.value.aspectRatio : 16 / 9,
-        errorBuilder: (_, msg) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              msg,
-              textAlign: TextAlign.center,
-              style: rajdhani(14).copyWith(color: Colors.white70),
-            ),
+        errorBuilder: (context, errorMessage) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _kPlaybackUnavailableCopy,
+            textAlign: TextAlign.center,
+            style: rajdhani(14, weight: FontWeight.w600).copyWith(color: Colors.white70, height: 1.35),
           ),
         ),
       );
 
       if (!mounted) {
         chewie.dispose();
+        video.removeListener(_onNativeVideoEvent);
         await video.dispose();
         return;
       }
@@ -176,19 +271,48 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _video = video;
         _chewie = chewie;
         _loading = false;
-        _error = null;
+        _issue = null;
       });
-    } catch (e) {
+    } catch (_) {
+      assert(() {
+        debugPrint('Supasoka player: init failed (details omitted in UI)');
+        return true;
+      }());
+
+      if (mounted && kIsWeb && !_webFallbackAttempted && !_useWebView) {
+        _webFallbackAttempted = true;
+        _useWebView = true;
+        setState(() {
+          _loading = true;
+          _issue = null;
+        });
+        await _initWebView(url);
+        return;
+      }
+
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Imeshindikana kucheza: $e';
+        _issue = _PlayerIssue.playbackUnavailable;
       });
     }
   }
 
+  Future<void> _resetAndBootstrap() async {
+    _disposeNativeControllers();
+    _web = null;
+    setState(() {
+      _issue = null;
+      _loading = true;
+      _webFallbackAttempted = false;
+      _useWebView = false;
+    });
+    await _bootstrap();
+  }
+
   @override
   void dispose() {
+    _video?.removeListener(_onNativeVideoEvent);
     _chewie?.dispose();
     _video?.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -201,7 +325,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final url = (_channel?.streamUrl ?? '').trim();
     if (w == null || url.isEmpty) return;
     setState(() => _loading = true);
-    await w.loadRequest(Uri.parse(url));
+    final headers = playbackHttpHeaders(url);
+    await w.loadRequest(
+      Uri.parse(url),
+      headers: Map<String, String>.from(headers),
+    );
     if (mounted) setState(() => _loading = false);
   }
 
@@ -262,14 +390,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildStage(AppThemeColors t) {
-    if (_error != null && !_loading) {
-      return _ErrorPane(message: _error!, accent: t.accent, onRetry: () {
-        setState(() {
-          _error = null;
-          _loading = true;
-        });
-        _bootstrap();
-      });
+    if (_issue != null && !_loading) {
+      return _PlaybackIssueModal(
+        message: _copyForIssue(_issue!),
+        accent: t.accent,
+        accent2: t.accent2,
+        onRetry: _resetAndBootstrap,
+      );
     }
 
     if (_useWebView && _web != null) {
@@ -405,42 +532,88 @@ class _PlayerChrome extends StatelessWidget {
   }
 }
 
-class _ErrorPane extends StatelessWidget {
-  const _ErrorPane({required this.message, required this.accent, required this.onRetry});
+/// Full-bleed friendly card — no technical errors, no URLs.
+class _PlaybackIssueModal extends StatelessWidget {
+  const _PlaybackIssueModal({
+    required this.message,
+    required this.accent,
+    required this.accent2,
+    required this.onRetry,
+  });
 
   final String message;
   final Color accent;
-  final VoidCallback onRetry;
+  final Color accent2;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF0d0d0d),
-      padding: const EdgeInsets.all(28),
+      color: Colors.black,
+      padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Ionicons.alert_circle_outline, size: 48, color: accent.withValues(alpha: 0.85)),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: rajdhani(14, weight: FontWeight.w500).copyWith(color: Colors.white70, height: 1.4),
-            ),
-            const SizedBox(height: 22),
-            FilledButton.icon(
-              onPressed: onRetry,
-              style: FilledButton.styleFrom(
-                backgroundColor: accent,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFF16161a),
+                  const Color(0xFF0c0c0f),
+                ],
               ),
-              icon: const Icon(Ionicons.reload_outline, size: 18),
-              label: Text('Jaribu tena', style: rajdhani(14, weight: FontWeight.w700)),
+              border: Border.all(color: accent.withValues(alpha: 0.35)),
+              boxShadow: [
+                BoxShadow(color: accent.withValues(alpha: 0.12), blurRadius: 28, spreadRadius: -4),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 24, offset: const Offset(0, 12)),
+              ],
             ),
-          ],
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(26, 30, 26, 26),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(colors: [accent.withValues(alpha: 0.35), accent2.withValues(alpha: 0.22)]),
+                      border: Border.all(color: accent.withValues(alpha: 0.45)),
+                    ),
+                    child: Icon(Ionicons.construct_outline, size: 36, color: accent),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: rajdhani(16, weight: FontWeight.w600).copyWith(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      height: 1.45,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 26),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => onRetry(),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      icon: const Icon(Ionicons.reload_outline, size: 20),
+                      label: Text('Jaribu tena', style: rajdhani(15, weight: FontWeight.w800)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

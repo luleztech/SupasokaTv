@@ -39,7 +39,7 @@ class PricingScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'Mipango ${list.length} · Gusa safu au kiasi kuhariri',
+                'Mipango ${list.length} · Bei, kipindi na beji — gusa kuhariri',
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
               ),
               const SizedBox(height: 12),
@@ -71,11 +71,9 @@ class PricingScreen extends StatelessWidget {
                               ),
                               columns: const [
                                 DataColumn(label: Text('Kitambulisho')),
-                                DataColumn(label: Text('Jina')),
+                                DataColumn(label: Text('Kipindi')),
                                 DataColumn(label: Text('Beji')),
                                 DataColumn(label: Text('Kiasi')),
-                                DataColumn(label: Text('Kipindi')),
-                                DataColumn(label: Text('Maarufu')),
                                 DataColumn(label: Text('')),
                               ],
                               rows: [
@@ -101,7 +99,7 @@ class PricingScreen extends StatelessWidget {
 
     return [
       DataCell(Text(m.id), onTap: edit),
-      DataCell(Text(m.label), onTap: edit),
+      DataCell(Text(m.period), onTap: edit),
       DataCell(
         Text(m.badge.isEmpty ? '—' : m.badge),
         onTap: edit,
@@ -117,8 +115,6 @@ class PricingScreen extends StatelessWidget {
         ),
         onTap: edit,
       ),
-      DataCell(Text(m.period), onTap: edit),
-      DataCell(Text(m.popular ? 'Ndiyo' : 'Hapana'), onTap: edit),
       DataCell(
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -144,7 +140,7 @@ class PricingScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Futa mpango?'),
-        content: Text('Una uhakika unataka kuondoa "${m.label}"?'),
+        content: Text('Una uhakika unataka kuondoa mpango wa "${m.period}"?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Futa')),
@@ -227,14 +223,10 @@ class _MalipoPlanCard extends StatelessWidget {
                             ),
                           ),
                         ],
-                        if (m.popular) ...[
-                          const SizedBox(width: 8),
-                          Icon(Icons.star_rounded, size: 18, color: cs.tertiary),
-                        ],
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Text(m.label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                    Text(m.period, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                     const SizedBox(height: 8),
                     Text(
                       m.amount,
@@ -251,7 +243,7 @@ class _MalipoPlanCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Gusa kuhariri bei na maelezo',
+                      'Gusa kuhariri bei, kipindi na beji',
                       style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.35)),
                     ),
                   ],

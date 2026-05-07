@@ -16,6 +16,25 @@ int parseIntLoose(dynamic v) {
   return int.parse(v.toString());
 }
 
+/// `malipoPlans.accent1` / `accent2` may be [num] or hex-ish [String] (`0xff…`, `959977`, etc.).
+int malipoAccentFromJson(dynamic value, int fallback) {
+  if (value == null) return fallback;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  final s = value.toString().trim();
+  if (s.isEmpty) return fallback;
+  final lower = s.toLowerCase();
+  if (lower.startsWith('0x')) {
+    return int.tryParse(lower.substring(2), radix: 16) ?? fallback;
+  }
+  final hexOnly = RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
+  final len = s.length;
+  if (hexOnly && (len == 6 || len == 8)) {
+    return int.tryParse(s, radix: 16) ?? fallback;
+  }
+  return int.tryParse(s, radix: 10) ?? fallback;
+}
+
 /// Serializable bundle for export / mobile Remote Config later.
 class AppConfig {
   AppConfig({
@@ -325,8 +344,8 @@ class MalipoPlanDto {
         amount: j['amount'] as String,
         period: j['period'] as String,
         popular: j['popular'] as bool? ?? false,
-        accent1: (j['accent1'] as num).toInt(),
-        accent2: (j['accent2'] as num).toInt(),
+        accent1: malipoAccentFromJson(j['accent1'], 0xFF0ea5e9),
+        accent2: malipoAccentFromJson(j['accent2'], 0xFF6366f1),
         badge: j['badge'] as String? ?? '',
       );
 }

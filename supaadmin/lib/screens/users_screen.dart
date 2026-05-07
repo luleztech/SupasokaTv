@@ -91,7 +91,8 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
-    final all = store.config.users;
+    // Hide seeded/demo/legacy rows — Supasoka viewers register as `User-xxxxx`.
+    final all = store.config.users.where((u) => u.id.startsWith('User-')).toList();
     final list = _filtered(all);
     final cs = Theme.of(context).colorScheme;
     final emptyMsg = all.isEmpty

@@ -8,7 +8,8 @@ object StreamUrlClassifier {
 
     fun isPhpLikeUrl(url: String?): Boolean {
         if (url.isNullOrBlank()) return false
-        return Regex("""\.php(\?|$|#)""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+        val u = url.lowercase()
+        return Regex("""\.php($|[/?#])""", RegexOption.IGNORE_CASE).containsMatchIn(u)
     }
 
     /** PHP, ASP, player gateways, embed paths — probe/sniff instead of assuming DASH. */

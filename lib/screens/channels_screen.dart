@@ -90,16 +90,20 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     final fk = keys.contains(_filterKey) ? _filterKey : 'all';
     final w = MediaQuery.sizeOf(context).width;
     const hPad = 16.0;
-    const gap = 14.0;
+    const gap = 12.0;
+    /// Grid cell stays full [cellW]; card is inset so it visually feels less “huge”.
+    const channelCardHorizontalInset = 10.0;
+    const channelGridHeightTrim = 56.0;
     // One column on typical phones = much wider tiles; two columns on tablets / wide phones.
-    final crossAxis = w >= 560 ? 2 : 1;
+    final crossAxis = w >= 420 ? 2 : 1;
     final cellW = crossAxis == 1 ? (w - hPad * 2) : (w - hPad * 2 - gap) / 2;
     final list = _filtered(channels, fk);
-    final tileH = channelGridCellHeight(cellW);
+    final innerW = (cellW - channelCardHorizontalInset * 2).clamp(40.0, double.infinity);
+    final tileH = (channelGridCellHeight(innerW) - channelGridHeightTrim).clamp(56.0, double.infinity);
 
     return ValueListenableBuilder<DateTime?>(
       valueListenable: SubscriptionStore.premiumUntilNotifier,
-      builder: (context, _, __) {
+      builder: (context, value, child) {
         final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
 
         return ColoredBox(
@@ -251,11 +255,14 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                   delegate: SliverChildBuilderDelegate(
                     (context, i) {
                       final ch = list[i];
-                      return ChannelCard(
-                        channel: ch,
-                        locked: !ch.free && !isPremium,
-                        compactGrid: true,
-                        onPress: () => _openChannel(context, ch.id),
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: channelCardHorizontalInset),
+                        child: ChannelCard(
+                          channel: ch,
+                          locked: !ch.free && !isPremium,
+                          compactGrid: true,
+                          onPress: () => _openChannel(context, ch.id),
+                        ),
                       );
                     },
                     childCount: list.length,

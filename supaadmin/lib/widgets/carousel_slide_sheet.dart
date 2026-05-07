@@ -40,8 +40,8 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
   late final TextEditingController _badgeCtrl;
   late final TextEditingController _badgeIconCtrl;
   late final TextEditingController _titleCtrl;
-  late final TextEditingController _channelIdCtrl;
   late final TextEditingController _imgCtrl;
+  late int _channelId;
 
   @override
   void initState() {
@@ -53,7 +53,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
     _badgeCtrl = TextEditingController(text: e?.badge ?? 'NEW');
     _badgeIconCtrl = TextEditingController(text: e?.badgeIcon ?? 'radio-outline');
     _titleCtrl = TextEditingController(text: e?.title ?? 'Title\nLine 2');
-    _channelIdCtrl = TextEditingController(text: '$defaultChannelId');
+    _channelId = defaultChannelId;
     _imgCtrl = TextEditingController(text: e?.img ?? 'https://');
     _imgCtrl.addListener(() => setState(() {}));
   }
@@ -63,17 +63,25 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
     _badgeCtrl.dispose();
     _badgeIconCtrl.dispose();
     _titleCtrl.dispose();
-    _channelIdCtrl.dispose();
     _imgCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    final channelId = int.tryParse(_channelIdCtrl.text.trim());
-    if (channelId == null) {
+    final channels = widget.store.config.channels;
+    if (channels.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Channel ID must be a number')),
+          const SnackBar(content: Text('Ongeza channel angalau moja kabla ya kuongeza carousel.')),
+        );
+      }
+      return;
+    }
+    final channelExists = channels.any((c) => c.id == _channelId);
+    if (!channelExists) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Chagua channel halali kwa slide hii.')),
         );
       }
       return;
@@ -83,7 +91,7 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
       badge: _badgeCtrl.text.trim(),
       badgeIcon: _badgeIconCtrl.text.trim(),
       title: _titleCtrl.text.trim(),
-      channelId: channelId,
+      channelId: _channelId,
       img: _imgCtrl.text.trim(),
     );
     if (widget.existing == null) {
@@ -99,6 +107,10 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
     final cs = Theme.of(context).colorScheme;
     final bottom = MediaQuery.paddingOf(context).bottom;
     final isNew = widget.existing == null;
+    final channels = widget.store.config.channels;
+    if (channels.isNotEmpty && !channels.any((c) => c.id == _channelId)) {
+      _channelId = channels.first.id;
+    }
 
     final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
@@ -227,15 +239,51 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                     const SizedBox(height: 24),
                     _CarouselSectionLabel(icon: Icons.touch_app_rounded, title: 'Watch action'),
                     const SizedBox(height: 12),
-                    TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                      controller: _channelIdCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Channel ID',
-                        hintText: 'Matches a channel in your list',
-                        prefixIcon: Icon(Icons.numbers_rounded),
+                    if (channels.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          color: Colors.white.withValues(alpha: 0.03),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline_rounded, size: 18),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Hakuna channel bado. Ongeza channel kwanza, kisha rudi kuongeza carousel.',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: Colors.white.withValues(alpha: 0.75),
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      DropdownButtonFormField<int>(
+                        initialValue: _channelId,
+                        decoration: const InputDecoration(
+                          labelText: 'Channel',
+                          prefixIcon: Icon(Icons.tv_rounded),
+                        ),
+                        items: channels
+                            .map(
+                              (c) => DropdownMenuItem<int>(
+                                value: c.id,
+                                child: Text('${c.name} (#${c.id})'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setState(() => _channelId = v);
+                        },
                       ),
-                    ),
                     const SizedBox(height: 24),
                     _CarouselSectionLabel(icon: Icons.image_rounded, title: 'Hero artwork'),
                     const SizedBox(height: 12),

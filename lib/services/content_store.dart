@@ -86,6 +86,25 @@ int _asInt(dynamic v) {
   return int.tryParse(v.toString()) ?? 0;
 }
 
+/// Same rules as admin `malipoAccentFromJson`: num or hex-ish string from API/DB.
+int _malipoAccentRawFromJson(dynamic value, int fallback) {
+  if (value == null) return fallback;
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  final s = value.toString().trim();
+  if (s.isEmpty) return fallback;
+  final lower = s.toLowerCase();
+  if (lower.startsWith('0x')) {
+    return int.tryParse(lower.substring(2), radix: 16) ?? fallback;
+  }
+  final hexOnly = RegExp(r'^[0-9a-fA-F]+$').hasMatch(s);
+  final len = s.length;
+  if (hexOnly && (len == 6 || len == 8)) {
+    return int.tryParse(s, radix: 16) ?? fallback;
+  }
+  return int.tryParse(s, radix: 10) ?? fallback;
+}
+
 /// Malipo accents may be 24-bit RGB only (DB INTEGER) or full ARGB (BIGINT).
 Color _malipoAccentFromApi(int raw) {
   final u = raw & 0xFFFFFFFF;
@@ -351,8 +370,8 @@ class ContentStore extends ChangeNotifier {
     final malRaw = j['malipoPlans'] as List<dynamic>? ?? [];
     _malipoPlans = malRaw.map((e) {
       final m = Map<String, dynamic>.from(e as Map);
-      final a1 = _asInt(m['accent1']);
-      final a2 = _asInt(m['accent2']);
+      final a1 = _malipoAccentRawFromJson(m['accent1'], 0xFF0ea5e9);
+      final a2 = _malipoAccentRawFromJson(m['accent2'], 0xFF6366f1);
       return PayPlan(
         id: m['id'] as String? ?? '',
         label: m['label'] as String? ?? '',

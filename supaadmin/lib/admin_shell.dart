@@ -284,7 +284,9 @@ class _SideRail extends StatelessWidget {
           backgroundColor: Colors.transparent,
           selectedIndex: selectedIndex,
           onDestinationSelected: onDestinationSelected,
-          labelType: showLabels ? NavigationRailLabelType.all : NavigationRailLabelType.none,
+          labelType: extended
+              ? NavigationRailLabelType.none
+              : (showLabels ? NavigationRailLabelType.all : NavigationRailLabelType.none),
           leading: Padding(
             padding: EdgeInsets.fromLTRB(extended ? 12 : 8, 12, extended ? 12 : 8, 20),
             child: Column(

@@ -123,7 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return ValueListenableBuilder<DateTime?>(
       valueListenable: SubscriptionStore.premiumUntilNotifier,
-      builder: (context, _, __) {
+      builder: (context, value, child) {
         final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
 
         final browseSlivers = <Widget>[];
@@ -555,7 +555,7 @@ class _ChannelRail extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               scrollDirection: Axis.horizontal,
               itemCount: channels.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 14),
+              separatorBuilder: (context, index) => const SizedBox(width: 14),
               itemBuilder: (context, i) {
                 final ch = channels[i];
                 return ChannelCard(

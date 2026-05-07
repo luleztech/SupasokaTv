@@ -1,16 +1,71 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/config/zeno_config.dart';
 import 'package:uuid/uuid.dart';
 
-/// Tanzania ZenoPay USSD push + order status (no international rails — TZ MSISDN + zenoapi.com).
+/// ZenoPay Mobile Money Tanzania — matches official JSON:
+/// POST `/api/payments/mobile_money_tanzania`, GET `/api/payments/order-status?order_id=…`
+///
+/// **[buyer_phone]** must be national `07XXXXXXXX` / `06XXXXXXXX` (Vodacom, Airtel, Tigo, Halotel, Yas, etc.).
+/// Use [TanzaniaPhone.normalize] before [createOrder].
+///
+/// **Flutter Web:** browsers may block direct calls to `zenoapi.com` (CORS). Set  
+/// `--dart-define=ZENO_API_BASE=https://your-backend.example`  
+/// so your server proxies the same paths to ZenoPay.
 class ZenoPayService {
   ZenoPayService._();
 
   static const _headersBase = {'Content-Type': 'application/json; charset=utf-8'};
   static const _uuid = Uuid();
+
+  static const _createAttempts = 3;
+  static const _statusAttempts = 2;
+  static const _createTimeout = Duration(seconds: 40);
+  static const _statusTimeout = Duration(seconds: 22);
+
+  static bool get _useBackendProxy => kZenoApiKey.trim().isEmpty;
+
+  static Uri _backendCreateUri() {
+    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    return Uri.parse('$origin/api/v1/public/zeno/create-order');
+  }
+
+  static List<Uri> _backendCreateUris() {
+    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    return <Uri>[
+      Uri.parse('$origin/api/v1/public/zeno/create-order'),
+      // Backward-compat fallbacks for older backend deployments.
+      Uri.parse('$origin/api/v1/public/create-order'),
+      Uri.parse('$origin/api/v1/public/payments/mobile_money_tanzania'),
+    ];
+  }
+
+  static Uri _backendStatusUri(String orderId) {
+    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    return Uri.parse('$origin/api/v1/public/zeno/order-status').replace(
+      queryParameters: {'order_id': orderId},
+    );
+  }
+
+  static List<Uri> _backendStatusUris(String orderId) {
+    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    return <Uri>[
+      Uri.parse('$origin/api/v1/public/zeno/order-status').replace(
+        queryParameters: {'order_id': orderId},
+      ),
+      // Backward-compat fallbacks for older backend deployments.
+      Uri.parse('$origin/api/v1/public/order-status').replace(
+        queryParameters: {'order_id': orderId},
+      ),
+      Uri.parse('$origin/api/v1/public/payments/order-status').replace(
+        queryParameters: {'order_id': orderId},
+      ),
+    ];
+  }
 
   /// Pull digits from admin `amount` display string → integer TZS.
   static int? parseAmountTzs(String amountDisplay) {
@@ -21,10 +76,122 @@ class ZenoPayService {
 
   static Map<String, String> _authHeaders() => {
         ..._headersBase,
-        'x-api-key': kZenoApiKey,
+        'Accept': 'application/json',
+        if (!_useBackendProxy) 'x-api-key': kZenoApiKey,
       };
 
-  /// Starts USSD push. Returns server [orderId] to poll (may differ from [requestedOrderId]).
+  static bool _isTransientHttp(int code) =>
+      code == 408 || code == 429 || code == 502 || code == 503 || code == 504;
+
+  static Future<void> _backoff(int attempt) async {
+    final ms = 350 * (1 << attempt);
+    await Future<void>.delayed(Duration(milliseconds: ms));
+  }
+
+  static void _logDebug(String msg) {
+    assert(() {
+      if (kDebugMode) debugPrint('ZenoPay: $msg');
+      return true;
+    }());
+  }
+
+  static bool _retryableNetworkError(Object e) {
+    if (e is TimeoutException) return true;
+    final s = e.toString().toLowerCase();
+    return s.contains('socket') ||
+        s.contains('connection') ||
+        s.contains('failed host lookup') ||
+        s.contains('network') ||
+        s.contains('clientexception');
+  }
+
+  static ZenoCreateResult _parseCreateResponse(http.Response res, String requestedOrderId) {
+    final text = utf8.decode(res.bodyBytes);
+    Map<String, dynamic>? j;
+    try {
+      j = jsonDecode(text) as Map<String, dynamic>;
+    } catch (_) {
+      if (_isTransientHttp(res.statusCode)) {
+        return ZenoCreateResult.transient('HTTP ${res.statusCode}');
+      }
+      return ZenoCreateResult.failure('Jibu la seva halisomeki (${res.statusCode}).');
+    }
+
+    // Our backend `notFound` middleware returns `{ ok: false, error: { message, code } }`.
+    // When the app is pointing at an older backend deployment that doesn't include Zeno proxy routes,
+    // we want a clear user-facing message instead of raw "HTTP 404".
+    if (j['ok'] == false) {
+      final err = j['error'];
+      String? code;
+      String? message;
+      if (err is Map) {
+        final em = err['message'];
+        final ec = err['code'];
+        if (em != null) message = em.toString();
+        if (ec != null) code = ec.toString();
+      }
+      if (res.statusCode == 404 || code == 'NOT_FOUND') {
+        return ZenoCreateResult.failure(
+          'Huduma ya malipo haipatikani kwa sasa. Tafadhali jaribu tena baada ya muda mfupi.',
+        );
+      }
+      if (message != null && message.trim().isNotEmpty) {
+        return ZenoCreateResult.failure(message.trim());
+      }
+    }
+
+    final status = j['status']?.toString().toLowerCase();
+    final msg = j['message']?.toString();
+
+    if (status == 'error') {
+      return ZenoCreateResult.failure(msg?.isNotEmpty == true ? msg! : 'Ombi halijakubaliwa.');
+    }
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      if (_isTransientHttp(res.statusCode)) {
+        return ZenoCreateResult.transient('HTTP ${res.statusCode}');
+      }
+      // Prefer any backend-provided message; otherwise, keep a generic failure string.
+      return ZenoCreateResult.failure(
+        msg?.isNotEmpty == true ? msg! : 'Hitilafu ya malipo (HTTP ${res.statusCode}).',
+      );
+    }
+
+    final code = j['resultcode']?.toString();
+    final codeOk = code == '000' || code == '0';
+    final success = codeOk || status == 'success';
+
+    if (!success) {
+      return ZenoCreateResult.failure(msg ?? 'Ombi halijakubaliwa (${code ?? '—'}).');
+    }
+
+    final oid = j['order_id']?.toString();
+    return ZenoCreateResult.ok(
+      pollOrderId: (oid != null && oid.isNotEmpty) ? oid : requestedOrderId,
+      message: msg,
+    );
+  }
+
+  static bool _isRouteMissingResponse(http.Response res) {
+    if (res.statusCode != 404) return false;
+    try {
+      final text = utf8.decode(res.bodyBytes);
+      final j = jsonDecode(text);
+      if (j is Map) {
+        final code = j['error'] is Map ? (j['error'] as Map)['code']?.toString() : null;
+        if (code == 'NOT_FOUND') return true;
+      }
+    } catch (_) {
+      // ignore parse issues; 404 still likely indicates missing route.
+    }
+    return true;
+  }
+
+  /// Zeno doc: `07XXXXXXXX` Tanzanian mobile (all networks using national format).
+  static bool isValidZenoBuyerPhone(String national0xx) =>
+      RegExp(r'^0[1-9]\d{8}$').hasMatch(national0xx.trim());
+
+  /// Starts USSD push. Retries on transient network / 5xx. Returns [order_id] to poll.
   static Future<ZenoCreateResult> createOrder({
     required String requestedOrderId,
     required String buyerPhoneLocal0xx,
@@ -33,119 +200,180 @@ class ZenoPayService {
     String buyerEmail = 'mteja@supasoka.app',
     Map<String, String>? metadata,
   }) async {
-    if (kZenoApiKey.isEmpty) {
-      return ZenoCreateResult.failure('ZENO_API_KEY haijawekwa (tumia dart-define).');
-    }
     if (amountTzs < 1) {
       return ZenoCreateResult.failure('Kiasi si halali.');
+    }
+    if (!isValidZenoBuyerPhone(buyerPhoneLocal0xx)) {
+      return ZenoCreateResult.failure(
+        'Nambari lazima iwe ya Tanzania: 07XXXXXXXX au 06XXXXXXXX (mitandao yote).',
+      );
     }
 
     final body = <String, dynamic>{
       'order_id': requestedOrderId,
-      'buyer_email': buyerEmail,
-      'buyer_name': buyerName,
-      'buyer_phone': buyerPhoneLocal0xx,
+      'buyer_email': buyerEmail.trim().isNotEmpty ? buyerEmail.trim() : 'mteja@supasoka.app',
+      'buyer_name': buyerName.trim().isNotEmpty ? buyerName.trim() : 'Mteja',
+      'buyer_phone': buyerPhoneLocal0xx.trim(),
       'amount': amountTzs,
       if (metadata != null && metadata.isNotEmpty) 'metadata': metadata,
     };
     if (kZenoWebhookUrl.isNotEmpty) {
-      body['webhook_url'] = kZenoWebhookUrl;
+      body['webhook_url'] = kZenoWebhookUrl.trim();
     }
 
-    try {
-      final res = await http
-          .post(
-            Uri.parse(kZenoCreateUrl),
-            headers: _authHeaders(),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 45));
+    Object? transientErr;
 
-      final text = utf8.decode(res.bodyBytes);
-      Map<String, dynamic> j;
+    for (var attempt = 0; attempt < _createAttempts; attempt++) {
       try {
-        j = jsonDecode(text) as Map<String, dynamic>;
-      } catch (_) {
-        return ZenoCreateResult.failure('Jibu la seva halisomeki: ${res.statusCode}');
-      }
+        if (attempt > 0) _logDebug('createOrder retry #$attempt');
 
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        final msg = j['message']?.toString() ?? 'HTTP ${res.statusCode}';
-        return ZenoCreateResult.failure(msg.isNotEmpty ? msg : 'Hitilafu ${res.statusCode}');
-      }
+        ZenoCreateResult parsed;
+        if (_useBackendProxy) {
+          parsed = ZenoCreateResult.failure('Huduma ya malipo haipatikani kwa sasa.');
+          final uris = _backendCreateUris();
+          for (var i = 0; i < uris.length; i++) {
+            final uri = uris[i];
+            final res = await http
+                .post(
+                  uri,
+                  headers: _authHeaders(),
+                  body: jsonEncode(body),
+                )
+                .timeout(_createTimeout);
+            parsed = _parseCreateResponse(res, requestedOrderId);
+            final routeMissing = _isRouteMissingResponse(res);
+            if (routeMissing && i < uris.length - 1) {
+              _logDebug('createOrder fallback route: ${uri.path} (404)');
+              continue;
+            }
+            break;
+          }
+        } else {
+          final res = await http
+              .post(
+                Uri.parse(kZenoCreateUrl),
+                headers: _authHeaders(),
+                body: jsonEncode(body),
+              )
+              .timeout(_createTimeout);
+          parsed = _parseCreateResponse(res, requestedOrderId);
+        }
 
-      final code = j['resultcode']?.toString();
-      final ok = code == '000' || code == '0';
-      if (!ok) {
-        final msg = j['message']?.toString() ?? 'Ombi halijakubaliwa';
-        return ZenoCreateResult.failure(msg);
+        final lastAttempt = attempt >= _createAttempts - 1;
+        if (!parsed.isTransientFailure || lastAttempt) {
+          return parsed.asFinalResult();
+        }
+        transientErr = parsed.errorMessage ?? 'Mtandao ume kata';
+      } on TimeoutException catch (e) {
+        transientErr = e;
+      } catch (e) {
+        final lastAttempt = attempt >= _createAttempts - 1;
+        if (!_retryableNetworkError(e) || lastAttempt) {
+          return ZenoCreateResult.failure(e.toString());
+        }
+        transientErr = e;
       }
-
-      final oid = j['order_id']?.toString();
-      return ZenoCreateResult.ok(
-        pollOrderId: (oid != null && oid.isNotEmpty) ? oid : requestedOrderId,
-        message: j['message']?.toString(),
-      );
-    } on TimeoutException {
-      return ZenoCreateResult.failure('Muda wa kuunganisha umeisha. Jaribu tena.');
-    } catch (e) {
-      return ZenoCreateResult.failure(e.toString());
+      await _backoff(attempt);
     }
+
+    return ZenoCreateResult.failure(
+      transientErr?.toString() ?? 'Haikuweza kuunganisha na ZenoPay. Jaribu tena.',
+    );
   }
 
-  /// `payment_status` from status API, e.g. `COMPLETED`.
   static Future<ZenoStatusResult> fetchOrderStatus(String orderId) async {
-    try {
-      final res = await http
-          .get(
-            Uri.parse(zenoOrderStatusUrl(orderId)),
-            headers: _authHeaders(),
-          )
-          .timeout(const Duration(seconds: 30));
+    Object? lastErr;
 
-      final text = utf8.decode(res.bodyBytes);
-      Map<String, dynamic> j;
+    for (var attempt = 0; attempt < _statusAttempts; attempt++) {
       try {
-        j = jsonDecode(text) as Map<String, dynamic>;
-      } catch (_) {
-        return ZenoStatusResult.error('Jibu la hali halisomeki: ${res.statusCode}');
-      }
+        if (attempt > 0) await _backoff(attempt - 1);
 
-      final rc = j['resultcode']?.toString();
-      if (rc != '000' && rc != '0') {
-        return ZenoStatusResult.error(j['message']?.toString() ?? 'Haikuweza kupata hali ya malipo');
-      }
+        http.Response? activeRes;
+        if (_useBackendProxy) {
+          final uris = _backendStatusUris(orderId);
+          for (var i = 0; i < uris.length; i++) {
+            final uri = uris[i];
+            final res = await http
+                .get(
+                  uri,
+                  headers: _authHeaders(),
+                )
+                .timeout(_statusTimeout);
+            activeRes = res;
+            if (_isRouteMissingResponse(res) && i < uris.length - 1) {
+              _logDebug('orderStatus fallback route: ${uri.path} (404)');
+              continue;
+            }
+            break;
+          }
+        } else {
+          activeRes = await http
+              .get(
+                Uri.parse(zenoOrderStatusUrl(orderId)),
+                headers: _authHeaders(),
+              )
+              .timeout(_statusTimeout);
+        }
+        final res = activeRes!;
 
-      final list = j['data'];
-      if (list is! List || list.isEmpty) {
-        return ZenoStatusResult.pending(null);
+        final text = utf8.decode(res.bodyBytes);
+        Map<String, dynamic> j;
+        try {
+          j = jsonDecode(text) as Map<String, dynamic>;
+        } catch (_) {
+          lastErr = 'Jibu la hali halisomeki';
+          continue;
+        }
+
+        final rc = j['resultcode']?.toString();
+        if (rc != '000' && rc != '0') {
+          return ZenoStatusResult.error(j['message']?.toString() ?? 'Haikuweza kupata hali ya malipo');
+        }
+
+        final list = j['data'];
+        if (list is! List || list.isEmpty) {
+          return ZenoStatusResult.pending(null);
+        }
+        final row = Map<String, dynamic>.from(list.first as Map);
+        final ps = row['payment_status']?.toString().toUpperCase() ?? '';
+        return ZenoStatusResult(paymentStatus: ps.isEmpty ? null : ps, raw: row);
+      } on TimeoutException catch (e) {
+        lastErr = e;
+      } catch (e) {
+        lastErr = e;
       }
-      final row = Map<String, dynamic>.from(list.first as Map);
-      final ps = row['payment_status']?.toString().toUpperCase() ?? '';
-      return ZenoStatusResult(paymentStatus: ps, raw: row);
-    } on TimeoutException {
-      return ZenoStatusResult.error('Muda wa kuunganisha umeisha.');
-    } catch (e) {
-      return ZenoStatusResult.error(e.toString());
     }
+
+    return ZenoStatusResult.error(lastErr?.toString() ?? 'Hitilafu ya mtandao');
   }
 
-  /// Poll until [COMPLETED], failed/cancelled, or timeout.
+  /// Poll until COMPLETED — short early intervals, then ~3s (faster than fixed 3s).
   static Future<ZenoPollOutcome> waitForCompleted(
     String orderId, {
-    Duration interval = const Duration(seconds: 3),
-    Duration timeout = const Duration(minutes: 4),
+    Duration timeout = const Duration(minutes: 5),
     bool Function()? cancelled,
   }) async {
     final deadline = DateTime.now().add(timeout);
+    const delays = <Duration>[
+      Duration(milliseconds: 700),
+      Duration(milliseconds: 1200),
+      Duration(milliseconds: 1800),
+      Duration(milliseconds: 2200),
+      Duration(milliseconds: 2800),
+      Duration(milliseconds: 3200),
+    ];
+    var i = 0;
+
     while (DateTime.now().isBefore(deadline)) {
       if (cancelled != null && cancelled()) {
         return ZenoPollOutcome.cancelled();
       }
+
       final st = await fetchOrderStatus(orderId);
       if (st.errorMessage != null) {
         return ZenoPollOutcome.error(st.errorMessage!);
       }
+
       final ps = st.paymentStatus ?? '';
       if (ps == 'COMPLETED') {
         return ZenoPollOutcome.completed();
@@ -157,7 +385,10 @@ class ZenoPayService {
           ps == 'EXPIRED') {
         return ZenoPollOutcome.failed(ps);
       }
-      await Future<void>.delayed(interval);
+
+      final wait = i < delays.length ? delays[i] : const Duration(seconds: 3);
+      i++;
+      await Future<void>.delayed(wait);
     }
     return ZenoPollOutcome.timeout();
   }
@@ -166,18 +397,37 @@ class ZenoPayService {
 }
 
 class ZenoCreateResult {
-  ZenoCreateResult._({this.pollOrderId, this.message, this.errorMessage});
+  ZenoCreateResult._({
+    this.pollOrderId,
+    this.message,
+    this.errorMessage,
+    bool transientFailure = false,
+  }) : _transientFailure = transientFailure;
 
   factory ZenoCreateResult.ok({required String pollOrderId, String? message}) =>
       ZenoCreateResult._(pollOrderId: pollOrderId, message: message);
 
   factory ZenoCreateResult.failure(String msg) => ZenoCreateResult._(errorMessage: msg);
 
+  factory ZenoCreateResult.transient(String reason) =>
+      ZenoCreateResult._(errorMessage: reason, transientFailure: true);
+
   final String? pollOrderId;
   final String? message;
   final String? errorMessage;
+  final bool _transientFailure;
 
   bool get isSuccess => errorMessage == null && pollOrderId != null;
+  bool get isTransientFailure => _transientFailure;
+
+  /// Success or non-retryable failure; turns last transient into a user-facing failure.
+  ZenoCreateResult asFinalResult() {
+    if (isSuccess) return this;
+    if (_transientFailure) {
+      return ZenoCreateResult.failure(errorMessage ?? 'Jaribu tena baada ya muda mfupi.');
+    }
+    return this;
+  }
 }
 
 class ZenoStatusResult {

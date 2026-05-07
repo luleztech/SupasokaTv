@@ -51,8 +51,8 @@ class SafeNetworkImage extends StatelessWidget {
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         'User-Agent': kBrowserPlaybackUserAgent,
       },
-      placeholder: (_, __) => ColoredBox(color: bg),
-      errorWidget: (_, __, ___) => ColoredBox(color: bg),
+      placeholder: (context, imageUrl) => ColoredBox(color: bg),
+      errorWidget: (context, imageUrl, error) => ColoredBox(color: bg),
       fadeInDuration: const Duration(milliseconds: 200),
       fadeOutDuration: Duration.zero,
     );
