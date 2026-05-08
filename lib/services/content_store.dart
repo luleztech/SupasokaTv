@@ -10,6 +10,7 @@ import 'package:supasoka/data/pay_plan.dart';
 import 'package:supasoka/util/image_url.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v1';
+
 /// Last applied `configVersion:configSyncedAt` from API — compared to `/public/config-meta` for fast updates.
 const _prefsKeySyncSig = 'supasoka_public_config_sync_sig_v1';
 
@@ -18,10 +19,7 @@ const _configFetchAttempts = 4;
 // User-facing only — never include URLs, hostnames, status codes, or exception text.
 const _msgNetwork =
     "We can't update right now. Check your connection, then tap Retry.";
-const _msgService =
-    'The service is busy. Please try again in a moment.';
-const _msgSaved =
-    "You're seeing saved content. We'll sync when the connection is back.";
+const _msgService = 'The service is busy. Please try again in a moment.';
 const _msgEmptyList = 'No channels to show yet. Pull down to refresh.';
 
 const _metaPollHeaders = {
@@ -49,7 +47,9 @@ Future<http.Response> _getPublicConfig(Uri uri) async {
     } catch (e) {
       lastError = e;
       if (attempt < _configFetchAttempts - 1) {
-        await Future<void>.delayed(Duration(milliseconds: 350 * (1 << attempt)));
+        await Future<void>.delayed(
+          Duration(milliseconds: 350 * (1 << attempt)),
+        );
       }
     }
   }
@@ -70,7 +70,8 @@ String _friendlyNetworkError(Object e) {
       s.contains('network is unreachable')) {
     return _msgNetwork;
   }
-  if (s.contains('handshakeexception') || s.contains('certificate_verify_failed')) {
+  if (s.contains('handshakeexception') ||
+      s.contains('certificate_verify_failed')) {
     return _msgNetwork;
   }
   if (s.contains('timeoutexception')) {
@@ -121,9 +122,14 @@ class ContentStore extends ChangeNotifier {
   String _customerCareWhatsapp = '';
   bool _ready = false;
   bool _refreshing = false;
+  bool _connectionBlocked = false;
   String? _loadError;
 
   bool get ready => _ready;
+
+  /// True when the last config fetch failed with a network reachability error —
+  /// catalog is cleared and the app shows the offline gate until [refresh] succeeds.
+  bool get connectionBlocked => _connectionBlocked;
 
   /// True while a silent background fetch ([refresh]) is in progress.
   bool get refreshing => _refreshing;
@@ -177,7 +183,8 @@ class ContentStore extends ChangeNotifier {
 
       if (base.isEmpty) {
         await applyCached();
-        _loadError = _channels.isEmpty ? _msgNetwork : _msgSaved;
+        _connectionBlocked = false;
+        _loadError = _channels.isEmpty ? _msgNetwork : null;
         _ready = true;
         notifyListeners();
         return;
@@ -197,7 +204,9 @@ class ContentStore extends ChangeNotifier {
         if (res.statusCode == 200) {
           if (body.startsWith('<!') || body.startsWith('<html')) {
             if (kDebugMode) {
-              debugPrint('Supasoka: config endpoint returned HTML (wrong host or proxy).');
+              debugPrint(
+                'Supasoka: config endpoint returned HTML (wrong host or proxy).',
+              );
             }
             _loadError = _msgService;
           } else {
@@ -211,6 +220,7 @@ class ContentStore extends ChangeNotifier {
               _applyConfig(j);
               await prefs.setString(_prefsKey, res.body);
               await _persistSyncSignature(j);
+              _connectionBlocked = false;
               _loadError = null;
               _ready = true;
               notifyListeners();
@@ -231,12 +241,16 @@ class ContentStore extends ChangeNotifier {
         _loadError = _friendlyNetworkError(e);
       }
 
-      await applyCached();
-      if (_channels.isNotEmpty && _loadError != null) {
-        _loadError = _msgSaved;
-      }
-      if (_channels.isEmpty && _loadError == null) {
-        _loadError = _msgEmptyList;
+      if (_loadError == _msgNetwork) {
+        _connectionBlocked = true;
+        _clearCatalog();
+        _loadError = null;
+      } else {
+        _connectionBlocked = false;
+        await applyCached();
+        if (_channels.isEmpty && _loadError == null) {
+          _loadError = _msgEmptyList;
+        }
       }
       _ready = true;
       notifyListeners();
@@ -258,9 +272,7 @@ class ContentStore extends ChangeNotifier {
 
     final origin = base.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/config-meta').replace(
-      queryParameters: {
-        '_': DateTime.now().millisecondsSinceEpoch.toString(),
-      },
+      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
 
     try {
@@ -306,13 +318,24 @@ class ContentStore extends ChangeNotifier {
     await prefs.setString(_prefsKeySyncSig, sig);
   }
 
+  void _clearCatalog() {
+    _channels = [];
+    _carousel = [];
+    _liveMatches = [];
+    _packages = [];
+    _malipoPlans = [];
+    _customerCareWhatsapp = '';
+  }
+
   void _applyConfig(Map<String, dynamic> j) {
     final chRaw = j['channels'] as List<dynamic>? ?? [];
     _channels = <Channel>[];
     for (final e in chRaw) {
       final m = Map<String, dynamic>.from(e as Map);
       if (m['enabled'] == false) continue;
-      final stream = stripUnsafeUrlWhitespace((m['streamUrl'] ?? m['url'] ?? '') as String? ?? '');
+      final stream = stripUnsafeUrlWhitespace(
+        (m['streamUrl'] ?? m['url'] ?? '') as String? ?? '',
+      );
       _channels.add(
         Channel(
           id: _asInt(m['id']),
@@ -356,7 +379,9 @@ class ContentStore extends ChangeNotifier {
     _packages = pkgRaw.map((e) {
       final m = Map<String, dynamic>.from(e as Map);
       final feats = m['features'];
-      final list = feats is List ? feats.map((x) => x.toString()).toList() : <String>[];
+      final list = feats is List
+          ? feats.map((x) => x.toString()).toList()
+          : <String>[];
       return PackageItem(
         id: m['id'] as String? ?? '',
         name: m['name'] as String? ?? '',

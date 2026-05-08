@@ -31,6 +31,13 @@ class SubscriptionStore {
     premiumUntilNotifier.value = await premiumUntil();
   }
 
+  /// Sets expiry from server confirmation (same source as admin / other devices).
+  static Future<void> setPremiumUntilMs(int premiumUntilMs) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_kUntilMs, premiumUntilMs);
+    premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+  }
+
   /// Stacks on top of an active subscription if still valid.
   static Future<void> activatePlan(String planId) async {
     final p = await SharedPreferences.getInstance();
@@ -71,7 +78,12 @@ class SubscriptionStore {
       if (res.statusCode == 200) {
         final j = jsonDecode(res.body) as Map<String, dynamic>;
         if (j['ok'] == true) {
-          final premiumUntilMs = j['premiumUntilMs'] as int?;
+          final rawUntil = j['premiumUntilMs'];
+          final premiumUntilMs = rawUntil is int
+              ? rawUntil
+              : rawUntil is num
+                  ? rawUntil.toInt()
+                  : null;
           if (premiumUntilMs != null) {
             final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
             final p = await SharedPreferences.getInstance();

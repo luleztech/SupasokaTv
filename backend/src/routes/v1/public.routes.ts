@@ -4,6 +4,24 @@ import { registerPublicUser, getUserPremiumStatus } from '../../services/userDir
 import { createZenoOrder, fetchZenoOrderStatus } from '../../services/zenoPay';
 import { activatePremiumForUser } from '../../services/premiumActivation';
 
+function isZenoPaymentCompleted(paymentStatus: string): boolean {
+  const s = String(paymentStatus ?? '')
+    .trim()
+    .toUpperCase();
+  return s === 'COMPLETED' || s === 'SUCCESS' || s === 'PAID';
+}
+
+/** Compare TZ national numbers across `07…`, `+255…`, `255…` shapes. */
+function normalizeTzBuyerPhone(raw: string): string {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (d.length >= 9 && d.startsWith('255')) {
+    return `0${d.slice(3, 12)}`.slice(0, 10);
+  }
+  if (d.length === 9) return `0${d}`.slice(0, 10);
+  if (d.length >= 10 && d.startsWith('0')) return d.slice(0, 10);
+  return d.slice(0, 12);
+}
+
 export const publicRouter = Router();
 
 publicRouter.get('/config', async (_req, res, next) => {
@@ -71,16 +89,20 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
 
     const row = await fetchZenoOrderStatus(orderId);
     const ps = String(row?.payment_status ?? '').toUpperCase();
-    if (ps !== 'COMPLETED') {
+    if (!isZenoPaymentCompleted(ps)) {
       res.status(402).json({ ok: false, error: 'Payment not completed', paymentStatus: ps || null });
       return;
     }
 
     // Basic phone cross-check when available.
     const zPhone = String((row as any)?.buyer_phone ?? '').trim();
-    if (phone && zPhone && phone !== zPhone) {
-      res.status(409).json({ ok: false, error: 'Phone mismatch' });
-      return;
+    if (phone && zPhone) {
+      const a = normalizeTzBuyerPhone(phone);
+      const b = normalizeTzBuyerPhone(zPhone);
+      if (a.length >= 9 && b.length >= 9 && a !== b) {
+        res.status(409).json({ ok: false, error: 'Phone mismatch' });
+        return;
+      }
     }
 
     const activated = await activatePremiumForUser({

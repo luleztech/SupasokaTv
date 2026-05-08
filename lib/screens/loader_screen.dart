@@ -5,12 +5,12 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
+import 'package:supasoka/widgets/internet_required_card.dart';
 
 const _splashAccent = Color(0xFFFF4F4F);
 const _splashAccentSoft = Color(0xFFFF7A7A);
@@ -149,13 +149,13 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
         barrierColor: Colors.black.withValues(alpha: 0.78),
         builder: (ctx) => PopScope(
           canPop: false,
-          child: Dialog(
+            child: Dialog(
             backgroundColor: Colors.transparent,
             elevation: 0,
             shadowColor: Colors.transparent,
             surfaceTintColor: Colors.transparent,
             insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
-            child: _InternetRequiredDialog(
+            child: InternetRequiredCard(
               onRetry: () => Navigator.of(ctx).pop(),
             ),
           ),
@@ -424,76 +424,6 @@ class _BrandMark extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InternetRequiredDialog extends StatelessWidget {
-  const _InternetRequiredDialog({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 400),
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: _splashAccent.withValues(alpha: 0.22),
-        ),
-        color: const Color(0xFF101018),
-        boxShadow: [
-          BoxShadow(
-            color: _splashAccent.withValues(alpha: 0.12),
-            blurRadius: 40,
-            offset: const Offset(0, 20),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: [
-                  _splashAccent.withValues(alpha: 0.35),
-                  _splashAccent.withValues(alpha: 0.12),
-                ],
-              ),
-            ),
-            child: const Icon(Ionicons.cloud_offline_outline, size: 34, color: Colors.white),
-          ),
-          const SizedBox(height: 22),
-          Text(
-            'Hakuna muunganiko wa internet',
-            textAlign: TextAlign.center,
-            style: orbitron(18, weight: FontWeight.w800).copyWith(color: Colors.white),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Washa data ya simu au Wi‑Fi, kisha ujaribu tena. Bila mtandao huwezi kupakia channels.',
-            textAlign: TextAlign.center,
-            style: rajdhani(14).copyWith(color: Colors.white70, height: 1.45),
-          ),
-          const SizedBox(height: 26),
-          FilledButton(
-            onPressed: onRetry,
-            style: FilledButton.styleFrom(
-              backgroundColor: _splashAccent,
-              foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            child: Text('Jaribu tena', style: rajdhani(15, weight: FontWeight.w700)),
-          ),
-        ],
       ),
     );
   }

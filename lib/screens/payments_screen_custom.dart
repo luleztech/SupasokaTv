@@ -399,30 +399,48 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
   }
 
-  Future<void> _confirmPremiumOnBackend({
+  /// Returns server [premiumUntilMs] on success; otherwise `null` (caller may fall back to local plan).
+  Future<int?> _confirmPremiumOnBackend({
     required String orderId,
     required String publicId,
     required String planId,
     required String phone,
   }) async {
     final base = apiConfigUrl.trim();
-    if (base.isEmpty) return;
+    if (base.isEmpty) return null;
     final origin = base.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/confirm-zeno-premium');
-    await http.post(
-      uri,
-      headers: const {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache',
-      },
-      body: jsonEncode({
-        'orderId': orderId,
-        'publicId': publicId,
-        'planId': planId,
-        'phone': phone,
-      }),
-    ).timeout(const Duration(seconds: 25));
+    final res = await http
+        .post(
+          uri,
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+          },
+          body: jsonEncode({
+            'orderId': orderId,
+            'publicId': publicId,
+            'planId': planId,
+            'phone': phone,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      if (kDebugMode) {
+        debugPrint('confirm-zeno-premium HTTP ${res.statusCode}: ${res.body}');
+      }
+      return null;
+    }
+    try {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['ok'] == true) {
+        final raw = j['premiumUntilMs'];
+        if (raw is int) return raw;
+        if (raw is num) return raw.toInt();
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _markPaymentCompleted({
@@ -437,31 +455,42 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final prefs = await SharedPreferences.getInstance();
     final planId = prefs.getString('pendingPaymentPlanId')?.trim();
     final phone = prefs.getString('pendingPaymentPhone')?.trim();
-    final orderId = _pollingOrderId?.trim();
+    final pendingOrderFromPrefs = prefs.getString('pendingPaymentOrderId')?.trim();
+    final orderId = () {
+      final fromState = _pollingOrderId?.trim();
+      if (fromState != null && fromState.isNotEmpty) return fromState;
+      if (pendingOrderFromPrefs != null && pendingOrderFromPrefs.isNotEmpty) {
+        return pendingOrderFromPrefs;
+      }
+      return '';
+    }();
     final publicId = await UserIdentity.getOrCreatePublicId();
 
-    if (planId != null && planId.isNotEmpty) {
-      await SubscriptionStore.activatePlan(planId);
-    }
     if (phone != null && phone.isNotEmpty) {
       await UserIdentity.savePhoneNumber(phone);
       await UserIdentity.registerWithBackend(phone: phone);
     }
-    if (orderId != null &&
-        orderId.isNotEmpty &&
-        planId != null &&
-        planId.isNotEmpty &&
-        phone != null &&
-        phone.isNotEmpty) {
+
+    int? serverUntilMs;
+    if (orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
       try {
-        await _confirmPremiumOnBackend(
+        serverUntilMs = await _confirmPremiumOnBackend(
           orderId: orderId,
           publicId: publicId,
           planId: planId,
-          phone: phone,
+          phone: phone ?? '',
         );
-        await SubscriptionStore.syncPremiumFromBackend();
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('confirm-zeno-premium request failed: $e');
+        }
+      }
+    }
+    if (serverUntilMs != null) {
+      await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+      await SubscriptionStore.syncPremiumFromBackend();
+    } else if (planId != null && planId.isNotEmpty) {
+      await SubscriptionStore.activatePlan(planId);
     }
     SubscriptionStore.refreshNotifierFromPrefs();
     await _clearPendingOrderPrefs();
