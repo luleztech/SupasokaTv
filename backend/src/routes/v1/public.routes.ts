@@ -76,6 +76,24 @@ function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefine
   return '';
 }
 
+function paymentStatusFromUnknown(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const map = payload as Record<string, unknown>;
+  const direct = paymentStatusFromZenoRow(map);
+  if (direct) return direct;
+  for (const key of ['data', 'order', 'transaction', 'payload'] as const) {
+    const nested = map[key];
+    if (Array.isArray(nested) && nested.length > 0) {
+      const d = paymentStatusFromUnknown(nested[0]);
+      if (d) return d;
+    } else if (nested != null) {
+      const d = paymentStatusFromUnknown(nested);
+      if (d) return d;
+    }
+  }
+  return '';
+}
+
 export const publicRouter = Router();
 
 publicRouter.get('/config', async (_req, res, next) => {
@@ -214,6 +232,52 @@ publicRouter.post('/zeno/create-order', async (req, res, next) => {
       });
     }
     res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Optional provider webhook callback. Activates premium server-side without waiting for client polling. */
+publicRouter.post('/zeno/webhook', async (req, res, next) => {
+  try {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const orderId = String(b.order_id ?? b.orderId ?? b.reference ?? '').trim();
+    if (!orderId) {
+      res.status(400).json({ ok: false, error: 'Missing order id' });
+      return;
+    }
+    const ps = paymentStatusFromUnknown(b);
+    if (ps) {
+      await updateIntentStatus({
+        orderId,
+        providerStatus: ps,
+        providerPayload: b,
+      });
+    }
+
+    if (!isZenoPaymentCompleted(ps)) {
+      res.json({ ok: true, received: true, activated: false, paymentStatus: ps || null });
+      return;
+    }
+
+    const tracked = await getIntent(orderId);
+    if (!tracked || !tracked.public_id || !tracked.plan_id) {
+      res.json({ ok: true, received: true, activated: false, reason: 'Intent metadata missing' });
+      return;
+    }
+    if (tracked.activated_at_ms != null) {
+      res.json({ ok: true, received: true, activated: true, already: true });
+      return;
+    }
+
+    await activatePremiumForUser({
+      publicId: tracked.public_id,
+      planId: tracked.plan_id,
+      phone: tracked.buyer_phone ?? '',
+      note: `zeno:${orderId}`,
+    });
+    await markIntentActivated(orderId);
+    res.json({ ok: true, received: true, activated: true });
   } catch (e) {
     next(e);
   }

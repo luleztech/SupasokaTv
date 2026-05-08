@@ -21,6 +21,8 @@ export const env = {
   /** ZenoPay server-side verification (keep secret on backend only). */
   zenoApiKey: process.env.ZENO_API_KEY ?? '',
   zenoApiBase: process.env.ZENO_API_BASE ?? 'https://zenoapi.com',
+  /** Optional webhook callback URL for payment completion push. */
+  zenoWebhookUrl: process.env.ZENO_WEBHOOK_URL ?? '',
   /** FCM service-account credentials for backend push broadcast. */
   fcmProjectId: process.env.FCM_PROJECT_ID ?? '',
   fcmClientEmail: process.env.FCM_CLIENT_EMAIL ?? '',

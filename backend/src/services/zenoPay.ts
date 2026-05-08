@@ -26,6 +26,14 @@ export async function createZenoOrder(body: Record<string, unknown>): Promise<Re
   if (!key) {
     throw new HttpError(500, 'ZENO_API_KEY is not configured', 'ZENO_KEY_MISSING');
   }
+  const requestBody: Record<string, unknown> = { ...body };
+  if (
+    (requestBody.webhook_url == null || String(requestBody.webhook_url).trim().length === 0) &&
+    env.zenoWebhookUrl.trim()
+  ) {
+    requestBody.webhook_url = env.zenoWebhookUrl.trim();
+  }
+
   const res = await fetch(zenoCreateUrl(), {
     method: 'POST',
     headers: {
@@ -33,7 +41,7 @@ export async function createZenoOrder(body: Record<string, unknown>): Promise<Re
       'Content-Type': 'application/json; charset=utf-8',
       'x-api-key': key,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
   const text = await res.text();
   let j: any;
