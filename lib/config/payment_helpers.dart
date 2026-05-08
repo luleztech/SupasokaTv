@@ -6,9 +6,13 @@ bool isPaymentCompleted(Object? status) {
   return s == 'COMPLETED' ||
       s == 'COMPLETE' ||
       s == 'SUCCESS' ||
+      s == 'SUCCESSFUL' ||
       s == 'SUCCEEDED' ||
       s == 'PAID' ||
-      s == 'APPROVED';
+      s == 'APPROVED' ||
+      s == 'AUTHORIZED' ||
+      s == 'AUTHORISED' ||
+      s == 'SETTLED';
 }
 
 bool isPaymentTerminalFailure(Object? status) {

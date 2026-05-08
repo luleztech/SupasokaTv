@@ -88,7 +88,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   _PayDialogTone _statusTone = _PayDialogTone.info;
   String? _pendingBundleLabel;
   String? _pollingOrderId;
-  Timer? _pollTimer;
   int _notFoundStreak = 0;
   bool _simulating = false;
   int _waitingSeconds = _kPaymentWaitSeconds;
@@ -96,6 +95,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   _PaymentUiPhase _paymentUiPhase = _PaymentUiPhase.none;
   String? _sessionEndDetail;
   AnimationController? _entryCtrl;
+  /// Incremented to cancel in-flight adaptive poll [Future]s (replaces fixed [Timer] polling).
+  int _pollGen = 0;
+  /// Avoids double [addPostFrameCallback] / double-tap starting two polls so the first gen is never invalidated before any HTTP check.
+  bool _paymentPollArmed = false;
   /// Prevents countdown timeout from racing past a successful poll / [confirm] round-trip.
   bool _paymentCompletionInProgress = false;
 
@@ -150,22 +153,53 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   /// Zeno / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
   Object? _paymentStatusFromCheckResponse(Map<String, dynamic> response) {
-    final top = response['status'];
-    if (top != null && top.toString().trim().isNotEmpty) return top;
+    Object? pickRow(Map<String, dynamic> m) {
+      for (final k in const [
+        'payment_status',
+        'PaymentStatus',
+        'paymentStatus',
+        'transaction_status',
+        'TransactionStatus',
+        'order_status',
+        'OrderStatus',
+        'payment_state',
+        'PaymentState',
+        'status',
+      ]) {
+        final v = m[k];
+        if (v == null) continue;
+        if (v.toString().trim().isEmpty) continue;
+        return v;
+      }
+      return null;
+    }
+
+    final top = pickRow(response);
+    if (top != null) return top;
+
     final raw = response['raw'];
     if (raw is Map) {
-      final data = raw['data'];
-      if (data is List && data.isNotEmpty) {
-        final row = data.first;
-        if (row is Map) {
-          final m = Map<String, dynamic>.from(row);
-          return m['payment_status'] ??
-              m['PaymentStatus'] ??
-              m['transaction_status'] ??
-              m['paymentStatus'] ??
-              m['status'];
-        }
+      final rawMap = Map<String, dynamic>.from(raw);
+      final fromRaw = pickRow(rawMap);
+      if (fromRaw != null) return fromRaw;
+
+      final data = rawMap['data'];
+      if (data is List && data.isNotEmpty && data.first is Map) {
+        final row = pickRow(Map<String, dynamic>.from(data.first as Map));
+        if (row != null) return row;
       }
+      if (data is Map) {
+        final row = pickRow(Map<String, dynamic>.from(data));
+        if (row != null) return row;
+      }
+    }
+
+    final dataTop = response['data'];
+    if (dataTop is List && dataTop.isNotEmpty && dataTop.first is Map) {
+      return pickRow(Map<String, dynamic>.from(dataTop.first as Map));
+    }
+    if (dataTop is Map) {
+      return pickRow(Map<String, dynamic>.from(dataTop));
     }
     return null;
   }
@@ -223,22 +257,26 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
-    _waitingTimer?.cancel();
+    _stopPaymentTimersOnly();
     _phoneCtrl.dispose();
     _entryCtrl?.dispose();
     super.dispose();
   }
 
   void _stopPaymentTimersOnly() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
+    _pollGen++;
+    _paymentPollArmed = false;
     _waitingTimer?.cancel();
     _waitingTimer = null;
   }
 
   void _startPolling() {
-    _pollTimer?.cancel();
+    final orderId = _pollingOrderId?.trim();
+    if (orderId == null || orderId.isEmpty) return;
+    if (_paymentPollArmed) return;
+    _paymentPollArmed = true;
+
+    _pollGen++;
     _waitingTimer?.cancel();
     setState(() {
       _waitingSeconds = _kPaymentWaitSeconds;
@@ -259,15 +297,37 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       setState(() => _waitingSeconds -= 1);
     });
 
-    final orderId = _pollingOrderId;
-    if (orderId == null || orderId.isEmpty) return;
+    final gen = _pollGen;
+    unawaited(_adaptivePaymentPollLoop(orderId, gen));
+  }
 
-    var polls = 0;
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      polls++;
-      if (!mounted || _paymentCompletionInProgress) return;
+  /// Fast status checks first (like [ZenoPayService.waitForCompleted]), then ~2s — detects paid sooner than fixed 3s polling.
+  Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
+    const warmDelaysMs = <int>[0, 650, 950, 1300, 1700, 2100, 2500];
+    var warmIdx = 0;
+    final deadline = DateTime.now().add(Duration(seconds: _kPaymentWaitSeconds));
+
+    while (mounted && gen == _pollGen && !_paymentCompletionInProgress) {
+      if (DateTime.now().isAfter(deadline)) {
+        if (_pollingOrderId != null && _pollingOrderId == orderId && !_paymentCompletionInProgress) {
+          await _finalizeSessionTimedOut(
+            detail:
+                'Muda wa kusubiri umeisha. Malipo ya simu yanaweza bado yanaendelea — jaribu tena au fungua programu baada ya muda mfupi.',
+          );
+        }
+        return;
+      }
+
+      final delayMs = warmIdx < warmDelaysMs.length ? warmDelaysMs[warmIdx] : 2000;
+      warmIdx++;
+      if (delayMs > 0) {
+        await Future<void>.delayed(Duration(milliseconds: delayMs));
+      }
+      if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
+
       try {
         final response = await paymentsApi.checkZenoStatus(orderId);
+        if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
         final paymentStatus = _paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
           _stopPaymentTimersOnly();
@@ -278,15 +338,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
           return;
         }
+        _notFoundStreak = 0;
       } catch (e) {
+        if (!mounted || gen != _pollGen) return;
         final msg = e.toString().toLowerCase();
         if (msg.contains('no order') || msg.contains('not found')) {
           _notFoundStreak++;
           if (_notFoundStreak >= 20) {
-            _pollTimer?.cancel();
-            _pollTimer = null;
-            _waitingTimer?.cancel();
-            _waitingTimer = null;
+            _stopPaymentTimersOnly();
             await _clearPendingOrderPrefs();
             if (mounted) {
               setState(() {
@@ -297,21 +356,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                     'Hatukuweza kuthibitisha ombi la malipo. Hakikisha una mtandao mzuri kisha anza upya kutoka hatua ya 1.';
               });
             }
+            return;
           }
         }
       }
-      if (polls >= 100) {
-        _pollTimer?.cancel();
-        _pollTimer = null;
-        _waitingTimer?.cancel();
-        _waitingTimer = null;
-        if (_paymentCompletionInProgress) return;
-        unawaited(_finalizeSessionTimedOut(
-          detail:
-              'Hatukuweza kupata uthibitisho baada ya muda mrefu. Anza upya na nambari yako.',
-        ));
-      }
-    });
+    }
   }
 
   Future<void> _clearPendingOrderPrefs() async {
@@ -362,10 +411,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   Future<void> _finalizeSessionTimedOut({String? detail}) async {
     if (_paymentCompletionInProgress) return;
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _waitingTimer?.cancel();
-    _waitingTimer = null;
+    _stopPaymentTimersOnly();
     await _clearPendingOrderPrefs();
     if (!mounted) return;
     setState(() {
@@ -378,10 +424,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   Future<void> _finalizeSessionFailed(String message) async {
     if (_paymentCompletionInProgress) return;
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _waitingTimer?.cancel();
-    _waitingTimer = null;
+    _stopPaymentTimersOnly();
     await _clearPendingOrderPrefs();
     if (!mounted) return;
     setState(() {
@@ -394,10 +437,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   void _resetPaymentFlowFromStepOne() {
     _paymentCompletionInProgress = false;
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _waitingTimer?.cancel();
-    _waitingTimer = null;
+    _stopPaymentTimersOnly();
     _clearPendingOrderPrefs();
     setState(() {
       _paymentUiPhase = _PaymentUiPhase.none;
@@ -909,8 +949,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           if (_paymentUiPhase == _PaymentUiPhase.waiting && _pollingOrderId != null)
             Positioned.fill(
               child: _PaymentWaitingModal(
-                secondsRemaining: _waitingSeconds,
-                totalSeconds: _kPaymentWaitSeconds,
+                elapsedSeconds: (_kPaymentWaitSeconds - _waitingSeconds).clamp(0, _kPaymentWaitSeconds),
+                maxWaitSeconds: _kPaymentWaitSeconds,
               ),
             ),
           if (_paymentUiPhase == _PaymentUiPhase.timedOut || _paymentUiPhase == _PaymentUiPhase.failed)
@@ -1249,16 +1289,17 @@ class _PaymentSessionEndedModal extends StatelessWidget {
 
 class _PaymentWaitingModal extends StatelessWidget {
   const _PaymentWaitingModal({
-    required this.secondsRemaining,
-    required this.totalSeconds,
+    required this.elapsedSeconds,
+    required this.maxWaitSeconds,
   });
 
-  final int secondsRemaining;
-  final int totalSeconds;
+  final int elapsedSeconds;
+  final int maxWaitSeconds;
 
   @override
   Widget build(BuildContext context) {
-    final total = totalSeconds <= 0 ? 1 : totalSeconds;
+    final max = maxWaitSeconds <= 0 ? 1 : maxWaitSeconds;
+    final progress = (elapsedSeconds / max).clamp(0.0, 1.0);
     return Material(
       color: Colors.black.withValues(alpha: 0.76),
       child: Center(
@@ -1279,10 +1320,20 @@ class _PaymentWaitingModal extends StatelessWidget {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
               ),
               const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 5,
+                  backgroundColor: Colors.white10,
+                  color: const Color(0xFF22C55E),
+                ),
+              ),
+              const SizedBox(height: 14),
               Text(
-                'Tunasubiri uthibitisho: $secondsRemaining / $total sekunde',
+                'Sekunde $elapsedSeconds · tunahakiki malipo mara kwa mara (haraka mwanzoni)',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.8)),
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.82), height: 1.35),
               ),
             ],
           ),

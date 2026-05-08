@@ -29,11 +29,6 @@ class ZenoPayService {
 
   static bool get _useBackendProxy => kZenoApiKey.trim().isEmpty;
 
-  static Uri _backendCreateUri() {
-    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    return Uri.parse('$origin/api/v1/public/zeno/create-order');
-  }
-
   static List<Uri> _backendCreateUris() {
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     return <Uri>[
@@ -42,13 +37,6 @@ class ZenoPayService {
       Uri.parse('$origin/api/v1/public/create-order'),
       Uri.parse('$origin/api/v1/public/payments/mobile_money_tanzania'),
     ];
-  }
-
-  static Uri _backendStatusUri(String orderId) {
-    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    return Uri.parse('$origin/api/v1/public/zeno/order-status').replace(
-      queryParameters: {'order_id': orderId},
-    );
   }
 
   static List<Uri> _backendStatusUris(String orderId) {
@@ -335,7 +323,15 @@ class ZenoPayService {
           return ZenoStatusResult.pending(null);
         }
         final row = Map<String, dynamic>.from(list.first as Map);
-        final ps = row['payment_status']?.toString().toUpperCase() ?? '';
+        final rawPs = row['payment_status'] ??
+            row['PaymentStatus'] ??
+            row['paymentStatus'] ??
+            row['status'] ??
+            row['order_status'] ??
+            row['OrderStatus'] ??
+            row['transaction_status'] ??
+            row['TransactionStatus'];
+        final ps = rawPs?.toString().trim().toUpperCase() ?? '';
         return ZenoStatusResult(paymentStatus: ps.isEmpty ? null : ps, raw: row);
       } on TimeoutException catch (e) {
         lastErr = e;

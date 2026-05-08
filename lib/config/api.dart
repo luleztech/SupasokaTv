@@ -60,7 +60,7 @@ class _PaymentsApi {
     };
   }
 
-  Future<void> completePaymentForTesting(String _orderId) async {
+  Future<void> completePaymentForTesting(String orderId) async {
     throw Exception('Test complete endpoint not configured');
   }
 }

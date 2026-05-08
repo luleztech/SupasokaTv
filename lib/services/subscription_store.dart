@@ -38,14 +38,24 @@ class SubscriptionStore {
     premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
   }
 
-  /// Stacks on top of an active subscription if still valid.
+  /// Stacks on top of an active subscription if still valid. Prefer server [confirm-zeno-premium] for exact duration from admin malipo row.
   static Future<void> activatePlan(String planId) async {
     final p = await SharedPreferences.getInstance();
     final now = DateTime.now();
-    final dur = switch (planId) {
+    final id = planId.trim().toLowerCase();
+    final dur = switch (id) {
       'weekly' => const Duration(days: 7),
       'monthly' => const Duration(days: 30),
       'yearly' => const Duration(days: 365),
+      'annual' => const Duration(days: 365),
+      'quarterly' ||
+      'quarter' ||
+      'three_month' ||
+      'trimestrial' ||
+      'miezi_3' ||
+      'miezi3' =>
+        const Duration(days: 90),
+      'daily' => const Duration(days: 1),
       _ => const Duration(days: 30),
     };
     final existingMs = p.getInt(_kUntilMs);

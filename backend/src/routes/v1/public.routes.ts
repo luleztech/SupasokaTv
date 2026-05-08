@@ -8,7 +8,18 @@ function isZenoPaymentCompleted(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
     .trim()
     .toUpperCase();
-  return s === 'COMPLETED' || s === 'SUCCESS' || s === 'PAID';
+  return (
+    s === 'COMPLETED' ||
+    s === 'COMPLETE' ||
+    s === 'SUCCESS' ||
+    s === 'SUCCESSFUL' ||
+    s === 'SUCCEEDED' ||
+    s === 'PAID' ||
+    s === 'APPROVED' ||
+    s === 'AUTHORIZED' ||
+    s === 'AUTHORISED' ||
+    s === 'SETTLED'
+  );
 }
 
 /** Compare TZ national numbers across `07…`, `+255…`, `255…` shapes. */
@@ -20,6 +31,29 @@ function normalizeTzBuyerPhone(raw: string): string {
   if (d.length === 9) return `0${d}`.slice(0, 10);
   if (d.length >= 10 && d.startsWith('0')) return d.slice(0, 10);
   return d.slice(0, 12);
+}
+
+function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
+  if (!row || typeof row !== 'object') return '';
+  const keys = [
+    'payment_status',
+    'PaymentStatus',
+    'paymentStatus',
+    'transaction_status',
+    'TransactionStatus',
+    'order_status',
+    'OrderStatus',
+    'payment_state',
+    'PaymentState',
+    'status',
+  ] as const;
+  for (const k of keys) {
+    const v = row[k];
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s.length > 0) return s.toUpperCase();
+  }
+  return '';
 }
 
 export const publicRouter = Router();
@@ -88,7 +122,7 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
     }
 
     const row = await fetchZenoOrderStatus(orderId);
-    const ps = String(row?.payment_status ?? '').toUpperCase();
+    const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
     if (!isZenoPaymentCompleted(ps)) {
       res.status(402).json({ ok: false, error: 'Payment not completed', paymentStatus: ps || null });
       return;
@@ -98,8 +132,8 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
     const zPhone = String((row as any)?.buyer_phone ?? '').trim();
     if (phone && zPhone) {
       const a = normalizeTzBuyerPhone(phone);
-      const b = normalizeTzBuyerPhone(zPhone);
-      if (a.length >= 9 && b.length >= 9 && a !== b) {
+      const zNorm = normalizeTzBuyerPhone(zPhone);
+      if (a.length >= 9 && zNorm.length >= 9 && a !== zNorm) {
         res.status(409).json({ ok: false, error: 'Phone mismatch' });
         return;
       }

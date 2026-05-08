@@ -51,9 +51,9 @@ INSERT INTO live_matches (id, title, sport, sport_icon, img, channel_id, live_ba
 SELECT setval(pg_get_serial_sequence('live_matches', 'id'), (SELECT COALESCE(MAX(id), 1) FROM live_matches));
 
 INSERT INTO malipo_plans (id, label, price_lines, amount, period, popular, accent1, accent2, badge, sort_order) VALUES
-('weekly', 'Wiki 1', E'TSh\n2,000', 'TSh 2,000', 'Wiki Moja', FALSE, 4278235625, 4281745649, 'MPYA', 0),
-('monthly', 'Mwezi', E'TSh\n5,000', 'TSh 5,000', 'Mwezi Moja', TRUE, 4289374967, 4293884089, 'BORA', 1),
-('yearly', 'Mwaka', E'TSh\n12,000', 'TSh 12,000', 'Mwaka Mzima', FALSE, 4294940075, 4292861912, 'PUNGUZO', 2);
+('weekly', 'Wiki 1', E'TSh\n2,000', 'TSh 2,000', 'Wiki Moja · siku 7', FALSE, 4278235625, 4281745649, 'MPYA', 0),
+('monthly', 'Mwezi', E'TSh\n5,000', 'TSh 5,000', 'Mwezi Moja · siku 30', TRUE, 4289374967, 4293884089, 'BORA', 1),
+('quarterly', 'Miezi 3', E'TSh\n12,000', 'TSh 12,000', 'Miezi Mitatu · miezi 3', FALSE, 4294940075, 4292861912, 'PUNGUZO', 2);
 
 INSERT INTO premium_packages (id, name, price, period, features, popular, sort_order) VALUES
 ('daily', 'Daily Pass', '$1.99', '/day', '["All Channels","HD Quality","1 Device"]'::jsonb, FALSE, 0),
