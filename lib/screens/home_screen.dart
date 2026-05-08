@@ -21,7 +21,7 @@ import 'package:supasoka/widgets/whatsapp_fab.dart';
 /// Wider horizontal channel cards on Home (was 168).
 const double _kRailTileWidth = 212;
 
-double get _kRailHeight => channelRailCellHeight(_kRailTileWidth);
+double get _kRailHeight => channelHomeRailCellHeight(_kRailTileWidth);
 
 String _catEmoji(String cat) {
   switch (cat) {
@@ -568,58 +568,82 @@ class _ChannelRail extends StatelessWidget {
     if (channels.isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding: EdgeInsets.zero,
+      padding: const EdgeInsets.only(bottom: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: t.card.withValues(alpha: 0.35),
-                  border: Border.all(color: t.border.withValues(alpha: 0.45)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 5,
-                      height: 18,
-                      decoration: BoxDecoration(
-                        color: t.accent,
-                        borderRadius: BorderRadius.circular(99),
-                      ),
+            padding: const EdgeInsets.fromLTRB(18, 2, 18, 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 4,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        t.accent,
+                        t.accent.withValues(alpha: 0.4),
+                      ],
                     ),
-                    const SizedBox(width: 10),
-                    Text(
-                      title.toUpperCase(),
-                      style: rajdhani(14.5, weight: FontWeight.w800).copyWith(
-                        color: t.text2.withValues(alpha: 0.95),
-                        letterSpacing: 0.9,
-                        height: 1.1,
-                        fontStyle: FontStyle.italic,
+                    boxShadow: [
+                      BoxShadow(
+                        color: t.accent.withValues(alpha: 0.28),
+                        blurRadius: 10,
+                        spreadRadius: -1,
+                        offset: const Offset(0, 3),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: rajdhani(12.5, weight: FontWeight.w800).copyWith(
+                      color: t.text.withValues(alpha: 0.92),
+                      letterSpacing: 1.05,
+                      height: 1.05,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: t.card.withValues(alpha: 0.55),
+                    border: Border.all(color: t.border.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    '${channels.length}',
+                    style: rajdhani(10.5, weight: FontWeight.w700).copyWith(
+                      color: t.text2.withValues(alpha: 0.95),
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           SizedBox(
             height: railHeight,
             child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
               scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
               itemCount: channels.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 14),
+              separatorBuilder: (context, index) => const SizedBox(width: 12),
               itemBuilder: (context, i) {
                 final ch = channels[i];
                 return ChannelCard(
                   width: tileWidth,
+                  railPosterHeightDelta: -20,
                   channel: ch,
                   locked: lockedFor(ch),
                   onPress: () => onChannel(ch),

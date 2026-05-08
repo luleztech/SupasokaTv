@@ -45,7 +45,17 @@ const _payLine = Color(0x14FFFFFF);
 const _payMuted = Color(0xFF8B9CAF);
 const _scaffold = Color(0xFF02040A);
 
-const int _kPaymentWaitSeconds = 60;
+/// USSD / wallet confirmation often takes 1–3+ minutes; 60s caused false “Anza upya” while Zeno was still pending.
+const int _kPaymentWaitSeconds = 300;
+
+/// Shown only after the server has activated premium (same moment admin sees it).
+const _kPremiumSuccessTitle = 'HONGERA';
+const _kPremiumSuccessMessage =
+    'Umefanikiwa kufungua channel zote na karibu sana katika familia ya Supasoka. Hautojutia.';
+
+const _kPremiumConfirmFailedTitle = 'Haikuweza kusasisha Premium';
+const _kPremiumConfirmFailedMessage =
+    'Malipo yako yanaonekana lakini hatukuweza kuthibitisha na server. Hakikisha una intaneti thabiti, kisha rudi hapa au fungua programu tena ili jaribu tena.';
 
 enum _PaymentUiPhase { none, instruction, waiting, timedOut, failed }
 enum _PayDialogTone { success, error, info }
@@ -86,6 +96,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   _PaymentUiPhase _paymentUiPhase = _PaymentUiPhase.none;
   String? _sessionEndDetail;
   AnimationController? _entryCtrl;
+  /// Prevents countdown timeout from racing past a successful poll / [confirm] round-trip.
+  bool _paymentCompletionInProgress = false;
 
   AnimationController get _entryCtrlSafe {
     final existing = _entryCtrl;
@@ -136,6 +148,28 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   String get _cleanPhone => _phoneCtrl.text.replaceAll(RegExp(r'\s+'), '');
   bool get _phoneOk => _phoneValid(_phoneCtrl.text);
 
+  /// Zeno / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
+  Object? _paymentStatusFromCheckResponse(Map<String, dynamic> response) {
+    final top = response['status'];
+    if (top != null && top.toString().trim().isNotEmpty) return top;
+    final raw = response['raw'];
+    if (raw is Map) {
+      final data = raw['data'];
+      if (data is List && data.isNotEmpty) {
+        final row = data.first;
+        if (row is Map) {
+          final m = Map<String, dynamic>.from(row);
+          return m['payment_status'] ??
+              m['PaymentStatus'] ??
+              m['transaction_status'] ??
+              m['paymentStatus'] ??
+              m['status'];
+        }
+      }
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -158,13 +192,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
     try {
       final res = await paymentsApi.checkZenoStatus(pending);
-      final st = res['status'] ?? res['raw']?['data']?[0]?['payment_status'];
+      final st = _paymentStatusFromCheckResponse(res);
       if (isPaymentCompleted(st)) {
-        await _markPaymentCompleted(
-          title: 'Hongera — malipo yamehakikiwa',
-          message:
-              'Malipo yaliyokuwa yanasubiri yamekamilika. Akaunti yako inasasishwa kwa Premium.',
-        );
+        _stopPaymentTimersOnly();
+        await _markPaymentCompleted();
       } else if (isPaymentTerminalFailure(st)) {
         await prefs.remove('pendingPaymentOrderId');
         if (mounted) {
@@ -199,6 +230,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     super.dispose();
   }
 
+  void _stopPaymentTimersOnly() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _waitingTimer?.cancel();
+    _waitingTimer = null;
+  }
+
   void _startPolling() {
     _pollTimer?.cancel();
     _waitingTimer?.cancel();
@@ -227,17 +265,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     var polls = 0;
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       polls++;
-      if (!mounted) return;
+      if (!mounted || _paymentCompletionInProgress) return;
       try {
         final response = await paymentsApi.checkZenoStatus(orderId);
-        final paymentStatus =
-            response['status'] ?? response['raw']?['data']?[0]?['payment_status'];
+        final paymentStatus = _paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
-          await _markPaymentCompleted(
-            title: 'Hongera — malipo yamehakikiwa',
-            message:
-                'Malipo yako yamekamilika kwa uhakika. Akaunti yako inasasishwa; channel zote zitafunguliwa.',
-          );
+          _stopPaymentTimersOnly();
+          await _markPaymentCompleted();
           return;
         }
         if (isPaymentTerminalFailure(paymentStatus)) {
@@ -271,6 +305,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         _pollTimer = null;
         _waitingTimer?.cancel();
         _waitingTimer = null;
+        if (_paymentCompletionInProgress) return;
         unawaited(_finalizeSessionTimedOut(
           detail:
               'Hatukuweza kupata uthibitisho baada ya muda mrefu. Anza upya na nambari yako.',
@@ -288,13 +323,45 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   void _handleWaitWindowExpired() {
     if (!mounted || _pollingOrderId == null) return;
-    unawaited(_finalizeSessionTimedOut(
+    if (_paymentCompletionInProgress) return;
+    unawaited(_handleWaitWindowExpiredAsync());
+  }
+
+  /// Last chance: Zeno may flip to completed right as the countdown hits zero.
+  Future<void> _handleWaitWindowExpiredAsync() async {
+    if (_paymentCompletionInProgress || !mounted) return;
+    final id = _pollingOrderId?.trim();
+    if (id == null || id.isEmpty) {
+      await _finalizeSessionTimedOut(
+        detail:
+            'Muda wa kusubiri umeisha bila uthibitisho. Hakikisha umeingiza PIN kwenye simu, kisha jaribu tena.',
+      );
+      return;
+    }
+    try {
+      final response = await paymentsApi.checkZenoStatus(id);
+      final paymentStatus = _paymentStatusFromCheckResponse(response);
+      if (isPaymentCompleted(paymentStatus)) {
+        _stopPaymentTimersOnly();
+        await _markPaymentCompleted();
+        return;
+      }
+      if (isPaymentTerminalFailure(paymentStatus)) {
+        await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
+        return;
+      }
+    } catch (_) {
+      // fall through to timeout
+    }
+    if (!mounted || _paymentCompletionInProgress) return;
+    await _finalizeSessionTimedOut(
       detail:
-          'Muda wa dakika 1 umeisha bila uthibitisho. Hakikisha umeingiza namba ya siri au PIN kwenye simu. Unaweza kujaribu tena.',
-    ));
+          'Muda wa dakika ${_kPaymentWaitSeconds ~/ 60} umeisha bila uthibitisho wa haraka. Malipo yako yanaweza bado yanaendelea — jaribu tena au subiri kidogo kisha fungua programu tena.',
+    );
   }
 
   Future<void> _finalizeSessionTimedOut({String? detail}) async {
+    if (_paymentCompletionInProgress) return;
     _pollTimer?.cancel();
     _pollTimer = null;
     _waitingTimer?.cancel();
@@ -310,6 +377,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Future<void> _finalizeSessionFailed(String message) async {
+    if (_paymentCompletionInProgress) return;
     _pollTimer?.cancel();
     _pollTimer = null;
     _waitingTimer?.cancel();
@@ -325,6 +393,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   void _resetPaymentFlowFromStepOne() {
+    _paymentCompletionInProgress = false;
     _pollTimer?.cancel();
     _pollTimer = null;
     _waitingTimer?.cancel();
@@ -399,7 +468,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
   }
 
-  /// Returns server [premiumUntilMs] on success; otherwise `null` (caller may fall back to local plan).
+  /// Returns server [premiumUntilMs] only when the backend has verified Zeno and written premium.
   Future<int?> _confirmPremiumOnBackend({
     required String orderId,
     required String publicId,
@@ -443,70 +512,85 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return null;
   }
 
-  Future<void> _markPaymentCompleted({
-    required String title,
-    required String message,
-  }) async {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    _waitingTimer?.cancel();
-    _waitingTimer = null;
+  /// Zeno reports completed — we only unlock premium after [confirm-zeno-premium] succeeds (never on cancel/fail).
+  Future<void> _markPaymentCompleted() async {
+    if (_paymentCompletionInProgress) return;
+    _paymentCompletionInProgress = true;
+    try {
+      _stopPaymentTimersOnly();
 
-    final prefs = await SharedPreferences.getInstance();
-    final planId = prefs.getString('pendingPaymentPlanId')?.trim();
-    final phone = prefs.getString('pendingPaymentPhone')?.trim();
-    final pendingOrderFromPrefs = prefs.getString('pendingPaymentOrderId')?.trim();
-    final orderId = () {
-      final fromState = _pollingOrderId?.trim();
-      if (fromState != null && fromState.isNotEmpty) return fromState;
-      if (pendingOrderFromPrefs != null && pendingOrderFromPrefs.isNotEmpty) {
-        return pendingOrderFromPrefs;
+      final prefs = await SharedPreferences.getInstance();
+      final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+      final phone = prefs.getString('pendingPaymentPhone')?.trim();
+      final pendingOrderFromPrefs = prefs.getString('pendingPaymentOrderId')?.trim();
+      final orderId = () {
+        final fromState = _pollingOrderId?.trim();
+        if (fromState != null && fromState.isNotEmpty) return fromState;
+        if (pendingOrderFromPrefs != null && pendingOrderFromPrefs.isNotEmpty) {
+          return pendingOrderFromPrefs;
+        }
+        return '';
+      }();
+      final publicId = await UserIdentity.getOrCreatePublicId();
+
+      if (phone != null && phone.isNotEmpty) {
+        await UserIdentity.savePhoneNumber(phone);
+        await UserIdentity.registerWithBackend(phone: phone);
       }
-      return '';
-    }();
-    final publicId = await UserIdentity.getOrCreatePublicId();
 
-    if (phone != null && phone.isNotEmpty) {
-      await UserIdentity.savePhoneNumber(phone);
-      await UserIdentity.registerWithBackend(phone: phone);
-    }
-
-    int? serverUntilMs;
-    if (orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
-      try {
-        serverUntilMs = await _confirmPremiumOnBackend(
-          orderId: orderId,
-          publicId: publicId,
-          planId: planId,
-          phone: phone ?? '',
-        );
-      } catch (e) {
-        if (kDebugMode) {
-          debugPrint('confirm-zeno-premium request failed: $e');
+      int? serverUntilMs;
+      if (orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
+        try {
+          serverUntilMs = await _confirmPremiumOnBackend(
+            orderId: orderId,
+            publicId: publicId,
+            planId: planId,
+            phone: phone ?? '',
+          );
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('confirm-zeno-premium request failed: $e');
+          }
         }
       }
-    }
-    if (serverUntilMs != null) {
-      await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
-      await SubscriptionStore.syncPremiumFromBackend();
-    } else if (planId != null && planId.isNotEmpty) {
-      await SubscriptionStore.activatePlan(planId);
-    }
-    SubscriptionStore.refreshNotifierFromPrefs();
-    await _clearPendingOrderPrefs();
 
-    if (!mounted) return;
-    setState(() {
-      _pollingOrderId = null;
-      _notFoundStreak = 0;
-      _paymentUiPhase = _PaymentUiPhase.none;
-      _sessionEndDetail = null;
-      _pendingBundleLabel = null;
-    });
+      if (serverUntilMs != null) {
+        await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+        await SubscriptionStore.syncPremiumFromBackend();
+        SubscriptionStore.refreshNotifierFromPrefs();
+        await _clearPendingOrderPrefs();
 
-    _showStatus(title, message, _PayDialogTone.success);
-    await Future<void>.delayed(const Duration(milliseconds: 300));
-    await widget.onPaymentSuccess?.call();
+        if (mounted) {
+          setState(() {
+            _pollingOrderId = null;
+            _notFoundStreak = 0;
+            _paymentUiPhase = _PaymentUiPhase.none;
+            _sessionEndDetail = null;
+            _pendingBundleLabel = null;
+          });
+
+          _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          await widget.onPaymentSuccess?.call();
+        }
+        return;
+      }
+
+      // Do not grant premium locally — failed/cancelled flows never reach here; this is confirm/network mismatch only.
+      SubscriptionStore.refreshNotifierFromPrefs();
+      if (mounted) {
+        setState(() {
+          _pollingOrderId = null;
+          _notFoundStreak = 0;
+          _paymentUiPhase = _PaymentUiPhase.none;
+          _sessionEndDetail = null;
+          _pendingBundleLabel = null;
+        });
+        _showStatus(_kPremiumConfirmFailedTitle, _kPremiumConfirmFailedMessage, _PayDialogTone.error);
+      }
+    } finally {
+      _paymentCompletionInProgress = false;
+    }
   }
 
   Future<void> _send() async {
@@ -602,11 +686,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     setState(() => _simulating = true);
     try {
       await paymentsApi.completePaymentForTesting(id);
-      await _markPaymentCompleted(
-        title: 'Hongera — malipo yamehakikiwa',
-        message:
-            'Malipo yamefaulu (jaribio la maendelezi). Akaunti yako inasasishwa kwa Premium.',
-      );
+      await _markPaymentCompleted();
     } catch (e) {
       _showStatus('Tatizo', _mapPaymentError(e), _PayDialogTone.error);
     } finally {

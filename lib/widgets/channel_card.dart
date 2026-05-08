@@ -22,6 +22,9 @@ double channelGridCellHeight(double cellWidth) => _channelGridPosterHeight(cellW
 /// Home horizontal rails — poster + slack (name overlay inside thumb).
 double channelRailCellHeight(double tileWidth) => tileWidth * 4 / 3 + 1.5;
 
+/// Home discovery: slightly shorter tiles (tighter rail, modern density).
+double channelHomeRailCellHeight(double tileWidth) => channelRailCellHeight(tileWidth) - 20;
+
 const Map<String, String> kCatLabel = {
   'football': 'Football',
   'movies': 'Movies',
@@ -102,6 +105,8 @@ class ChannelCard extends StatefulWidget {
     this.locked = false,
     this.width,
     this.compactGrid = false,
+    /// Rail mode only: shifts poster height (e.g. `-20` on home for shorter tiles).
+    this.railPosterHeightDelta = 0,
   });
 
   final Channel channel;
@@ -111,6 +116,7 @@ class ChannelCard extends StatefulWidget {
   final double? width;
   /// Channels grid: trimmed poster + title overlay inside thumb ([compactGrid]).
   final bool compactGrid;
+  final double railPosterHeightDelta;
 
   @override
   State<ChannelCard> createState() => _ChannelCardState();
@@ -269,6 +275,24 @@ class _ChannelCardState extends State<ChannelCard> {
                       locked: widget.locked,
                       titleOverlay: true,
                       titleOverlayCompact: true,
+                    ),
+                  );
+                },
+              )
+            else if (rail)
+              LayoutBuilder(
+                builder: (context, c) {
+                  final cw = c.maxWidth;
+                  final baseH = cw * 4 / 3;
+                  final targetH = (baseH + widget.railPosterHeightDelta).clamp(72.0, baseH + 24);
+                  return AspectRatio(
+                    aspectRatio: cw / targetH,
+                    child: _ChannelPoster(
+                      t: t,
+                      ch: ch,
+                      locked: widget.locked,
+                      titleOverlay: true,
+                      titleOverlayCompact: false,
                     ),
                   );
                 },

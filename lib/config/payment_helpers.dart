@@ -3,7 +3,12 @@ String normalizedPaymentStatus(Object? status) =>
 
 bool isPaymentCompleted(Object? status) {
   final s = normalizedPaymentStatus(status);
-  return s == 'COMPLETED' || s == 'SUCCESS' || s == 'PAID';
+  return s == 'COMPLETED' ||
+      s == 'COMPLETE' ||
+      s == 'SUCCESS' ||
+      s == 'SUCCEEDED' ||
+      s == 'PAID' ||
+      s == 'APPROVED';
 }
 
 bool isPaymentTerminalFailure(Object? status) {
