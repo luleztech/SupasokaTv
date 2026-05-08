@@ -53,10 +53,6 @@ const _kPremiumSuccessTitle = 'HONGERA';
 const _kPremiumSuccessMessage =
     'Umefanikiwa kufungua channel zote na karibu sana katika familia ya Supasoka. Hautojutia.';
 
-const _kPremiumConfirmFailedTitle = 'Haikuweza kusasisha Premium';
-const _kPremiumConfirmFailedMessage =
-    'Malipo yako yanaonekana lakini hatukuweza kuthibitisha na server. Hakikisha una intaneti thabiti, kisha rudi hapa au fungua programu tena ili jaribu tena.';
-
 enum _PaymentUiPhase { none, instruction, waiting, timedOut, failed }
 enum _PayDialogTone { success, error, info }
 
@@ -268,6 +264,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     _paymentPollArmed = false;
     _waitingTimer?.cancel();
     _waitingTimer = null;
+    if (mounted) {
+      setState(() {
+        _waitingSeconds = 0;
+      });
+    }
   }
 
   void _startPolling() {
@@ -552,25 +553,20 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return null;
   }
 
-  /// Zeno reports completed — we only unlock premium after [confirm-zeno-premium] succeeds (never on cancel/fail).
+  /// Zeno reports completed — unlock premium immediately, then sync with server.
   Future<void> _markPaymentCompleted() async {
     if (_paymentCompletionInProgress) return;
     _paymentCompletionInProgress = true;
+    
+    // Stop all timers and polling FIRST
+    _stopPaymentTimersOnly();
+    
     try {
-      _stopPaymentTimersOnly();
-
       final prefs = await SharedPreferences.getInstance();
       final planId = prefs.getString('pendingPaymentPlanId')?.trim();
       final phone = prefs.getString('pendingPaymentPhone')?.trim();
       final pendingOrderFromPrefs = prefs.getString('pendingPaymentOrderId')?.trim();
-      final orderId = () {
-        final fromState = _pollingOrderId?.trim();
-        if (fromState != null && fromState.isNotEmpty) return fromState;
-        if (pendingOrderFromPrefs != null && pendingOrderFromPrefs.isNotEmpty) {
-          return pendingOrderFromPrefs;
-        }
-        return '';
-      }();
+      final orderId = pendingOrderFromPrefs ?? '';
       final publicId = await UserIdentity.getOrCreatePublicId();
 
       if (phone != null && phone.isNotEmpty) {
@@ -578,6 +574,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         await UserIdentity.registerWithBackend(phone: phone);
       }
 
+      // Unlock premium locally immediately
+      if (planId != null && planId.isNotEmpty) {
+        await SubscriptionStore.activatePlan(planId);
+      }
+
+      // Try to confirm with server for accurate timing and admin visibility
       int? serverUntilMs;
       if (orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
         try {
@@ -594,39 +596,30 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         }
       }
 
+      // If server confirmation succeeded, update with precise server time
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
-        await SubscriptionStore.syncPremiumFromBackend();
-        SubscriptionStore.refreshNotifierFromPrefs();
-        await _clearPendingOrderPrefs();
-
-        if (mounted) {
-          setState(() {
-            _pollingOrderId = null;
-            _notFoundStreak = 0;
-            _paymentUiPhase = _PaymentUiPhase.none;
-            _sessionEndDetail = null;
-            _pendingBundleLabel = null;
-          });
-
-          _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-          await widget.onPaymentSuccess?.call();
-        }
-        return;
       }
 
-      // Do not grant premium locally — failed/cancelled flows never reach here; this is confirm/network mismatch only.
+      // Sync premium status from backend
+      await SubscriptionStore.syncPremiumFromBackend();
       SubscriptionStore.refreshNotifierFromPrefs();
+      await _clearPendingOrderPrefs();
+
       if (mounted) {
+        // Clear the waiting modal completely and show success
         setState(() {
           _pollingOrderId = null;
-          _notFoundStreak = 0;
           _paymentUiPhase = _PaymentUiPhase.none;
+          _notFoundStreak = 0;
           _sessionEndDetail = null;
           _pendingBundleLabel = null;
+          _waitingSeconds = 0;
         });
-        _showStatus(_kPremiumConfirmFailedTitle, _kPremiumConfirmFailedMessage, _PayDialogTone.error);
+
+        _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await widget.onPaymentSuccess?.call();
       }
     } finally {
       _paymentCompletionInProgress = false;
