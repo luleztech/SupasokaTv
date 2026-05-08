@@ -3,22 +3,32 @@ import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicC
 import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
 import { createZenoOrder, fetchZenoOrderStatus } from '../../services/zenoPay';
 import { activatePremiumForUser } from '../../services/premiumActivation';
+import {
+  getIntent,
+  markIntentActivated,
+  upsertPendingIntent,
+  updateIntentStatus,
+} from '../../services/paymentIntents';
 
 function isZenoPaymentCompleted(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
     .trim()
     .toUpperCase();
+  return s === 'COMPLETED' || s === 'COMPLETE' || s === 'SUCCEEDED' || s === 'PAID' || s === 'SETTLED';
+}
+
+function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
+  const s = String(paymentStatus ?? '')
+    .trim()
+    .toUpperCase();
   return (
-    s === 'COMPLETED' ||
-    s === 'COMPLETE' ||
-    s === 'SUCCESS' ||
-    s === 'SUCCESSFUL' ||
-    s === 'SUCCEEDED' ||
-    s === 'PAID' ||
-    s === 'APPROVED' ||
-    s === 'AUTHORIZED' ||
-    s === 'AUTHORISED' ||
-    s === 'SETTLED'
+    s === 'FAILED' ||
+    s === 'ERROR' ||
+    s === 'CANCELLED' ||
+    s === 'CANCELED' ||
+    s === 'REJECTED' ||
+    s === 'DECLINED' ||
+    s === 'EXPIRED'
   );
 }
 
@@ -121,10 +131,33 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
       return;
     }
 
+    const tracked = await getIntent(orderId);
+    if (tracked?.public_id && tracked.public_id !== publicId) {
+      res.status(409).json({ ok: false, error: 'Order belongs to another user' });
+      return;
+    }
+    if (tracked?.plan_id && tracked.plan_id !== planId) {
+      res.status(409).json({ ok: false, error: 'Order does not match selected plan' });
+      return;
+    }
+    if (tracked?.activated_at_ms != null) {
+      const until = await getUserPremiumStatus(publicId);
+      res.json({ ok: true, premiumUntilMs: until });
+      return;
+    }
+
     const row = await fetchZenoOrderStatus(orderId);
     const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+    if (ps) {
+      await updateIntentStatus({
+        orderId,
+        providerStatus: ps,
+        providerPayload: row ?? null,
+      });
+    }
     if (!isZenoPaymentCompleted(ps)) {
-      res.status(402).json({ ok: false, error: 'Payment not completed', paymentStatus: ps || null });
+      const code = isZenoPaymentTerminalFailure(ps) ? 409 : 402;
+      res.status(code).json({ ok: false, error: 'Payment not completed', paymentStatus: ps || null });
       return;
     }
 
@@ -145,6 +178,7 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
       phone,
       note: `zeno:${orderId}`,
     });
+    await markIntentActivated(orderId);
 
     res.json({ ok: true, premiumUntilMs: activated.premiumUntilMs });
   } catch (e) {
@@ -157,6 +191,18 @@ publicRouter.post('/zeno/create-order', async (req, res, next) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const out = await createZenoOrder(body);
+    const orderId = String(out.order_id ?? out.orderId ?? '').trim();
+    if (orderId) {
+      const metadata = (body.metadata ?? {}) as Record<string, unknown>;
+      await upsertPendingIntent({
+        orderId,
+        publicId: String(metadata.external_id ?? metadata.public_id ?? '').trim(),
+        planId: String(metadata.plan_id ?? '').trim(),
+        amountTzs: Number(body.amount ?? 0),
+        buyerPhone: String(body.buyer_phone ?? metadata.buyer_phone ?? '').trim(),
+        providerPayload: out,
+      });
+    }
     res.json(out);
   } catch (e) {
     next(e);
@@ -171,7 +217,25 @@ publicRouter.get('/zeno/order-status', async (req, res, next) => {
       res.status(400).json({ resultcode: '400', status: 'error', message: 'order_id is required' });
       return;
     }
+    const local = await getIntent(orderId);
+    if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
+      res.json({
+        resultcode: '000',
+        status: 'success',
+        data: [{ payment_status: 'COMPLETED', order_id: orderId }],
+      });
+      return;
+    }
+
     const row = await fetchZenoOrderStatus(orderId);
+    const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+    if (ps) {
+      await updateIntentStatus({
+        orderId,
+        providerStatus: ps,
+        providerPayload: row ?? null,
+      });
+    }
     res.json({
       resultcode: row ? '000' : '404',
       status: row ? 'success' : 'error',

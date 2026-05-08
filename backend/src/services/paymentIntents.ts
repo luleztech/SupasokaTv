@@ -1,0 +1,139 @@
+import { getPool } from '../db/pool';
+
+export type PaymentIntentStatus =
+  | 'PENDING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'REJECTED'
+  | 'ERROR';
+
+export type PaymentIntentRow = {
+  order_id: string;
+  public_id: string | null;
+  plan_id: string | null;
+  amount_tzs: number | null;
+  buyer_phone: string | null;
+  status: PaymentIntentStatus;
+  provider_status: string | null;
+  activated_at_ms: string | null;
+};
+
+function normalizeStatus(raw: string): PaymentIntentStatus {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (!s) return 'PENDING';
+  if (s === 'COMPLETED' || s === 'PAID' || s === 'SETTLED') return 'COMPLETED';
+  if (s === 'FAILED' || s === 'DECLINED') return 'FAILED';
+  if (s === 'CANCELLED' || s === 'CANCELED' || s === 'CANCEL') return 'CANCELLED';
+  if (s === 'EXPIRED') return 'EXPIRED';
+  if (s === 'REJECTED') return 'REJECTED';
+  if (s === 'ERROR') return 'ERROR';
+  return 'PENDING';
+}
+
+export async function ensurePaymentIntentsTable(): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS payment_intents (
+      order_id TEXT PRIMARY KEY,
+      public_id TEXT,
+      plan_id TEXT,
+      amount_tzs BIGINT,
+      buyer_phone TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      provider_status TEXT,
+      activated_at_ms BIGINT,
+      provider_payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+  );
+}
+
+export async function upsertPendingIntent(args: {
+  orderId: string;
+  publicId?: string;
+  planId?: string;
+  amountTzs?: number;
+  buyerPhone?: string;
+  providerPayload?: unknown;
+}): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await ensurePaymentIntentsTable();
+  const amount = Number.isFinite(args.amountTzs as number) ? Math.trunc(args.amountTzs as number) : null;
+  await pool.query(
+    `INSERT INTO payment_intents
+      (order_id, public_id, plan_id, amount_tzs, buyer_phone, status, provider_status, provider_payload, updated_at)
+     VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, NULLIF($5, ''), 'PENDING', 'PENDING', $6::jsonb, now())
+     ON CONFLICT (order_id) DO UPDATE SET
+      public_id = COALESCE(NULLIF(EXCLUDED.public_id, ''), payment_intents.public_id),
+      plan_id = COALESCE(NULLIF(EXCLUDED.plan_id, ''), payment_intents.plan_id),
+      amount_tzs = COALESCE(EXCLUDED.amount_tzs, payment_intents.amount_tzs),
+      buyer_phone = COALESCE(NULLIF(EXCLUDED.buyer_phone, ''), payment_intents.buyer_phone),
+      provider_payload = COALESCE(EXCLUDED.provider_payload, payment_intents.provider_payload),
+      updated_at = now()`,
+    [
+      args.orderId,
+      args.publicId ?? '',
+      args.planId ?? '',
+      amount,
+      args.buyerPhone ?? '',
+      args.providerPayload != null ? JSON.stringify(args.providerPayload) : null,
+    ],
+  );
+}
+
+export async function updateIntentStatus(args: {
+  orderId: string;
+  providerStatus: string;
+  providerPayload?: unknown;
+}): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await ensurePaymentIntentsTable();
+  const providerStatus = String(args.providerStatus ?? '').trim().toUpperCase();
+  const status = normalizeStatus(providerStatus);
+  await pool.query(
+    `UPDATE payment_intents
+     SET status = $2,
+         provider_status = $3,
+         provider_payload = COALESCE($4::jsonb, provider_payload),
+         updated_at = now()
+     WHERE order_id = $1`,
+    [args.orderId, status, providerStatus || null, args.providerPayload != null ? JSON.stringify(args.providerPayload) : null],
+  );
+}
+
+export async function markIntentActivated(orderId: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await ensurePaymentIntentsTable();
+  await pool.query(
+    `UPDATE payment_intents
+     SET status = 'COMPLETED',
+         activated_at_ms = COALESCE(activated_at_ms, $2),
+         updated_at = now()
+     WHERE order_id = $1`,
+    [orderId, Date.now()],
+  );
+}
+
+export async function getIntent(orderId: string): Promise<PaymentIntentRow | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  await ensurePaymentIntentsTable();
+  const res = await pool.query<PaymentIntentRow>(
+    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, status, provider_status, activated_at_ms
+     FROM payment_intents
+     WHERE order_id = $1
+     LIMIT 1`,
+    [orderId],
+  );
+  return res.rows[0] ?? null;
+}
+

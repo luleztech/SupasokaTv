@@ -5,13 +5,8 @@ bool isPaymentCompleted(Object? status) {
   final s = normalizedPaymentStatus(status);
   return s == 'COMPLETED' ||
       s == 'COMPLETE' ||
-      s == 'SUCCESS' ||
-      s == 'SUCCESSFUL' ||
       s == 'SUCCEEDED' ||
       s == 'PAID' ||
-      s == 'APPROVED' ||
-      s == 'AUTHORIZED' ||
-      s == 'AUTHORISED' ||
       s == 'SETTLED';
 }
 
