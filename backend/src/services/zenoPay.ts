@@ -7,6 +7,7 @@ export type ZenoOrderStatusRow = {
   order_id?: string;
   amount?: unknown;
   metadata?: unknown;
+  [key: string]: unknown;
 };
 
 function zenoOrderStatusUrl(orderId: string): string {
@@ -68,14 +69,44 @@ export async function fetchZenoOrderStatus(orderId: string): Promise<ZenoOrderSt
     throw new HttpError(502, 'Invalid Zeno response', 'ZENO_BAD_JSON');
   }
 
-  const rc = String(j?.resultcode ?? '');
-  if (rc !== '000' && rc !== '0') {
+  const pickRow = (src: unknown): ZenoOrderStatusRow | null => {
+    if (!src) return null;
+    if (Array.isArray(src)) {
+      if (src.length === 0) return null;
+      const first = src[0];
+      if (!first || typeof first !== 'object') return null;
+      return first as ZenoOrderStatusRow;
+    }
+    if (typeof src === 'object') {
+      return src as ZenoOrderStatusRow;
+    }
     return null;
+  };
+
+  // Zeno payloads can vary by environment/version: prefer concrete row when present.
+  const fromData = pickRow(j?.data);
+  if (fromData) return fromData;
+  const fromOrder = pickRow(j?.order);
+  if (fromOrder) return fromOrder;
+  const fromTx = pickRow(j?.transaction);
+  if (fromTx) return fromTx;
+
+  // Fallback for providers that return status fields at top-level.
+  if (j && typeof j === 'object') {
+    const top = j as Record<string, unknown>;
+    const hasTopStatus =
+      top.payment_status != null ||
+      top.PaymentStatus != null ||
+      top.paymentStatus != null ||
+      top.transaction_status != null ||
+      top.TransactionStatus != null ||
+      top.order_status != null ||
+      top.OrderStatus != null ||
+      top.payment_state != null ||
+      top.PaymentState != null ||
+      top.status != null;
+    if (hasTopStatus) return top as ZenoOrderStatusRow;
   }
-  const data = j?.data;
-  if (!Array.isArray(data) || data.length === 0) return null;
-  const row = data[0];
-  if (!row || typeof row !== 'object') return null;
-  return row as ZenoOrderStatusRow;
+  return null;
 }
 

@@ -520,36 +520,44 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (base.isEmpty) return null;
     final origin = base.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/confirm-zeno-premium');
-    final res = await http
-        .post(
-          uri,
-          headers: const {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Cache-Control': 'no-cache',
-          },
-          body: jsonEncode({
-            'orderId': orderId,
-            'publicId': publicId,
-            'planId': planId,
-            'phone': phone,
-          }),
-        )
-        .timeout(const Duration(seconds: 25));
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      if (kDebugMode) {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final res = await http
+          .post(
+            uri,
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Cache-Control': 'no-cache',
+            },
+            body: jsonEncode({
+              'orderId': orderId,
+              'publicId': publicId,
+              'planId': planId,
+              'phone': phone,
+            }),
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        try {
+          final j = jsonDecode(res.body) as Map<String, dynamic>;
+          if (j['ok'] == true) {
+            final raw = j['premiumUntilMs'];
+            if (raw is int) return raw;
+            if (raw is num) return raw.toInt();
+          }
+        } catch (_) {}
+      } else if (kDebugMode) {
         debugPrint('confirm-zeno-premium HTTP ${res.statusCode}: ${res.body}');
       }
-      return null;
-    }
-    try {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      if (j['ok'] == true) {
-        final raw = j['premiumUntilMs'];
-        if (raw is int) return raw;
-        if (raw is num) return raw.toInt();
+
+      // 402 from backend means "still not completed on provider side".
+      if (res.statusCode == 402 && attempt < 4) {
+        await Future<void>.delayed(Duration(milliseconds: 900 + (attempt * 600)));
+        continue;
       }
-    } catch (_) {}
+      break;
+    }
     return null;
   }
 

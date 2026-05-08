@@ -93,6 +93,23 @@ class ZenoPayService {
         s.contains('clientexception');
   }
 
+  static bool _resultCodeAcceptsData(String? rc) {
+    if (rc == null || rc.trim().isEmpty) return true;
+    final v = rc.trim();
+    return v == '000' || v == '0' || v == '200' || v == '201';
+  }
+
+  static bool _looksLikePendingLookupFailure(String msg) {
+    final s = msg.toLowerCase();
+    return s.contains('not found') ||
+        s.contains('no order') ||
+        s.contains('pending') ||
+        s.contains('processing') ||
+        s.contains('in progress') ||
+        s.contains('haijapatikana') ||
+        s.contains('haikuweza kupata');
+  }
+
   static ZenoCreateResult _parseCreateResponse(http.Response res, String requestedOrderId) {
     final text = utf8.decode(res.bodyBytes);
     Map<String, dynamic>? j;
@@ -314,12 +331,17 @@ class ZenoPayService {
         }
 
         final rc = j['resultcode']?.toString();
-        if (rc != '000' && rc != '0') {
-          return ZenoStatusResult.error(j['message']?.toString() ?? 'Haikuweza kupata hali ya malipo');
-        }
+        final rcAcceptsData = _resultCodeAcceptsData(rc);
 
         final list = j['data'];
         if (list is! List || list.isEmpty) {
+          if (!rcAcceptsData) {
+            final msg = j['message']?.toString() ?? 'Haikuweza kupata hali ya malipo';
+            if (_looksLikePendingLookupFailure(msg)) {
+              return ZenoStatusResult.pending('PENDING');
+            }
+            return ZenoStatusResult.error(msg);
+          }
           return ZenoStatusResult.pending(null);
         }
         final row = Map<String, dynamic>.from(list.first as Map);
