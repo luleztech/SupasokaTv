@@ -55,6 +55,18 @@ const _kPremiumSuccessMessage =
 
 enum _PaymentUiPhase { none, instruction, waiting, timedOut, failed }
 enum _PayDialogTone { success, error, info }
+enum _ConfirmProbeKind { pending, completed, terminalFailure }
+
+class _ConfirmProbeOutcome {
+  const _ConfirmProbeOutcome._(this.kind, {this.paymentStatus});
+  final _ConfirmProbeKind kind;
+  final String? paymentStatus;
+
+  factory _ConfirmProbeOutcome.pending() => const _ConfirmProbeOutcome._(_ConfirmProbeKind.pending);
+  factory _ConfirmProbeOutcome.completed() => const _ConfirmProbeOutcome._(_ConfirmProbeKind.completed);
+  factory _ConfirmProbeOutcome.terminalFailure(String? status) =>
+      _ConfirmProbeOutcome._(_ConfirmProbeKind.terminalFailure, paymentStatus: status);
+}
 
 class PaymentsScreen extends StatefulWidget {
   const PaymentsScreen({
@@ -305,6 +317,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
     const warmDelaysMs = <int>[0, 650, 950, 1300, 1700, 2100, 2500];
     var warmIdx = 0;
+    var confirmProbeTick = 0;
     final deadline = DateTime.now().add(Duration(seconds: _kPaymentWaitSeconds));
 
     while (mounted && gen == _pollGen && !_paymentCompletionInProgress) {
@@ -337,6 +350,24 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         if (isPaymentTerminalFailure(paymentStatus)) {
           await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
           return;
+        }
+        confirmProbeTick++;
+        if (confirmProbeTick % 3 == 0) {
+          try {
+            final probe = await _probeConfirmWhilePending(orderId);
+            if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
+            if (probe.kind == _ConfirmProbeKind.completed) {
+              _stopPaymentTimersOnly();
+              await _markPaymentCompleted();
+              return;
+            }
+            if (probe.kind == _ConfirmProbeKind.terminalFailure) {
+              await _finalizeSessionFailed(_paymentFailureUserMessage(probe.paymentStatus));
+              return;
+            }
+          } catch (_) {
+            // keep polling; transient backend/provider lag.
+          }
         }
         _notFoundStreak = 0;
       } catch (e) {
@@ -558,6 +589,50 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       break;
     }
     return null;
+  }
+
+  Future<_ConfirmProbeOutcome> _probeConfirmWhilePending(String orderId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+    final phone = prefs.getString('pendingPaymentPhone')?.trim();
+    if (planId == null || planId.isEmpty) return _ConfirmProbeOutcome.pending();
+
+    final publicId = await UserIdentity.getOrCreatePublicId();
+    final base = apiConfigUrl.trim();
+    if (base.isEmpty) return _ConfirmProbeOutcome.pending();
+    final origin = base.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$origin/api/v1/public/confirm-zeno-premium');
+
+    final res = await http
+        .post(
+          uri,
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+          },
+          body: jsonEncode({
+            'orderId': orderId,
+            'publicId': publicId,
+            'planId': planId,
+            'phone': phone ?? '',
+          }),
+        )
+        .timeout(const Duration(seconds: 18));
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return _ConfirmProbeOutcome.completed();
+    }
+
+    if (res.statusCode == 409) {
+      try {
+        final j = jsonDecode(res.body) as Map<String, dynamic>;
+        return _ConfirmProbeOutcome.terminalFailure(j['paymentStatus']?.toString());
+      } catch (_) {
+        return _ConfirmProbeOutcome.terminalFailure(null);
+      }
+    }
+    return _ConfirmProbeOutcome.pending();
   }
 
   /// Zeno reports completed — unlock premium immediately, then sync with server.

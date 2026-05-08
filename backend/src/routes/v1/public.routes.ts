@@ -14,7 +14,18 @@ function isZenoPaymentCompleted(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
     .trim()
     .toUpperCase();
-  return s === 'COMPLETED' || s === 'COMPLETE' || s === 'SUCCEEDED' || s === 'PAID' || s === 'SETTLED';
+  return (
+    s === 'COMPLETED' ||
+    s === 'COMPLETE' ||
+    s === 'SUCCESS' ||
+    s === 'SUCCESSFUL' ||
+    s === 'SUCCEEDED' ||
+    s === 'PAID' ||
+    s === 'APPROVED' ||
+    s === 'AUTHORIZED' ||
+    s === 'AUTHORISED' ||
+    s === 'SETTLED'
+  );
 }
 
 function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
