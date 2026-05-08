@@ -55,7 +55,6 @@ function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefine
     'OrderStatus',
     'payment_state',
     'PaymentState',
-    'status',
   ] as const;
   for (const k of keys) {
     const v = row[k];

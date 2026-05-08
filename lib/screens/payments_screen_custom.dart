@@ -160,7 +160,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         'OrderStatus',
         'payment_state',
         'PaymentState',
-        'status',
       ]) {
         final v = m[k];
         if (v == null) continue;

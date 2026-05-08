@@ -348,7 +348,6 @@ class ZenoPayService {
         final rawPs = row['payment_status'] ??
             row['PaymentStatus'] ??
             row['paymentStatus'] ??
-            row['status'] ??
             row['order_status'] ??
             row['OrderStatus'] ??
             row['transaction_status'] ??
