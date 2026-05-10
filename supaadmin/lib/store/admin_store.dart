@@ -51,12 +51,18 @@ class AdminStore extends ChangeNotifier {
   String? _lastSyncError;
   bool _syncing = false;
   Timer? _syncRetryTimer;
+  Map<String, int> _paymentHealthSummary = const {};
+  List<Map<String, String?>> _paymentHealthRecent = const [];
+  bool _loadingPaymentHealth = false;
 
   AppConfig get config => _config;
 
   String? get lastSyncError => _lastSyncError;
 
   bool get syncingToServer => _syncing;
+  Map<String, int> get paymentHealthSummary => _paymentHealthSummary;
+  List<Map<String, String?>> get paymentHealthRecent => _paymentHealthRecent;
+  bool get loadingPaymentHealth => _loadingPaymentHealth;
 
   /// Non-empty when key was compiled in (`kRailwayAdminApiKey` / `--dart-define=ADMIN_API_KEY=…`).
   bool get adminApiKeyIsFromBuild => false;
@@ -132,6 +138,7 @@ class AdminStore extends ChangeNotifier {
 
     if (hasAdminSession) {
       await pullConfigFromServer();
+      await refreshPaymentHealth();
     }
     _ensureAutoSyncRetryLoop();
   }
@@ -181,6 +188,7 @@ class AdminStore extends ChangeNotifier {
     notifyListeners();
     if (hasAdminSession) {
       await pullConfigFromServer();
+      await refreshPaymentHealth();
     }
     _ensureAutoSyncRetryLoop();
   }
@@ -276,6 +284,62 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> refreshUsersFromServer() => pullConfigFromServer();
+
+  Future<void> refreshPaymentHealth() async {
+    if (!hasAdminSession) return;
+    _loadingPaymentHealth = true;
+    notifyListeners();
+    try {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/payment-health').replace(
+        queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+      );
+      final res = await http
+          .get(
+            uri,
+            headers: {
+              ..._authHeaders(),
+              'Cache-Control': 'no-cache',
+            },
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic> || decoded['ok'] != true) {
+        return;
+      }
+      final summaryRaw = decoded['summary'];
+      if (summaryRaw is Map) {
+        _paymentHealthSummary = {
+          for (final e in summaryRaw.entries)
+            e.key.toString(): int.tryParse('${e.value}') ?? 0,
+        };
+      }
+      final recentRaw = decoded['recent'];
+      if (recentRaw is List) {
+        _paymentHealthRecent = recentRaw
+            .whereType<Map>()
+            .map(
+              (r) => <String, String?>{
+                'orderId': r['orderId']?.toString(),
+                'publicId': r['publicId']?.toString(),
+                'planId': r['planId']?.toString(),
+                'amountTzs': r['amountTzs']?.toString(),
+                'status': r['status']?.toString(),
+                'createdAt': r['createdAt']?.toString(),
+              },
+            )
+            .toList(growable: false);
+      }
+    } catch (_) {
+      // Keep dashboard usable even if health endpoint is temporarily unavailable.
+    } finally {
+      _loadingPaymentHealth = false;
+      notifyListeners();
+    }
+  }
 
   /// Ensures viewer accounts from `POST /public/register-user` are in the next import payload.
   Future<void> _mergeRegisteredUsersFromApi() async {

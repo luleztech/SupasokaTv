@@ -5,6 +5,16 @@ import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
 import '../widgets/stagger_entrance.dart';
 
+String _formatTzs(int amountTzs) {
+  if (amountTzs < 1000) return 'TZS $amountTzs';
+  if (amountTzs < 1000000) {
+    final k = (amountTzs / 1000).toStringAsFixed(1);
+    return 'TZS ${k}K';
+  }
+  final m = (amountTzs / 1000000).toStringAsFixed(1);
+  return 'TZS ${m}M';
+}
+
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
@@ -23,6 +33,12 @@ class DashboardScreen extends StatelessWidget {
       _Stat('Live', '${c.liveMatches.length}', Icons.live_tv_rounded, const Color(0xFFec4899)),
       _Stat('Pushes', '${c.notificationLog.length}', Icons.notifications_active_rounded, const Color(0xFFeab308)),
     ];
+    final payment = store.paymentHealthSummary;
+    final totalPayments = payment['total'] ?? 0;
+    final pendingPayments = payment['pending'] ?? 0;
+    final completedPayments = payment['completed'] ?? 0;
+    final activatedPayments = payment['activated'] ?? 0;
+    final totalCollectionsTzs = payment['totalCollectionsTzs'] ?? 0;
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
@@ -149,6 +165,100 @@ class DashboardScreen extends StatelessWidget {
                   ],
                 );
               },
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          sliver: SliverToBoxAdapter(
+            child: StaggerEntrance(
+              index: 9,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  color: const Color(0xFF12151c),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.monitor_heart_rounded, size: 18),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Payment Health',
+                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Refresh payment health',
+                          onPressed: store.loadingPaymentHealth ? null : store.refreshPaymentHealth,
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'Total $totalPayments  ·  Pending $pendingPayments  ·  Completed $completedPayments  ·  Activated $activatedPayments',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.65),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        color: Colors.green.withValues(alpha: 0.15),
+                        border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.trending_up_rounded, color: Colors.green.shade300, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Total Collections: ${_formatTzs(totalCollectionsTzs)}',
+                              style: TextStyle(
+                                color: Colors.green.shade300,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (store.paymentHealthRecent.isEmpty)
+                      Text(
+                        store.loadingPaymentHealth ? 'Loading payment events...' : 'No payment events yet.',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+                      )
+                    else
+                      ...store.paymentHealthRecent.take(5).map(
+                            (r) {
+                              final amountTzs = int.tryParse(r['amountTzs'] ?? '0') ?? 0;
+                              final amountDisplay = amountTzs > 0 ? ' · ${_formatTzs(amountTzs)}' : '';
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Text(
+                                  '${r['status'] ?? 'PENDING'} · ${r['planId'] ?? '-'} · ${r['publicId'] ?? '-'}$amountDisplay',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white.withValues(alpha: 0.82),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
