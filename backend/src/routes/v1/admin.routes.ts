@@ -169,8 +169,10 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
       res.status(400).json({ ok: false, error: 'title is required' });
       return;
     }
-    const out = await sendPushToTopic({ title, body, target });
-    const eamaxMirror = await mirrorPushToEamax({ title, body, scope: 'broadcast' });
+    const [out, eamaxMirror] = await Promise.all([
+      sendPushToTopic({ title, body, target }),
+      mirrorPushToEamax({ title, body, scope: 'broadcast' }),
+    ]);
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;
     let notificationPersistError: string | undefined;
@@ -341,13 +343,15 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
         continue;
       }
       try {
-        const out = await sendPushToUser({ publicId, title, body: bodyText });
-        const eamaxMirror = await mirrorPushToEamax({
-          title,
-          body: bodyText,
-          scope: 'user',
-          externalId: publicId,
-        });
+        const [out, eamaxMirror] = await Promise.all([
+          sendPushToUser({ publicId, title, body: bodyText }),
+          mirrorPushToEamax({
+            title,
+            body: bodyText,
+            scope: 'user',
+            externalId: publicId,
+          }),
+        ]);
         results.push({
           id: publicId,
           ok: true,

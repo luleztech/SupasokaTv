@@ -64,6 +64,20 @@ function topicForUser(publicId: string): string {
   return `user_${clean}`;
 }
 
+/** 28 days — deliver when device comes back online. */
+const FCM_TTL_MS = 28 * 24 * 60 * 60 * 1000;
+
+const androidPushConfig = {
+  priority: 'high' as const,
+  ttl: FCM_TTL_MS,
+  notification: {
+    channelId: 'supasoka_high_importance',
+    defaultSound: true,
+    priority: 'high' as const,
+    visibility: 'public' as const,
+  },
+};
+
 export function checkPushConfiguration(): { ok: true } {
   ensureFirebaseApp();
   return { ok: true };
@@ -87,14 +101,7 @@ export async function sendPushToTopic(input: {
       target: input.target.trim() || 'all',
       source: 'supaadmin',
     },
-    android: {
-      priority: 'high',
-      notification: {
-        // Must match viewer app Android channel id for heads-up / status-bar alerts.
-        channelId: 'supasoka_high_importance',
-        defaultSound: true,
-      },
-    },
+    android: androidPushConfig,
   });
   return { topic, messageId };
 }
@@ -119,13 +126,7 @@ export async function sendPushToUser(input: {
       source: 'supaadmin',
       target: `user:${publicId}`,
     },
-    android: {
-      priority: 'high',
-      notification: {
-        channelId: 'supasoka_high_importance',
-        defaultSound: true,
-      },
-    },
+    android: androidPushConfig,
   });
   return { topic, messageId };
 }
