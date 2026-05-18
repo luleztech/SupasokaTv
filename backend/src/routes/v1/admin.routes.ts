@@ -6,6 +6,10 @@ import { importAppConfig } from '../../services/adminImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
 import { deleteUserById, isValidPublicUserId, listUsersForAdmin } from '../../services/userDirectory';
+import {
+  checkEamaxBridgeConfiguration,
+  mirrorPushToEamax,
+} from '../../services/eamaxPushBridge';
 import { checkPushConfiguration, sendPushToTopic, sendPushToUser } from '../../services/pushNotifications';
 
 export const adminRouter = Router();
@@ -166,6 +170,7 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
       return;
     }
     const out = await sendPushToTopic({ title, body, target });
+    const eamaxMirror = await mirrorPushToEamax({ title, body, scope: 'broadcast' });
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;
     let notificationPersistError: string | undefined;
@@ -190,6 +195,7 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
     res.json({
       ok: true,
       ...out,
+      eamaxMirror,
       notification: savedNotification,
       ...(notificationPersistError ? { notificationPersistError } : {}),
     });
@@ -223,7 +229,12 @@ adminRouter.delete('/notifications/:id', requireAdmin, async (req, res, next) =>
 adminRouter.get('/notify-health', requireAdmin, async (_req, res, next) => {
   try {
     checkPushConfiguration();
-    res.json({ ok: true, message: 'Push configuration looks valid.' });
+    const eamaxBridge = checkEamaxBridgeConfiguration();
+    res.json({
+      ok: true,
+      message: 'Push configuration looks valid.',
+      eamaxBridge,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.toLowerCase().includes('fcm credentials missing')) {
@@ -261,6 +272,12 @@ adminRouter.post('/notify-user/:id', requireAdmin, async (req, res, next) => {
     }
 
     const out = await sendPushToUser({ publicId, title, body });
+    const eamaxMirror = await mirrorPushToEamax({
+      title,
+      body,
+      scope: 'user',
+      externalId: publicId,
+    });
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;
     let notificationPersistError: string | undefined;
@@ -283,6 +300,7 @@ adminRouter.post('/notify-user/:id', requireAdmin, async (req, res, next) => {
     res.json({
       ok: true,
       ...out,
+      eamaxMirror,
       notification: savedNotification,
       ...(notificationPersistError ? { notificationPersistError } : {}),
     });
@@ -306,7 +324,13 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
     }
 
     const pool = getPool();
-    type RowResult = { id: string; ok: boolean; messageId?: string; error?: string };
+    type RowResult = {
+      id: string;
+      ok: boolean;
+      messageId?: string;
+      error?: string;
+      eamaxMirror?: Awaited<ReturnType<typeof mirrorPushToEamax>>;
+    };
     const results: RowResult[] = [];
     let notificationPersistErrors = 0;
 
@@ -318,7 +342,18 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
       }
       try {
         const out = await sendPushToUser({ publicId, title, body: bodyText });
-        results.push({ id: publicId, ok: true, messageId: out.messageId });
+        const eamaxMirror = await mirrorPushToEamax({
+          title,
+          body: bodyText,
+          scope: 'user',
+          externalId: publicId,
+        });
+        results.push({
+          id: publicId,
+          ok: true,
+          messageId: out.messageId,
+          eamaxMirror,
+        });
         if (pool) {
           try {
             const nid = randomUUID();

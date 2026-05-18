@@ -31,4 +31,8 @@ export const env = {
   fcmServiceAccountPath: process.env.FCM_SERVICE_ACCOUNT_PATH ?? '',
   /** Optional: full Firebase service-account json string (single env var). */
   fcmServiceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON ?? '',
+  /** EaMax API base (e.g. https://eamax-production.up.railway.app) — mirrors SupaAdmin push to EaMax users. */
+  eamaxApiBaseUrl: process.env.EAMAX_API_BASE_URL ?? '',
+  /** Shared secret; must match EaMax SUPA_EAMAX_BRIDGE_SECRET. */
+  eamaxBridgeSecret: process.env.EAMAX_BRIDGE_SECRET ?? '',
 } as const;
