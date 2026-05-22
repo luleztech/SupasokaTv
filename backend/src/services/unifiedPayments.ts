@@ -3,7 +3,6 @@ import { createZenoOrder, fetchZenoOrderStatus } from './zenoPay';
 import {
   fetchSonicOrderStatus,
   isSonicPaymentCompleted,
-  isSonicStkSendFailure,
   tryCreateSonicOrder,
 } from './sonicPesa';
 import { logger } from '../lib/logger';
@@ -68,10 +67,6 @@ export function normalizePhoneToLocal0(rawPhone: string): { local?: string; erro
     };
   }
   return { local: normalizedPhone };
-}
-
-function isHalotelLocalPhone(local0: string): boolean {
-  return local0.startsWith('061') || local0.startsWith('062') || local0.startsWith('063');
 }
 
 function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
@@ -145,17 +140,15 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   }
 
   const selected = await getSelectedPaymentProvider();
-  const zenoReady = isZenoConfigured();
-  const sonicReady = isSonicPesaConfigured();
 
-  if (selected === PAYMENT_PROVIDERS.SONICPESA && !sonicReady && !zenoReady) {
-    throw new HttpError(
-      503,
-      'SonicPesa na ZenoPay hazijasanidi kwenye seva. Wasiliana na admin.',
-      'PAYMENT_NOT_CONFIGURED',
-    );
-  }
-  if (selected === PAYMENT_PROVIDERS.ZENO && !zenoReady) {
+  if (!isProviderConfigured(selected)) {
+    if (selected === PAYMENT_PROVIDERS.SONICPESA) {
+      throw new HttpError(
+        503,
+        'SonicPesa haijasanidi kwenye seva. Wasiliana na admin au chagua ZenoPay kwenye SupaAdmin.',
+        'SONIC_NOT_CONFIGURED',
+      );
+    }
     throw new HttpError(
       503,
       'ZenoPay haijasanidi kwenye seva. Wasiliana na admin au chagua SonicPesa kwenye SupaAdmin.',
@@ -163,62 +156,38 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     );
   }
 
-  let providerForRow: PaymentProviderId =
-    selected === PAYMENT_PROVIDERS.SONICPESA ? PAYMENT_PROVIDERS.SONICPESA : PAYMENT_PROVIDERS.ZENO;
-
-  if (providerForRow === PAYMENT_PROVIDERS.SONICPESA && !sonicReady && zenoReady) {
-    providerForRow = PAYMENT_PROVIDERS.ZENO;
-  }
-
-  const skipSonicForHalotel =
-    providerForRow === PAYMENT_PROVIDERS.SONICPESA && isHalotelLocalPhone(localPhone) && zenoReady;
-  if (skipSonicForHalotel) {
-    providerForRow = PAYMENT_PROVIDERS.ZENO;
-  }
-
   const buyerName = (input.buyerName ?? input.publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${input.publicId}@supasoka.app`).trim();
 
-  if (providerForRow === PAYMENT_PROVIDERS.SONICPESA) {
+  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
     const sonic = await tryCreateSonicOrder({
       buyerEmail,
       buyerName,
       localPhone,
       amountTzs,
     });
-    if (sonic.ok && sonic.orderId) {
-      await upsertPendingIntent({
-        orderId: sonic.orderId,
-        publicId: input.publicId,
-        planId: input.planId,
-        amountTzs,
-        buyerPhone: localPhone,
-        provider: PAYMENT_PROVIDERS.SONICPESA,
-        providerPayload: sonic.raw,
-      });
-      return {
-        orderId: sonic.orderId,
-        message: sonic.message,
-        provider: PAYMENT_PROVIDERS.SONICPESA,
-        status: 'pending',
-      };
-    }
-    const canFallback =
-      zenoReady &&
-      isSonicStkSendFailure(sonic.errorMessage ?? sonic.message, sonic.errorCode ?? '');
-    if (canFallback) {
-      logger.warn(
-        { phonePrefix: localPhone.slice(0, 3), code: sonic.errorCode },
-        'payment_sonic_fallback_zeno',
-      );
-      providerForRow = PAYMENT_PROVIDERS.ZENO;
-    } else {
+    if (!sonic.ok || !sonic.orderId) {
       throw new HttpError(
         400,
-        sonic.errorMessage ?? 'Failed to start SonicPesa payment',
+        sonic.errorMessage ?? sonic.message ?? 'Failed to start SonicPesa payment',
         'SONIC_CREATE_FAILED',
       );
     }
+    await upsertPendingIntent({
+      orderId: sonic.orderId,
+      publicId: input.publicId,
+      planId: input.planId,
+      amountTzs,
+      buyerPhone: localPhone,
+      provider: PAYMENT_PROVIDERS.SONICPESA,
+      providerPayload: sonic.raw,
+    });
+    return {
+      orderId: sonic.orderId,
+      message: sonic.message,
+      provider: PAYMENT_PROVIDERS.SONICPESA,
+      status: 'pending',
+    };
   }
 
   const orderId = (input.orderId ?? randomUUID()).trim();

@@ -301,6 +301,16 @@ publicRouter.post('/zeno/create-order', async (req, res, next) => {
       return;
     }
 
+    const activeProvider = await getSelectedPaymentProvider();
+    if (activeProvider === PAYMENT_PROVIDERS.SONICPESA) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'SonicPesa imewashwa na admin. Tumia /api/v1/public/payments/start na publicId, planId, phone.',
+      });
+      return;
+    }
+
     const out = await createZenoOrder(body);
     const orderId = String(out.order_id ?? out.orderId ?? '').trim();
     if (orderId) {
