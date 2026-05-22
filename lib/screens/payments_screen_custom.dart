@@ -15,6 +15,7 @@ import 'package:supasoka/config/payment_helpers.dart'
         normalizedPaymentStatus;
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/tanzania_phone.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
 import 'package:supasoka/data/pay_plan.dart';
@@ -149,14 +150,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return out;
   }
 
-  bool _phoneValid(String raw) {
-    final clean = raw.replaceAll(RegExp(r'\s+'), '');
-    if (clean.length != 10) return false;
-    if (!RegExp(r'^0\d{9}$').hasMatch(clean)) return false;
-    return _tzPrefixes.any((p) => clean.startsWith(p));
-  }
+  bool _phoneValid(String raw) => TanzaniaPhone.isValid(raw);
 
-  String get _cleanPhone => _phoneCtrl.text.replaceAll(RegExp(r'\s+'), '');
+  String get _cleanPhone => TanzaniaPhone.normalize(_phoneCtrl.text) ?? '';
   bool get _phoneOk => _phoneValid(_phoneCtrl.text);
 
   /// Zeno / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
@@ -183,6 +179,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
     final top = pickRow(response);
     if (top != null) return top;
+
+    final direct = response['status']?.toString().trim();
+    if (direct != null && direct.isNotEmpty && direct != 'null') return direct;
 
     final raw = response['raw'];
     if (raw is Map) {
@@ -344,7 +343,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         final paymentStatus = _paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
           _stopPaymentTimersOnly();
-          await _markPaymentCompleted();
+          final premiumMs = response['premiumUntilMs'];
+          await _markPaymentCompleted(serverPremiumUntilMs: premiumMs is num ? premiumMs.toInt() : null);
           return;
         }
         if (isPaymentTerminalFailure(paymentStatus)) {
@@ -549,8 +549,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return null;
     final origin = base.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/confirm-zeno-premium');
+    final uris = [
+      Uri.parse('$origin/api/v1/public/confirm-premium'),
+      Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
+    ];
     for (var attempt = 0; attempt < 5; attempt++) {
+      final uri = uris[attempt < uris.length ? (attempt % uris.length) : 0];
       final res = await http
           .post(
             uri,
@@ -601,9 +605,15 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return _ConfirmProbeOutcome.pending();
     final origin = base.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/confirm-zeno-premium');
+    final uris = [
+      Uri.parse('$origin/api/v1/public/confirm-premium'),
+      Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
+    ];
 
-    final res = await http
+    http.Response? res;
+    for (final uri in uris) {
+      try {
+        res = await http
         .post(
           uri,
           headers: const {
@@ -619,6 +629,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           }),
         )
         .timeout(const Duration(seconds: 18));
+        if (res.statusCode != 404) break;
+      } catch (_) {
+        continue;
+      }
+    }
+    if (res == null) return _ConfirmProbeOutcome.pending();
 
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return _ConfirmProbeOutcome.completed();
@@ -635,8 +651,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return _ConfirmProbeOutcome.pending();
   }
 
-  /// Zeno reports completed — unlock premium immediately, then sync with server.
-  Future<void> _markPaymentCompleted() async {
+  /// Payment completed — unlock premium locally, then sync with server (idempotent).
+  Future<void> _markPaymentCompleted({int? serverPremiumUntilMs}) async {
     if (_paymentCompletionInProgress) return;
     _paymentCompletionInProgress = true;
     
@@ -661,9 +677,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         await SubscriptionStore.activatePlan(planId);
       }
 
-      // Try to confirm with server for accurate timing and admin visibility
-      int? serverUntilMs;
-      if (orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
+      int? serverUntilMs = serverPremiumUntilMs;
+      if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
         try {
           serverUntilMs = await _confirmPremiumOnBackend(
             orderId: orderId,
@@ -673,12 +688,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           );
         } catch (e) {
           if (kDebugMode) {
-            debugPrint('confirm-zeno-premium request failed: $e');
+            debugPrint('confirm-premium request failed: $e');
           }
         }
       }
 
-      // If server confirmation succeeded, update with precise server time
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
       }
@@ -723,7 +737,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       return;
     }
     final clean = _cleanPhone;
-    if (!_phoneValid(_phoneCtrl.text)) {
+    if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
       _showStatus(
         'Nambari ya simu',
         'Hakikisha umeandika namba yako kwa usahihi na ukamilifu.',
@@ -774,7 +788,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pendingPaymentOrderId', orderId);
         await prefs.setString('pendingPaymentPlanId', plan.id);
-        await prefs.setString('pendingPaymentPhone', clean);
+        await prefs.setString('pendingPaymentPhone', TanzaniaPhone.normalize(clean) ?? clean);
         if (!mounted) return;
         setState(() {
           _pollingOrderId = orderId;

@@ -13,7 +13,6 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
     final c = store.config;
-    final cs = Theme.of(context).colorScheme;
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
@@ -49,38 +48,10 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          sliver: SliverToBoxAdapter(
-            child: StaggerEntrance(
-              index: 3,
-              child: Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  color: const Color(0xFF161a24),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline_rounded, color: cs.primary, size: 22),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Config version v${c.configVersion}',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.65), fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
-              index: 4,
+              index: 3,
               slide: 12,
               child: _CustomerCareCard(
                 digits: c.customerCareWhatsapp,
@@ -117,17 +88,13 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
-    final cs = Theme.of(context).colorScheme;
     final isSonic = store.paymentProvider == 'sonicpesa';
     final activeColor = isSonic ? const Color(0xFF22c55e) : const Color(0xFF3b82f6);
-    final activeLabel = isSonic ? 'SonicPesa' : 'ZenoPay';
     final apiReady = store.paymentProviderApiReady;
     final zenoReady = store.zenoConfigured;
     final sonicReady = store.sonicConfigured;
-    final activeReady = isSonic ? sonicReady : zenoReady;
     final saving = store.savingPaymentProvider;
     final loading = store.loadingPaymentProvider;
-    final hint = store.paymentProviderStatusHint;
     final loggedIn = store.hasAdminSession;
 
     return Container(
@@ -178,11 +145,6 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
                       'Payment gateway',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Chagua API inayopokea malipo mapya kutoka app. Malipo yaliyoanzishwa tayari hayabadiliki.',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
-                    ),
                   ],
                 ),
               ),
@@ -195,55 +157,10 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
             ],
           ),
           const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              color: Colors.black.withValues(alpha: 0.25),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.bolt_rounded, color: activeColor, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '$activeLabel — live',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.92),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Text(
-                        hint ??
-                            (activeReady
-                                ? 'API key ipo kwenye Supasoka Railway'
-                                : 'Hakuna API key — nakili kutoka EaMax Variables'),
-                        style: TextStyle(
-                          color: hint != null
-                              ? Colors.amberAccent.withValues(alpha: 0.95)
-                              : activeReady
-                                  ? const Color(0xFF86efac)
-                                  : Colors.amberAccent.withValues(alpha: 0.9),
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
           Row(
             children: [
               _ProviderChip(
                 label: 'ZenoPay',
-                subtitle: zenoReady ? 'Ready' : 'No key on Supasoka',
                 icon: Icons.flash_on_rounded,
                 color: const Color(0xFF3b82f6),
                 selected: !isSonic,
@@ -253,7 +170,6 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
               const SizedBox(width: 10),
               _ProviderChip(
                 label: 'SonicPesa',
-                subtitle: sonicReady ? 'Ready' : 'No key on Supasoka',
                 icon: Icons.speed_rounded,
                 color: const Color(0xFF22c55e),
                 selected: isSonic,
@@ -262,18 +178,6 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            '1) Deploy backend mpya kwenye Supasoka Railway. 2) Ongeza SONICPESA_API_KEY + SONICPESA_WEBHOOK_SECRET (sawa na EaMax) kwenye Supasoka Variables — si EaMax pekee.',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.42), fontSize: 10.5, height: 1.35),
-          ),
-          if (!loggedIn) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Login kwanza ili kubadilisha mtoa huduma.',
-              style: TextStyle(color: cs.error.withValues(alpha: 0.85), fontSize: 11),
-            ),
-          ],
         ],
       ),
     );
@@ -283,7 +187,6 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
 class _ProviderChip extends StatelessWidget {
   const _ProviderChip({
     required this.label,
-    required this.subtitle,
     required this.icon,
     required this.color,
     required this.selected,
@@ -292,7 +195,6 @@ class _ProviderChip extends StatelessWidget {
   });
 
   final String label;
-  final String subtitle;
   final IconData icon;
   final Color color;
   final bool selected;
@@ -329,14 +231,6 @@ class _ProviderChip extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     color: selected ? Colors.white : Colors.white70,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: selected ? color.withValues(alpha: 0.95) : Colors.white38,
                   ),
                 ),
               ],
@@ -413,19 +307,7 @@ class _CloudStatusCardState extends State<_CloudStatusCard> {
                 ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            ok
-                ? 'Mabadiliko yanaenda Railway Postgres moja kwa moja. Uko logged in.'
-                : 'Not logged in. Login in the Admin app first.',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'URL inayotumika sasa: ${store.resolvedApiBaseUrl}',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
@@ -572,11 +454,6 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
                       'Customer care · WhatsApp',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Weka namba ya huduma kwa wateja ya WhatsApp.',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
-                    ),
                   ],
                 ),
               ),
@@ -588,7 +465,6 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
             keyboardType: TextInputType.phone,
             decoration: const InputDecoration(
               labelText: 'WhatsApp number',
-              hintText: '+255712345678',
               prefixIcon: Icon(Icons.phone_android_rounded),
             ),
           ),

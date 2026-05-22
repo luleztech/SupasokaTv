@@ -1,10 +1,12 @@
 import { randomUUID } from 'crypto';
 import { createZenoOrder, fetchZenoOrderStatus } from './zenoPay';
 import {
-  createSonicOrder,
   fetchSonicOrderStatus,
   isSonicPaymentCompleted,
+  isSonicStkSendFailure,
+  tryCreateSonicOrder,
 } from './sonicPesa';
+import { logger } from '../lib/logger';
 import {
   getSelectedPaymentProvider,
   isProviderConfigured,
@@ -178,13 +180,13 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   const buyerEmail = (input.buyerEmail ?? `${input.publicId}@supasoka.app`).trim();
 
   if (providerForRow === PAYMENT_PROVIDERS.SONICPESA) {
-    try {
-      const sonic = await createSonicOrder({
-        buyerEmail,
-        buyerName,
-        localPhone,
-        amountTzs,
-      });
+    const sonic = await tryCreateSonicOrder({
+      buyerEmail,
+      buyerName,
+      localPhone,
+      amountTzs,
+    });
+    if (sonic.ok && sonic.orderId) {
       await upsertPendingIntent({
         orderId: sonic.orderId,
         publicId: input.publicId,
@@ -200,9 +202,22 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
         provider: PAYMENT_PROVIDERS.SONICPESA,
         status: 'pending',
       };
-    } catch (e) {
-      if (!zenoReady) throw e;
+    }
+    const canFallback =
+      zenoReady &&
+      isSonicStkSendFailure(sonic.errorMessage ?? sonic.message, sonic.errorCode ?? '');
+    if (canFallback) {
+      logger.warn(
+        { phonePrefix: localPhone.slice(0, 3), code: sonic.errorCode },
+        'payment_sonic_fallback_zeno',
+      );
       providerForRow = PAYMENT_PROVIDERS.ZENO;
+    } else {
+      throw new HttpError(
+        400,
+        sonic.errorMessage ?? 'Failed to start SonicPesa payment',
+        'SONIC_CREATE_FAILED',
+      );
     }
   }
 
@@ -246,10 +261,54 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   };
 }
 
+/** Idempotent: activate premium when provider reports paid (poll / webhook / confirm). */
+export async function activatePremiumIfCompletedOrder(
+  orderId: string,
+): Promise<{ activated: boolean; premiumUntilMs?: number }> {
+  const intent = await getIntent(orderId);
+  if (!intent?.public_id || !intent.plan_id) {
+    return { activated: false };
+  }
+  if (intent.activated_at_ms != null) {
+    const { getUserPremiumStatus } = await import('./userDirectory');
+    const until = await getUserPremiumStatus(intent.public_id);
+    return { activated: true, premiumUntilMs: until ?? undefined };
+  }
+
+  const gateway = await resolveGatewayForOrder(orderId);
+  let ps = '';
+  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
+    const { paymentStatus } = await fetchSonicOrderStatus(orderId);
+    ps = paymentStatus;
+  } else {
+    const row = await fetchZenoOrderStatus(orderId);
+    ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+  }
+  if (!isPaymentCompletedStatus(ps)) {
+    return { activated: false };
+  }
+
+  const phoneNorm = normalizePhoneToLocal0(intent.buyer_phone ?? '');
+  const activated = await activatePremiumForUser({
+    publicId: intent.public_id,
+    planId: intent.plan_id,
+    phone: phoneNorm.local ?? intent.buyer_phone ?? '',
+    note: `${gateway}:${orderId}`,
+  });
+  await markIntentActivated(orderId);
+  logger.info(
+    { orderId, publicId: intent.public_id, planId: intent.plan_id, premiumUntilMs: activated.premiumUntilMs },
+    'payment_poll_activated_premium',
+  );
+  return { activated: true, premiumUntilMs: activated.premiumUntilMs };
+}
+
 export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
   status: string;
   raw?: unknown;
   resultcode?: string;
+  premiumUntilMs?: number;
+  activated?: boolean;
 }> {
   const trimmed = orderId.trim();
   if (!trimmed) {
@@ -258,10 +317,14 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
 
   const local = await getIntent(trimmed);
   if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
+    const { getUserPremiumStatus } = await import('./userDirectory');
+    const until = local.public_id ? await getUserPremiumStatus(local.public_id) : null;
     return {
       status: 'COMPLETED',
       resultcode: '000',
       raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+      activated: true,
+      premiumUntilMs: until ?? undefined,
     };
   }
 
@@ -281,10 +344,13 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       });
     }
     if (isSonicPaymentCompleted(paymentStatus)) {
+      const act = await activatePremiumIfCompletedOrder(trimmed);
       return {
         status: 'COMPLETED',
         resultcode: '000',
         raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+        activated: act.activated,
+        premiumUntilMs: act.premiumUntilMs,
       };
     }
     return { status: paymentStatus || 'PENDING', raw };
@@ -299,6 +365,16 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       providerPayload: row ?? null,
     });
   }
+  if (isPaymentCompletedStatus(ps)) {
+    const act = await activatePremiumIfCompletedOrder(trimmed);
+    return {
+      status: 'COMPLETED',
+      resultcode: '000',
+      raw: row ? { data: [row] } : { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+      activated: act.activated,
+      premiumUntilMs: act.premiumUntilMs,
+    };
+  }
   return {
     status: ps || 'PENDING',
     resultcode: row ? '000' : '404',
@@ -312,12 +388,14 @@ export async function confirmPremiumForOrder(args: {
   planId: string;
   phone?: string;
 }): Promise<{ premiumUntilMs: number }> {
-  const { orderId, publicId, planId, phone = '' } = args;
+  const { orderId, publicId, planId } = args;
   if (!orderId || !publicId || !planId) {
     throw new HttpError(400, 'Missing orderId/publicId/planId', 'MISSING_FIELDS');
   }
 
   const tracked = await getIntent(orderId);
+  const phoneNorm = normalizePhoneToLocal0(args.phone || tracked?.buyer_phone || '');
+  const phone = phoneNorm.local ?? String(args.phone ?? tracked?.buyer_phone ?? '').trim();
   if (tracked?.public_id && tracked.public_id !== publicId) {
     throw new HttpError(409, 'Order belongs to another user', 'PUBLIC_ID_MISMATCH');
   }
@@ -353,7 +431,7 @@ export async function confirmPremiumForOrder(args: {
   const activated = await activatePremiumForUser({
     publicId,
     planId,
-    phone,
+    phone: phone || phoneNorm.local || '',
     note: `${gateway}:${orderId}`,
   });
   await markIntentActivated(orderId);

@@ -2,12 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../admin_messenger.dart';
+import '../models/app_config.dart';
 import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
 import '../widgets/stagger_entrance.dart';
 
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});
+
+  static const _audienceOptions = ['all', 'premium', 'free'];
+
+  static String _normalizeAudienceForDropdown(String target) {
+    final t = target.trim().toLowerCase();
+    if (_audienceOptions.contains(t)) return t;
+    return 'all';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,9 +40,9 @@ class NotificationsScreen extends StatelessWidget {
                   label: const Text('Check push'),
                 ),
                 FilledButton.icon(
-                  onPressed: () => _compose(context, store),
+                  onPressed: () => _openComposer(context, store),
                   icon: const Icon(Icons.send_rounded),
-                  label: const Text('Compose'),
+                  label: const Text('Tuma ujumbe'),
                 ),
               ],
             ),
@@ -78,7 +87,7 @@ class NotificationsScreen extends StatelessWidget {
                             color: Colors.transparent,
                             child: InkWell(
                               borderRadius: BorderRadius.circular(16),
-                              onTap: () {},
+                              onTap: () => _openComposer(context, store, from: n),
                               child: Ink(
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16),
@@ -108,7 +117,18 @@ class NotificationsScreen extends StatelessWidget {
                                           ),
                                         ),
                                         const Spacer(),
+                                        OutlinedButton.icon(
+                                          onPressed: () => _openComposer(context, store, from: n),
+                                          icon: const Icon(Icons.replay_rounded, size: 18),
+                                          label: const Text('Tuma tena'),
+                                          style: OutlinedButton.styleFrom(
+                                            visualDensity: VisualDensity.compact,
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
                                         IconButton(
+                                          tooltip: 'Futa',
                                           icon: const Icon(Icons.delete_outline_rounded, size: 20),
                                           onPressed: () => store.deleteNotification(n.id),
                                         ),
@@ -141,103 +161,18 @@ class NotificationsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _compose(BuildContext context, AdminStore store) async {
-    final title = TextEditingController();
-    final body = TextEditingController();
-    var target = 'all';
-
-    await showDialog<void>(
+  Future<void> _openComposer(
+    BuildContext context,
+    AdminStore store, {
+    NotificationEntryDto? from,
+  }) {
+    return showDialog<void>(
       context: context,
-      builder: (ctx) {
-        var sending = false;
-        return StatefulBuilder(
-          builder: (ctx, setSt) => AlertDialog(
-            title: const Text('Broadcast message'),
-            content: SizedBox(
-              width: 420,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                    controller: title,
-                    decoration: const InputDecoration(labelText: 'Title'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                    controller: body,
-                    decoration: const InputDecoration(labelText: 'Body'),
-                    maxLines: 4,
-                  ),
-                  const SizedBox(height: 12),
-                  InputDecorator(
-                    decoration: const InputDecoration(labelText: 'Audience'),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: target,
-                        isExpanded: true,
-                        items: const [
-                          DropdownMenuItem(value: 'all', child: Text('All users')),
-                          DropdownMenuItem(value: 'premium', child: Text('Premium only')),
-                          DropdownMenuItem(value: 'free', child: Text('Free only')),
-                        ],
-                        onChanged: (v) => setSt(() => target = v ?? 'all'),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: sending ? null : () => Navigator.pop(ctx), child: const Text('Cancel')),
-              FilledButton(
-                onPressed: sending
-                    ? null
-                    : () async {
-                        if (title.text.trim().isEmpty) return;
-                        setSt(() => sending = true);
-                        try {
-                          final saved = await store.sendNotification(
-                            title: title.text.trim(),
-                            body: body.text.trim(),
-                            target: target,
-                          );
-                          if (!ctx.mounted) return;
-                          Navigator.pop(ctx);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                saved
-                                    ? 'Imehifadhiwa na kutumwa.'
-                                    : 'Ujumbe umetumwa, lakini historia haijahifadhiwa kwenye seva. Jaribu tena baada ya muda mfupi.',
-                              ),
-                            ),
-                          );
-                        } catch (e) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Imeshindikana kutuma: ${adminFormatError(e)}')),
-                          );
-                        } finally {
-                          if (ctx.mounted) {
-                            setSt(() => sending = false);
-                          }
-                        }
-                      },
-                child: sending
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Text('Record send'),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (ctx) => _NotificationComposerDialog(
+        store: store,
+        from: from,
+        parentContext: context,
+      ),
     );
   }
 
@@ -273,5 +208,148 @@ class NotificationsScreen extends StatelessWidget {
         SnackBar(content: Text('Push check failed: ${adminFormatError(e)}')),
       );
     }
+  }
+}
+
+class _NotificationComposerDialog extends StatefulWidget {
+  const _NotificationComposerDialog({
+    required this.store,
+    required this.parentContext,
+    this.from,
+  });
+
+  final AdminStore store;
+  final BuildContext parentContext;
+  final NotificationEntryDto? from;
+
+  @override
+  State<_NotificationComposerDialog> createState() => _NotificationComposerDialogState();
+}
+
+class _NotificationComposerDialogState extends State<_NotificationComposerDialog> {
+  static const _audienceOptions = NotificationsScreen._audienceOptions;
+
+  late final TextEditingController _title;
+  late final TextEditingController _body;
+  late String _target;
+  bool _sending = false;
+
+  bool get _isResend => widget.from != null;
+
+  String get _originalTarget => widget.from?.target.trim() ?? '';
+
+  @override
+  void initState() {
+    super.initState();
+    _title = TextEditingController(text: widget.from?.title ?? '');
+    _body = TextEditingController(text: widget.from?.body ?? '');
+    _target = NotificationsScreen._normalizeAudienceForDropdown(widget.from?.target ?? 'all');
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _body.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    if (_title.text.trim().isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      final saved = await widget.store.sendNotification(
+        title: _title.text.trim(),
+        body: _body.text.trim(),
+        target: _target,
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      if (!widget.parentContext.mounted) return;
+      ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+        SnackBar(
+          content: Text(
+            saved
+                ? 'Imehifadhiwa na kutumwa.'
+                : 'Ujumbe umetumwa, lakini historia haijahifadhiwa kwenye seva.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!widget.parentContext.mounted) return;
+      ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+        SnackBar(content: Text('Imeshindikana kutuma: ${adminFormatError(e)}')),
+      );
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isResend ? 'Hariri na tuma tena' : 'Tuma ujumbe'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_isResend &&
+                _originalTarget.isNotEmpty &&
+                !_audienceOptions.contains(_originalTarget.toLowerCase())) ...[
+              Text(
+                'Asili: $_originalTarget',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+              controller: _title,
+              decoration: const InputDecoration(labelText: 'Kichwa'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+              controller: _body,
+              decoration: const InputDecoration(labelText: 'Ujumbe'),
+              maxLines: 4,
+            ),
+            const SizedBox(height: 12),
+            InputDecorator(
+              decoration: const InputDecoration(labelText: 'Wateja'),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _target,
+                  isExpanded: true,
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('Wote')),
+                    DropdownMenuItem(value: 'premium', child: Text('Premium tu')),
+                    DropdownMenuItem(value: 'free', child: Text('Bure tu')),
+                  ],
+                  onChanged: _sending ? null : (v) => setState(() => _target = v ?? 'all'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _sending ? null : () => Navigator.pop(context),
+          child: const Text('Ghairi'),
+        ),
+        FilledButton.icon(
+          onPressed: _sending ? null : _send,
+          icon: _sending
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.send_rounded, size: 18),
+          label: Text(_sending ? 'Inatuma...' : 'Tuma sasa'),
+        ),
+      ],
+    );
   }
 }

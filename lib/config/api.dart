@@ -156,9 +156,16 @@ class _PaymentsApi {
           row['paymentStatus']?.toString() ??
           row['status']?.toString();
     }
+    final premiumRaw = j['premiumUntilMs'];
+    int? premiumUntilMs;
+    if (premiumRaw is int) premiumUntilMs = premiumRaw;
+    if (premiumRaw is num) premiumUntilMs = premiumRaw.toInt();
+
     return {
       'status': ps,
       'raw': j,
+      if (premiumUntilMs != null) 'premiumUntilMs': premiumUntilMs,
+      if (j['activated'] == true) 'activated': true,
     };
   }
 

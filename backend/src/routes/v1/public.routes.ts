@@ -262,6 +262,7 @@ publicRouter.get('/payments/status', async (req, res, next) => {
       status: out.status === 'COMPLETED' ? 'success' : 'success',
       data: row != null ? (Array.isArray((out.raw as { data?: unknown[] })?.data) ? (out.raw as { data: unknown[] }).data : [row]) : [],
       paymentStatus: out.status,
+      ...(out.activated ? { activated: true, premiumUntilMs: out.premiumUntilMs ?? null } : {}),
     });
   } catch (e) {
     next(e);

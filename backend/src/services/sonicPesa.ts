@@ -139,16 +139,39 @@ export function sonicPhoneCandidatesForApi(local0: string): string[] {
   return [...new Set([api255, local0].filter((p) => p.length > 0))];
 }
 
-export async function createSonicOrder(args: {
+const SONIC_STK_FAILURE_CODES = new Set([
+  '9012', '999', '103', '9009', '90009', '500', '502', '503', '504', '408', '429',
+]);
+
+export function isSonicStkSendFailure(rawMessage: string, rawCode: string): boolean {
+  const msg = String(rawMessage || '').trim();
+  const code = String(rawCode ?? '').trim();
+  const combined = `${msg} ${code}`.toLowerCase();
+  if (code && SONIC_STK_FAILURE_CODES.has(code)) return true;
+  if (/^general system error/i.test(msg)) return true;
+  if (/\b9012\b|\b999\b/.test(combined)) return true;
+  return (
+    /hayajatumika|malipo hayajatumika|hayajaweza kutumika|not sent|could not send|push failed|failed to send/i.test(
+      combined,
+    ) || /no response from upstream|upstream system|ongoing ussd/i.test(combined)
+  );
+}
+
+export type SonicCreateResult = {
+  ok: boolean;
+  orderId: string;
+  message: string;
+  raw: Record<string, unknown>;
+  errorMessage?: string;
+  errorCode?: string;
+};
+
+export async function tryCreateSonicOrder(args: {
   buyerEmail: string;
   buyerName: string;
   localPhone: string;
   amountTzs: number;
-}): Promise<{
-  orderId: string;
-  message: string;
-  raw: Record<string, unknown>;
-}> {
+}): Promise<SonicCreateResult> {
   ensureSonicPesaConfigured();
   const candidates = sonicPhoneCandidatesForApi(args.localPhone);
   let last: { response: Response; data: Record<string, unknown> } = {
@@ -174,6 +197,7 @@ export async function createSonicOrder(args: {
         const orderId = extractSonicOrderId(last.data);
         if (!orderId) break;
         return {
+          ok: true,
           orderId,
           message: String(last.data.message ?? 'Request in progress. You will receive a prompt on your phone.'),
           raw: last.data,
@@ -187,8 +211,33 @@ export async function createSonicOrder(args: {
     }
   }
 
-  const msg = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
-  throw new HttpError(400, msg, 'SONIC_CREATE_FAILED');
+  const errorMessage = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
+  const errorCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+  return {
+    ok: false,
+    orderId: '',
+    message: errorMessage,
+    raw: last.data,
+    errorMessage,
+    errorCode,
+  };
+}
+
+export async function createSonicOrder(args: {
+  buyerEmail: string;
+  buyerName: string;
+  localPhone: string;
+  amountTzs: number;
+}): Promise<{
+  orderId: string;
+  message: string;
+  raw: Record<string, unknown>;
+}> {
+  const out = await tryCreateSonicOrder(args);
+  if (!out.ok) {
+    throw new HttpError(400, out.errorMessage ?? 'Failed to start SonicPesa payment', 'SONIC_CREATE_FAILED');
+  }
+  return { orderId: out.orderId, message: out.message, raw: out.raw };
 }
 
 export async function fetchSonicOrderStatus(orderId: string): Promise<{

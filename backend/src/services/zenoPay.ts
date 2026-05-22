@@ -21,12 +21,44 @@ function zenoCreateUrl(): string {
   return `${b}/api/payments/mobile_money_tanzania`;
 }
 
+/** Route STK to the correct Tanzanian wallet (Vodacom, Tigo, Airtel, Halotel, Yas). */
+export function applyZenoWalletProviderForPayload(
+  payload: Record<string, unknown>,
+  localPhone0: string,
+): void {
+  if (process.env.ZENO_SEND_PROVIDER === '0') return;
+  const p = String(localPhone0 || '');
+  if (p.startsWith('061') || p.startsWith('062') || p.startsWith('063')) {
+    const v = process.env.ZENO_HALOTEL_WALLET_PROVIDER;
+    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'HALOPESA';
+    return;
+  }
+  if (p.startsWith('074') || p.startsWith('075') || p.startsWith('076') || p.startsWith('079')) {
+    if (process.env.ZENO_VODACOM_SEND_PROVIDER !== '0') {
+      const v = process.env.ZENO_VODACOM_WALLET_PROVIDER;
+      payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'M-PESA';
+    }
+    return;
+  }
+  if (p.startsWith('065') || p.startsWith('067') || p.startsWith('071') || p.startsWith('077')) {
+    const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
+    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
+    return;
+  }
+  if (p.startsWith('068') || p.startsWith('069') || p.startsWith('078')) {
+    const v = process.env.ZENO_AIRTEL_WALLET_PROVIDER;
+    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'AIRTEL MONEY';
+  }
+}
+
 export async function createZenoOrder(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const key = env.zenoApiKey.trim();
   if (!key) {
     throw new HttpError(500, 'ZENO_API_KEY is not configured', 'ZENO_KEY_MISSING');
   }
   const requestBody: Record<string, unknown> = { ...body };
+  const phone = String(requestBody.buyer_phone ?? '').trim();
+  if (phone) applyZenoWalletProviderForPayload(requestBody, phone);
   if (
     (requestBody.webhook_url == null || String(requestBody.webhook_url).trim().length === 0) &&
     env.zenoWebhookUrl.trim()
