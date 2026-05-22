@@ -122,6 +122,28 @@ export function isSonicPaymentCompleted(rawUpper: string): boolean {
   return lower === 'successful' || lower === 'ok' || lower === 'true' || lower === '1';
 }
 
+/** True when Sonic status API / webhook body indicates paid even if status string is non-standard. */
+export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boolean {
+  const ps = extractSonicPaymentStatus(data);
+  if (isSonicPaymentCompleted(ps)) return true;
+  if (data.success === true) return true;
+  const rc = String(data.resultcode ?? data.result_code ?? data.code ?? '').trim();
+  if (rc === '000' || rc === '0') {
+    const st = String(data.status ?? '').toLowerCase().trim();
+    if (st === 'success' || st === 'ok' || st === 'completed' || st === 'paid') return true;
+  }
+  const nest = data.data;
+  if (nest && typeof nest === 'object') {
+    const row = Array.isArray(nest) && nest.length > 0 && typeof nest[0] === 'object'
+      ? (nest[0] as Record<string, unknown>)
+      : (nest as Record<string, unknown>);
+    if (row.success === true) return true;
+    const nestedPs = extractSonicPaymentStatus({ data: row, status: row.status, payment_status: row.payment_status });
+    if (isSonicPaymentCompleted(nestedPs)) return true;
+  }
+  return false;
+}
+
 /** Local 0… for DB; Sonic API often wants 255…. */
 export function formatPhoneForSonicPesaApi(local0: string): string {
   if (env.sonicSendLocalPhone) return local0;

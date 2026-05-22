@@ -114,12 +114,9 @@ class _PaymentsApi {
 
   Future<Map<String, dynamic>> checkPaymentStatus(String orderId) async {
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    final uris = [
+    final uris = <Uri>[
       Uri.parse('$origin/api/v1/public/payments/status').replace(
         queryParameters: {'orderId': orderId},
-      ),
-      Uri.parse('$origin/api/v1/public/zeno/order-status').replace(
-        queryParameters: {'order_id': orderId},
       ),
     ];
 

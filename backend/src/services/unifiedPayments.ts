@@ -3,6 +3,7 @@ import { createZenoOrder, fetchZenoOrderStatus } from './zenoPay';
 import {
   fetchSonicOrderStatus,
   isSonicPaymentCompleted,
+  isSonicRawPaymentCompleted,
   tryCreateSonicOrder,
 } from './sonicPesa';
 import { logger } from '../lib/logger';
@@ -87,10 +88,12 @@ function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefine
 
 export function isPaymentCompletedStatus(ps: string): boolean {
   const s = String(ps ?? '').trim().toUpperCase();
+  if (!s) return false;
+  if (isSonicPaymentCompleted(s)) return true;
   return (
     s === 'COMPLETED' || s === 'COMPLETE' || s === 'SUCCESS' || s === 'SUCCESSFUL' ||
     s === 'SUCCEEDED' || s === 'PAID' || s === 'APPROVED' || s === 'AUTHORIZED' ||
-    s === 'AUTHORISED' || s === 'SETTLED'
+    s === 'AUTHORISED' || s === 'SETTLED' || s === 'CONFIRMED'
   );
 }
 
@@ -102,15 +105,33 @@ function isPaymentTerminalFailure(ps: string): boolean {
   );
 }
 
+function normalizeStoredProvider(raw: string | null | undefined): PaymentProviderId | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const compact = raw.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  if (compact === 'sonicpesa') return PAYMENT_PROVIDERS.SONICPESA;
+  if (compact === 'zeno' || compact === 'zenopay') return PAYMENT_PROVIDERS.ZENO;
+  return null;
+}
+
 async function resolveGatewayForOrder(orderId: string): Promise<PaymentProviderId> {
   const intent = await getIntent(orderId);
-  const raw = (intent as { payment_provider?: string } | null)?.payment_provider;
-  if (typeof raw === 'string' && raw.trim()) {
-    const compact = raw.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-    if (compact === 'sonicpesa') return PAYMENT_PROVIDERS.SONICPESA;
-    if (compact === 'zeno' || compact === 'zenopay') return PAYMENT_PROVIDERS.ZENO;
-  }
+  const fromIntent = normalizeStoredProvider(intent?.payment_provider);
+  if (fromIntent) return fromIntent;
   return getSelectedPaymentProvider();
+}
+
+function metadataFromProviderPayload(payload: unknown): { publicId: string; planId: string } {
+  if (!payload || typeof payload !== 'object') return { publicId: '', planId: '' };
+  const p = payload as Record<string, unknown>;
+  const meta =
+    p.metadata && typeof p.metadata === 'object' && !Array.isArray(p.metadata)
+      ? (p.metadata as Record<string, unknown>)
+      : {};
+  const publicId = String(
+    meta.external_id ?? meta.public_id ?? p.public_id ?? p.publicId ?? '',
+  ).trim();
+  const planId = String(meta.plan_id ?? p.plan_id ?? p.planId ?? '').trim();
+  return { publicId, planId };
 }
 
 export type StartPaymentInput = {
@@ -230,43 +251,59 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   };
 }
 
+async function resolvePaidStatusForOrder(
+  orderId: string,
+  gateway: PaymentProviderId,
+): Promise<string> {
+  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
+    const { paymentStatus, raw } = await fetchSonicOrderStatus(orderId);
+    if (isPaymentCompletedStatus(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
+      return paymentStatus || 'COMPLETED';
+    }
+    return paymentStatus;
+  }
+  const row = await fetchZenoOrderStatus(orderId);
+  return paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+}
+
 /** Idempotent: activate premium when provider reports paid (poll / webhook / confirm). */
 export async function activatePremiumIfCompletedOrder(
   orderId: string,
 ): Promise<{ activated: boolean; premiumUntilMs?: number }> {
   const intent = await getIntent(orderId);
-  if (!intent?.public_id || !intent.plan_id) {
+  let publicId = String(intent?.public_id ?? '').trim();
+  let planId = String(intent?.plan_id ?? '').trim();
+  if (!publicId || !planId) {
+    const fromPayload = metadataFromProviderPayload(intent?.provider_payload);
+    publicId = publicId || fromPayload.publicId;
+    planId = planId || fromPayload.planId;
+  }
+  if (!publicId || !planId) {
+    logger.warn({ orderId }, 'payment_activate_missing_metadata');
     return { activated: false };
   }
-  if (intent.activated_at_ms != null) {
+  if (intent?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
-    const until = await getUserPremiumStatus(intent.public_id);
+    const until = await getUserPremiumStatus(publicId);
     return { activated: true, premiumUntilMs: until ?? undefined };
   }
 
   const gateway = await resolveGatewayForOrder(orderId);
-  let ps = '';
-  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
-    const { paymentStatus } = await fetchSonicOrderStatus(orderId);
-    ps = paymentStatus;
-  } else {
-    const row = await fetchZenoOrderStatus(orderId);
-    ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
-  }
+  const ps = await resolvePaidStatusForOrder(orderId, gateway);
   if (!isPaymentCompletedStatus(ps)) {
     return { activated: false };
   }
 
-  const phoneNorm = normalizePhoneToLocal0(intent.buyer_phone ?? '');
+  const phoneNorm = normalizePhoneToLocal0(intent?.buyer_phone ?? '');
   const activated = await activatePremiumForUser({
-    publicId: intent.public_id,
-    planId: intent.plan_id,
-    phone: phoneNorm.local ?? intent.buyer_phone ?? '',
+    publicId,
+    planId,
+    phone: phoneNorm.local ?? intent?.buyer_phone ?? '',
     note: `${gateway}:${orderId}`,
   });
   await markIntentActivated(orderId);
   logger.info(
-    { orderId, publicId: intent.public_id, planId: intent.plan_id, premiumUntilMs: activated.premiumUntilMs },
+    { orderId, publicId, planId, premiumUntilMs: activated.premiumUntilMs },
     'payment_poll_activated_premium',
   );
   return { activated: true, premiumUntilMs: activated.premiumUntilMs };
@@ -312,7 +349,7 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
         providerPayload: raw,
       });
     }
-    if (isSonicPaymentCompleted(paymentStatus)) {
+    if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
       const act = await activatePremiumIfCompletedOrder(trimmed);
       return {
         status: 'COMPLETED',
@@ -362,7 +399,7 @@ export async function confirmPremiumForOrder(args: {
     throw new HttpError(400, 'Missing orderId/publicId/planId', 'MISSING_FIELDS');
   }
 
-  const tracked = await getIntent(orderId);
+  let tracked = await getIntent(orderId);
   const phoneNorm = normalizePhoneToLocal0(args.phone || tracked?.buyer_phone || '');
   const phone = phoneNorm.local ?? String(args.phone ?? tracked?.buyer_phone ?? '').trim();
   if (tracked?.public_id && tracked.public_id !== publicId) {
@@ -378,15 +415,18 @@ export async function confirmPremiumForOrder(args: {
   }
 
   const gateway = await resolveGatewayForOrder(orderId);
-  let ps = '';
-
-  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
-    const { paymentStatus } = await fetchSonicOrderStatus(orderId);
-    ps = paymentStatus;
-  } else {
-    const row = await fetchZenoOrderStatus(orderId);
-    ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+  if (!tracked?.public_id || !tracked.plan_id) {
+    await upsertPendingIntent({
+      orderId,
+      publicId,
+      planId,
+      buyerPhone: phone,
+      provider: gateway,
+    });
+    tracked = await getIntent(orderId);
   }
+
+  const ps = await resolvePaidStatusForOrder(orderId, gateway);
 
   if (ps) {
     await updateIntentStatus({ orderId, providerStatus: ps });

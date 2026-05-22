@@ -399,6 +399,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     await prefs.remove('pendingPaymentOrderId');
     await prefs.remove('pendingPaymentPlanId');
     await prefs.remove('pendingPaymentPhone');
+    await prefs.remove('pendingPaymentProvider');
   }
 
   void _handleWaitWindowExpired() {
@@ -672,11 +673,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         await UserIdentity.registerWithBackend(phone: phone);
       }
 
-      // Unlock premium locally immediately
-      if (planId != null && planId.isNotEmpty) {
-        await SubscriptionStore.activatePlan(planId);
-      }
-
       int? serverUntilMs = serverPremiumUntilMs;
       if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
         try {
@@ -695,10 +691,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+        await SubscriptionStore.syncPremiumFromBackend();
+      } else if (planId != null && planId.isNotEmpty) {
+        // Server not updated yet — keep local unlock until next sync succeeds.
+        await SubscriptionStore.activatePlan(planId);
       }
-
-      // Sync premium status from backend
-      await SubscriptionStore.syncPremiumFromBackend();
       SubscriptionStore.refreshNotifierFromPrefs();
       await _clearPendingOrderPrefs();
 
@@ -783,12 +780,16 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       );
       final orderId = (result['orderId']?.toString() ?? '').trim();
       final serverMsg = (result['message']?.toString() ?? '').trim();
+      final provider = (result['provider']?.toString() ?? '').trim().toLowerCase();
 
       if (orderId.isNotEmpty) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pendingPaymentOrderId', orderId);
         await prefs.setString('pendingPaymentPlanId', plan.id);
         await prefs.setString('pendingPaymentPhone', TanzaniaPhone.normalize(clean) ?? clean);
+        if (provider.isNotEmpty) {
+          await prefs.setString('pendingPaymentProvider', provider);
+        }
         if (!mounted) return;
         setState(() {
           _pollingOrderId = orderId;

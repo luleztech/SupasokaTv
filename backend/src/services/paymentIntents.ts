@@ -1,4 +1,5 @@
 import { getPool } from '../db/pool';
+import { HttpError } from '../middleware/errorHandler';
 
 export type PaymentIntentStatus =
   | 'PENDING'
@@ -19,6 +20,7 @@ export type PaymentIntentRow = {
   status: PaymentIntentStatus;
   provider_status: string | null;
   activated_at_ms: string | null;
+  provider_payload: unknown;
 };
 
 function normalizeStatus(raw: string): PaymentIntentStatus {
@@ -67,7 +69,13 @@ export async function upsertPendingIntent(args: {
   providerPayload?: unknown;
 }): Promise<void> {
   const pool = getPool();
-  if (!pool) return;
+  if (!pool) {
+    throw new HttpError(
+      503,
+      'DATABASE_URL is not configured — cannot track payment for premium activation',
+      'NO_DATABASE',
+    );
+  }
   await ensurePaymentIntentsTable();
   const amount = Number.isFinite(args.amountTzs as number) ? Math.trunc(args.amountTzs as number) : null;
   await pool.query(
@@ -134,7 +142,7 @@ export async function getIntent(orderId: string): Promise<PaymentIntentRow | nul
   if (!pool) return null;
   await ensurePaymentIntentsTable();
   const res = await pool.query<PaymentIntentRow>(
-    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider, status, provider_status, activated_at_ms
+    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider, status, provider_status, activated_at_ms, provider_payload
      FROM payment_intents
      WHERE order_id = $1
      LIMIT 1`,

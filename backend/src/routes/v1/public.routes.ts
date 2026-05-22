@@ -230,6 +230,11 @@ publicRouter.post('/payments/start', async (req, res, next) => {
       buyerEmail: String(b.buyer_email ?? b.buyerEmail ?? `${publicId}@supasoka.app`).trim(),
     });
 
+    logger.info(
+      { orderId: out.orderId, publicId, planId, provider: out.provider },
+      'payment_start',
+    );
+
     res.json({
       ok: true,
       status: out.status,
@@ -237,6 +242,7 @@ publicRouter.post('/payments/start', async (req, res, next) => {
       orderId: out.orderId,
       message: out.message,
       provider: out.provider,
+      paymentProvider: out.provider,
       resultcode: '000',
     });
   } catch (e) {
@@ -426,17 +432,13 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
     }
 
     const tracked = await getIntent(orderId);
-    const hasPendingSonic =
-      tracked != null &&
-      tracked.payment_provider === PAYMENT_PROVIDERS.SONICPESA &&
-      tracked.activated_at_ms == null;
 
     if (process.env.SONICPESA_WEBHOOK_SECRET?.trim()) {
       if (!signatureValid) {
         res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
         return;
       }
-    } else if (!hasPendingSonic) {
+    } else if (tracked == null || tracked.activated_at_ms != null) {
       res.status(401).json({ ok: false, error: 'Webhook not verified' });
       return;
     }
