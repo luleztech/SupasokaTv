@@ -37,8 +37,8 @@ class PlayerManager(
     private var webViewEngine: WebViewEngine? = null
     private var currentSession: StreamSession? = null
     private var isInitialized = false
-    /** After Exo fails at runtime, try gateway page in WebView once. */
-    private var webViewFallbackUsed = false
+    /** If Exo fails with HTML/manifest errors, try WebView once with the original session URL. */
+    private var webViewFallbackAttempted = false
     private val probeExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -57,8 +57,8 @@ class PlayerManager(
             release()
         }
 
-        webViewFallbackUsed = false
         currentSession = streamSession
+        webViewFallbackAttempted = false
 
         probeExecutor.execute {
             val resolved = StreamProbe.resolveForSession(streamSession)
@@ -110,7 +110,43 @@ class PlayerManager(
                                 },
                                 onError = { error ->
                                     Log.e(TAG, "Player error: $error")
-                                    tryWebViewAfterExoError(error)
+                                    mainHandler.post {
+                                        if (!webViewFallbackAttempted &&
+                                            webViewEngine == null &&
+                                            shouldFallbackExoToWebView(error)
+                                        ) {
+                                            webViewFallbackAttempted = true
+                                            Log.w(TAG, "Exo manifest/HTML-style error — trying WebView fallback")
+                                            try {
+                                                engine?.release()
+                                                engine = null
+                                                val session = currentSession ?: streamSession
+                                                webViewEngine = WebViewEngine(
+                                                    context = context,
+                                                    onPlaybackStateChanged = { state ->
+                                                        Log.d(TAG, "WebView state: $state")
+                                                        onStateChanged(state)
+                                                    },
+                                                    onError = { err ->
+                                                        Log.e(TAG, "WebView error: $err")
+                                                        onError(err)
+                                                    },
+                                                )
+                                                webViewEngine?.initialize(session)
+                                                if (webViewEngine?.getWebView() == null) {
+                                                    onError(error)
+                                                } else {
+                                                    isInitialized = true
+                                                    onReady()
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "WebView fallback failed", e)
+                                                onError(error)
+                                            }
+                                        } else {
+                                            onError(error)
+                                        }
+                                    }
                                 },
                                 onTracksChangedCallback = { tracks ->
                                     Log.d(TAG, "Tracks available: ${tracks.groups.size} groups")
@@ -153,51 +189,6 @@ class PlayerManager(
                     Log.e(TAG, "initialize failed", e)
                     onError("Player init failed: ${e.message}")
                 }
-            }
-        }
-    }
-
-    private fun tryWebViewAfterExoError(error: String) {
-        val session = currentSession
-        if (session == null || webViewFallbackUsed || webViewEngine != null) {
-            onError(error)
-            return
-        }
-        val url = session.mpdUrl
-        val canFallback = StreamUrlClassifier.isLikelyGatewayUrl(url) ||
-            StreamUrlClassifier.isPhpLikeUrl(url)
-        if (!canFallback) {
-            onError(error)
-            return
-        }
-        webViewFallbackUsed = true
-        Log.w(TAG, "Exo failed; trying WebView fallback for gateway URL")
-        mainHandler.post {
-            try {
-                isInitialized = false
-                engine?.release()
-                engine = null
-                webViewEngine = WebViewEngine(
-                    context = context,
-                    onPlaybackStateChanged = { state ->
-                        Log.d(TAG, "WebView state: $state")
-                        onStateChanged(state)
-                    },
-                    onError = { err ->
-                        Log.e(TAG, "WebView error: $err")
-                        onError(err)
-                    },
-                )
-                webViewEngine?.initialize(session)
-                if (webViewEngine?.getWebView() == null) {
-                    onError(error)
-                    return@post
-                }
-                isInitialized = true
-                onReady()
-            } catch (e: Exception) {
-                Log.e(TAG, "WebView fallback failed", e)
-                onError(error)
             }
         }
     }
@@ -248,7 +239,7 @@ class PlayerManager(
         engine?.release()
         engine = null
         isInitialized = false
-        webViewFallbackUsed = false
+        webViewFallbackAttempted = false
         currentSession = null
     }
 
@@ -349,4 +340,33 @@ class PlayerManager(
      * Get current session
      */
     fun getCurrentSession(): StreamSession? = currentSession
+
+    /** Exo returned HTML/login or manifest parse errors — try in-app WebView once. */
+    private fun shouldFallbackExoToWebView(message: String): Boolean {
+        val m = message.lowercase()
+        // Do not route transport/HTTP authorization failures to WebView.
+        // These should surface directly to user (expired URL, unreachable host, forbidden, etc).
+        if (m.contains("could not connect") ||
+            m.contains("connection failed") ||
+            m.contains("timed out") ||
+            m.contains("timeout") ||
+            m.contains("dns") ||
+            m.contains("no route") ||
+            m.contains("unreachable") ||
+            m.contains("refused connection") ||
+            m.contains("403") ||
+            m.contains("401") ||
+            m.contains("forbidden") ||
+            m.contains("unauthorized") ||
+            m.contains("access denied")
+        ) {
+            return false
+        }
+        return m.contains("manifest") ||
+            m.contains("malformed") ||
+            m.contains("login page") ||
+            m.contains("wrong file") ||
+            m.contains("parsing") ||
+            m.contains("not found")
+    }
 }

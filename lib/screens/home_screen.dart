@@ -18,10 +18,19 @@ import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 import 'package:supasoka/widgets/whatsapp_fab.dart';
 
-/// Wider horizontal channel cards on Home (was 168).
-const double _kRailTileWidth = 212;
+/// Home horizontal channel cards: reduced exactly 20px wide and 30px tall from the 212px layout.
+const double _kOriginalRailTileWidth = 212;
+const double _kRailTileWidth = _kOriginalRailTileWidth - 20;
+const double _kRailHeightReduction = 30;
+const double _kRailListBottomPadding = 4;
+double get _kRailPosterHeightDelta =>
+    (channelHomeRailCellHeight(_kOriginalRailTileWidth) -
+            _kRailHeightReduction -
+            _kRailListBottomPadding) -
+        (_kRailTileWidth * 4 / 3);
 
-double get _kRailHeight => channelHomeRailCellHeight(_kRailTileWidth);
+double get _kRailHeight =>
+    channelHomeRailCellHeight(_kOriginalRailTileWidth) - _kRailHeightReduction;
 
 String _catEmoji(String cat) {
   switch (cat) {
@@ -40,6 +49,44 @@ String _catEmoji(String cat) {
     default:
       return '📺';
   }
+}
+
+const List<String> _kHomeCategoryOrder = [
+  'mpira',
+  'football',
+  'sports',
+  'tamthilia',
+  'movies',
+  'habari',
+  'news',
+];
+
+const List<({String title, List<String> keys})> _kHomeCategorySections = [
+  (title: 'Mpira', keys: ['mpira', 'football', 'sports']),
+  (title: 'tamthilia', keys: ['tamthilia', 'movies']),
+  (title: 'habari', keys: ['habari', 'news']),
+];
+
+String _homeCategoryTitle(String cat) {
+  switch (cat) {
+    case 'football':
+    case 'mpira':
+    case 'sports':
+      return 'Mpira';
+    case 'movies':
+    case 'tamthilia':
+      return 'tamthilia';
+    case 'news':
+    case 'habari':
+      return 'habari';
+    default:
+      return categoryPillLabel(cat);
+  }
+}
+
+int _homeCategoryRank(CategoryItem cat) {
+  final rank = _kHomeCategoryOrder.indexOf(cat.key);
+  return rank == -1 ? 1000 : rank;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -213,7 +260,7 @@ class _HomeScreenState extends State<HomeScreen> {
             browseSlivers.add(
               SliverToBoxAdapter(
                 child: _ChannelRail(
-                  title: '🆓 FREE CHANNELS',
+                  title: 'Chaneli za bure',
                   tileWidth: _kRailTileWidth,
                   railHeight: _kRailHeight,
                   channels: freeTop,
@@ -223,14 +270,40 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             );
           }
-          for (final cat in cats) {
-            if (cat.key == 'all') continue;
+          final renderedKeys = <String>{};
+          for (final section in _kHomeCategorySections) {
+            final keySet = section.keys.toSet();
+            final list = channels.where((ch) => keySet.contains(ch.cat)).toList();
+            if (list.isEmpty) continue;
+            renderedKeys.addAll(section.keys);
+            browseSlivers.add(
+              SliverToBoxAdapter(
+                child: _ChannelRail(
+                  title: section.title,
+                  tileWidth: _kRailTileWidth,
+                  railHeight: _kRailHeight,
+                  channels: list,
+                  lockedFor: (ch) => !ch.free && !isPremium,
+                  onChannel: (ch) => _openChannel(context, ch.id),
+                ),
+              ),
+            );
+          }
+          final remainingCats = cats
+              .where((cat) => cat.key != 'all' && !renderedKeys.contains(cat.key))
+              .toList()
+            ..sort((a, b) {
+              final byRank = _homeCategoryRank(a).compareTo(_homeCategoryRank(b));
+              if (byRank != 0) return byRank;
+              return a.label.compareTo(b.label);
+            });
+          for (final cat in remainingCats) {
             final list = channels.where((ch) => ch.cat == cat.key).toList();
             if (list.isEmpty) continue;
             browseSlivers.add(
               SliverToBoxAdapter(
                 child: _ChannelRail(
-                  title: '${_catEmoji(cat.key)} ${cat.label}',
+                  title: _homeCategoryTitle(cat.key),
                   tileWidth: _kRailTileWidth,
                   railHeight: _kRailHeight,
                   channels: list,
@@ -545,7 +618,7 @@ class _CarouselSlide extends StatelessWidget {
   }
 }
 
-class _ChannelRail extends StatelessWidget {
+class _ChannelRail extends StatefulWidget {
   const _ChannelRail({
     required this.title,
     required this.tileWidth,
@@ -563,9 +636,59 @@ class _ChannelRail extends StatelessWidget {
   final void Function(Channel) onChannel;
 
   @override
+  State<_ChannelRail> createState() => _ChannelRailState();
+}
+
+class _ChannelRailState extends State<_ChannelRail> {
+  static bool _scrollHintPlayed = false;
+
+  final ScrollController _scrollController = ScrollController();
+  bool _showScrollHint = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _playScrollHintOnce());
+  }
+
+  Future<void> _playScrollHintOnce() async {
+    if (_scrollHintPlayed || widget.channels.length < 2) return;
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted || !_scrollController.hasClients) return;
+    final maxOffset = _scrollController.position.maxScrollExtent;
+    if (maxOffset < 24) return;
+
+    _scrollHintPlayed = true;
+    setState(() => _showScrollHint = true);
+
+    final peekOffset = maxOffset.clamp(0.0, 56.0);
+    await _scrollController.animateTo(
+      peekOffset,
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeOutCubic,
+    );
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted || !_scrollController.hasClients) return;
+    await _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeInOutCubic,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 2200));
+    if (mounted) setState(() => _showScrollHint = false);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
-    if (channels.isEmpty) return const SizedBox.shrink();
+    if (widget.channels.isEmpty) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
@@ -603,7 +726,7 @@ class _ChannelRail extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    title.toUpperCase(),
+                    widget.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: rajdhani(12.5, weight: FontWeight.w800).copyWith(
@@ -621,7 +744,7 @@ class _ChannelRail extends StatelessWidget {
                     border: Border.all(color: t.border.withValues(alpha: 0.35)),
                   ),
                   child: Text(
-                    '${channels.length}',
+                    '${widget.channels.length}',
                     style: rajdhani(10.5, weight: FontWeight.w700).copyWith(
                       color: t.text2.withValues(alpha: 0.95),
                       letterSpacing: 0.4,
@@ -632,23 +755,81 @@ class _ChannelRail extends StatelessWidget {
             ),
           ),
           SizedBox(
-            height: railHeight,
-            child: ListView.separated(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-              scrollDirection: Axis.horizontal,
+            height: widget.railHeight,
+            child: Stack(
               clipBehavior: Clip.none,
-              itemCount: channels.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 12),
-              itemBuilder: (context, i) {
-                final ch = channels[i];
-                return ChannelCard(
-                  width: tileWidth,
-                  railPosterHeightDelta: -20,
-                  channel: ch,
-                  locked: lockedFor(ch),
-                  onPress: () => onChannel(ch),
-                );
-              },
+              children: [
+                ListView.separated(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, _kRailListBottomPadding),
+                  scrollDirection: Axis.horizontal,
+                  clipBehavior: Clip.none,
+                  itemCount: widget.channels.length,
+                  separatorBuilder: (context, index) => const SizedBox(width: 12),
+                  itemBuilder: (context, i) {
+                    final ch = widget.channels[i];
+                    return ChannelCard(
+                      width: widget.tileWidth,
+                      railPosterHeightDelta: _kRailPosterHeightDelta,
+                      channel: ch,
+                      locked: widget.lockedFor(ch),
+                      onPress: () => widget.onChannel(ch),
+                    );
+                  },
+                ),
+                Positioned(
+                  right: 18,
+                  bottom: 12,
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _showScrollHint ? 1 : 0,
+                      duration: const Duration(milliseconds: 260),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(999),
+                          gradient: LinearGradient(
+                            colors: [
+                              t.accent.withValues(alpha: 0.92),
+                              t.accent2.withValues(alpha: 0.86),
+                            ],
+                          ),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.38),
+                              blurRadius: 18,
+                              offset: const Offset(0, 8),
+                            ),
+                            BoxShadow(
+                              color: t.accent.withValues(alpha: 0.26),
+                              blurRadius: 24,
+                              spreadRadius: -6,
+                            ),
+                          ],
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.swipe_left_rounded, size: 18, color: Colors.black),
+                              const SizedBox(width: 7),
+                              Text(
+                                'Vuta kulia kuona channel zaidi',
+                                style: rajdhani(12.5, weight: FontWeight.w900).copyWith(
+                                  color: Colors.black,
+                                  letterSpacing: 0.2,
+                                  height: 1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

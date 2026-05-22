@@ -25,15 +25,25 @@ class MainActivity : FlutterActivity() {
                         result.error("bad_args", "Expected map", null)
                         return@setMethodCallHandler
                     }
-                    val intent = Intent(this, SupasokaNativePlayerActivity::class.java)
-                    intent.putExtra("url", args["url"]?.toString().orEmpty())
-                    intent.putExtra("licenseUrl", args["licenseUrl"]?.toString().orEmpty())
-                    intent.putExtra("token", args["token"]?.toString().orEmpty())
-                    intent.putExtra("drmType", args["drmType"]?.toString().orEmpty().ifEmpty { "NONE" })
-                    intent.putExtra("clearKeyHex", args["clearKeyHex"]?.toString().orEmpty())
-                    intent.putExtra("headersJson", args["headersJson"]?.toString().orEmpty())
-                    startActivity(intent)
-                    result.success(null)
+                    try {
+                        val intent = Intent(this, SupasokaNativePlayerActivity::class.java)
+                        intent.putExtra("url", args["url"]?.toString().orEmpty())
+                        intent.putExtra("licenseUrl", args["licenseUrl"]?.toString().orEmpty())
+                        intent.putExtra("token", args["token"]?.toString().orEmpty())
+                        intent.putExtra("drmType", args["drmType"]?.toString().orEmpty().ifEmpty { "NONE" })
+                        // Backend may emit any of these keys for the ClearKey payload — accept all and use the first non-blank.
+                        val mergedClearKey = sequenceOf(
+                            args["clearKeyHex"]?.toString(),
+                            args["drmClearKey"]?.toString(),
+                            args["drm_clear_key"]?.toString(),
+                        ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
+                        intent.putExtra("clearKeyHex", mergedClearKey)
+                        intent.putExtra("headersJson", args["headersJson"]?.toString().orEmpty())
+                        startActivity(intent)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("native_open_failed", e.message ?: "Failed to open player", null)
+                    }
                 }
                 else -> result.notImplemented()
             }

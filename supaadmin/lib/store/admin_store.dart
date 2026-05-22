@@ -55,6 +55,15 @@ class AdminStore extends ChangeNotifier {
   List<Map<String, String?>> _paymentHealthRecent = const [];
   bool _loadingPaymentHealth = false;
 
+  String _paymentProvider = 'zeno';
+  bool? _paymentProviderConfigured;
+  bool? _zenoConfigured;
+  bool? _sonicConfigured;
+  bool? _paymentProviderApiReady;
+  String? _paymentProviderStatusHint;
+  bool? _loadingPaymentProvider;
+  bool? _savingPaymentProvider;
+
   AppConfig get config => _config;
 
   String? get lastSyncError => _lastSyncError;
@@ -63,6 +72,17 @@ class AdminStore extends ChangeNotifier {
   Map<String, int> get paymentHealthSummary => _paymentHealthSummary;
   List<Map<String, String?>> get paymentHealthRecent => _paymentHealthRecent;
   bool get loadingPaymentHealth => _loadingPaymentHealth;
+
+  String get paymentProvider => _paymentProvider;
+  bool get paymentProviderConfigured => _paymentProviderConfigured ?? false;
+  bool get zenoConfigured => _zenoConfigured ?? false;
+  bool get sonicConfigured => _sonicConfigured ?? false;
+  bool get loadingPaymentProvider => _loadingPaymentProvider ?? false;
+  bool get savingPaymentProvider => _savingPaymentProvider ?? false;
+  bool get paymentProviderApiReady => _paymentProviderApiReady ?? false;
+  String? get paymentProviderStatusHint => _paymentProviderStatusHint;
+
+  static bool _jsonBool(dynamic v) => v == true || v == 'true' || v == 1;
 
   /// Non-empty when key was compiled in (`kRailwayAdminApiKey` / `--dart-define=ADMIN_API_KEY=…`).
   bool get adminApiKeyIsFromBuild => false;
@@ -138,7 +158,7 @@ class AdminStore extends ChangeNotifier {
 
     if (hasAdminSession) {
       await pullConfigFromServer();
-      await refreshPaymentHealth();
+      await Future.wait([refreshPaymentHealth(), refreshPaymentProvider()]);
     }
     _ensureAutoSyncRetryLoop();
   }
@@ -188,7 +208,7 @@ class AdminStore extends ChangeNotifier {
     notifyListeners();
     if (hasAdminSession) {
       await pullConfigFromServer();
-      await refreshPaymentHealth();
+      await Future.wait([refreshPaymentHealth(), refreshPaymentProvider()]);
     }
     _ensureAutoSyncRetryLoop();
   }
@@ -284,6 +304,113 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> refreshUsersFromServer() => pullConfigFromServer();
+
+  Future<void> refreshPaymentProvider() async {
+    if (!hasAdminSession) return;
+    _loadingPaymentProvider = true;
+    notifyListeners();
+    try {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/settings/payment-provider').replace(
+        queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+      );
+      final res = await http
+          .get(uri, headers: {..._authHeaders(), 'Cache-Control': 'no-cache'})
+          .timeout(const Duration(seconds: 18));
+      if (res.statusCode == 404) {
+        _paymentProviderApiReady = false;
+        _paymentProviderStatusHint =
+            'Backend haijasasishwa: deploy API mpya kwenye Railway (payment-provider routes).';
+        return;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _paymentProviderApiReady = false;
+        _paymentProviderStatusHint = 'Haikuweza kusoma mipangilio ya malipo (HTTP ${res.statusCode}).';
+        return;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic>) return;
+      _paymentProviderApiReady = true;
+      _paymentProviderStatusHint = null;
+      _paymentProvider = (decoded['paymentProvider'] ?? 'zeno').toString();
+      _paymentProviderConfigured = _jsonBool(decoded['configured']);
+      _zenoConfigured = _jsonBool(decoded['zenoConfigured']);
+      _sonicConfigured = _jsonBool(decoded['sonicConfigured']);
+    } catch (_) {
+      _paymentProviderApiReady = false;
+      _paymentProviderStatusHint = 'Mtandao au seva haikupatikana.';
+    } finally {
+      _loadingPaymentProvider = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> updatePaymentProvider(String next) async {
+    if (!hasAdminSession || (savingPaymentProvider)) return false;
+    final normalized = next.toLowerCase() == 'sonicpesa' ? 'sonicpesa' : 'zeno';
+    if (!paymentProviderApiReady) {
+      _snack(
+        _paymentProviderStatusHint ??
+            'Backend haijasasishwa. Deploy Supasoka API kwenye Railway kisha jaribu tena.',
+      );
+      return false;
+    }
+    if (normalized == 'sonicpesa' && !sonicConfigured) {
+      _snack(
+        'SONICPESA_API_KEY haipo kwenye Supasoka Railway. Nakili kutoka EaMax → Variables, kisha Redeploy.',
+      );
+      return false;
+    }
+    if (normalized == 'zeno' && !zenoConfigured) {
+      _snack('ZENO_API_KEY haipo kwenye Supasoka Railway. Weka key kisha Redeploy.');
+      return false;
+    }
+    if (normalized == _paymentProvider) return true;
+    final previous = _paymentProvider;
+    _paymentProvider = normalized;
+    _savingPaymentProvider = true;
+    notifyListeners();
+    try {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/settings/payment-provider');
+      final res = await http
+          .put(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({'paymentProvider': normalized}),
+          )
+          .timeout(const Duration(seconds: 22));
+      Map<String, dynamic>? decoded;
+      try {
+        decoded = jsonDecode(res.body) as Map<String, dynamic>?;
+      } catch (_) {}
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        _paymentProvider = previous;
+        final err = decoded?['error'];
+        final msg = err is Map
+            ? (err['message'] ?? err['code'])?.toString()
+            : decoded?['error']?.toString();
+        _snack(msg?.isNotEmpty == true ? msg! : 'Could not update payment provider (${res.statusCode})');
+        return false;
+      }
+      _paymentProvider = (decoded?['paymentProvider'] ?? normalized).toString();
+      _paymentProviderConfigured = decoded?['configured'] != false;
+      await refreshPaymentProvider();
+      _snack(
+        normalized == 'sonicpesa'
+            ? 'SonicPesa — malipo mapya yanaenda kwenye akaunti yako ya SonicPesa (sawa na EaMax).'
+            : 'ZenoPay — malipo mapya yanaenda kwenye ZenoPay.',
+      );
+      return true;
+    } catch (e) {
+      _paymentProvider = previous;
+      _snack('Could not update payment provider: $e');
+      return false;
+    } finally {
+      _savingPaymentProvider = false;
+      notifyListeners();
+    }
+  }
 
   Future<void> refreshPaymentHealth() async {
     if (!hasAdminSession) return;

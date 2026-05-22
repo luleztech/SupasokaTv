@@ -27,6 +27,9 @@ class NativeAndroidPlayer {
       'token': token,
       'drmType': drmType,
       'clearKeyHex': clearKeyHex,
+      // Kotlin merges these — supports alternate backend keys without exposing errors to users.
+      'drmClearKey': clearKeyHex,
+      'drm_clear_key': clearKeyHex,
       'headersJson': headers == null || headers.isEmpty ? '' : jsonEncode(headers),
     });
   }

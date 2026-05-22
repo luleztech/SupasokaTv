@@ -3,12 +3,26 @@ import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicC
 import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
 import { createZenoOrder, fetchZenoOrderStatus } from '../../services/zenoPay';
 import { activatePremiumForUser } from '../../services/premiumActivation';
+import { logger } from '../../lib/logger';
 import {
   getIntent,
   markIntentActivated,
   upsertPendingIntent,
   updateIntentStatus,
 } from '../../services/paymentIntents';
+import { getSelectedPaymentProvider } from '../../services/paymentProviderSettings';
+import {
+  confirmPremiumForOrder,
+  pollUnifiedPaymentStatus,
+  providerHealthSnapshot,
+  startUnifiedPayment,
+} from '../../services/unifiedPayments';
+import {
+  ensureSonicPesaConfigured,
+  extractSonicWebhookPaid,
+  verifySonicPesaWebhookHmac,
+} from '../../services/sonicPesa';
+import { PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
 
 function isZenoPaymentCompleted(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
@@ -142,11 +156,18 @@ publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   }
 });
 
-/**
- * Viewer app: verify a Zeno order on the server (protects against spoofed client success),
- * then activate premium in DB so SupaAdmin + other devices can see it.
- */
-publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
+/** Public: which gateway new checkouts use (admin toggle in SupaAdmin). */
+publicRouter.get('/settings/payment-provider', async (_req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    const paymentProvider = await getSelectedPaymentProvider();
+    res.json({ ok: true, ...providerHealthSnapshot(paymentProvider) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+async function handleConfirmPremium(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) {
   try {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const orderId = String(b.orderId ?? '').trim();
@@ -155,81 +176,143 @@ publicRouter.post('/confirm-zeno-premium', async (req, res, next) => {
     const phone = String(b.phone ?? '').trim();
 
     if (!orderId || !publicId || !planId) {
+      logger.warn({ orderId, publicId, planId }, 'payment_confirm_missing_fields');
       res.status(400).json({ ok: false, error: 'Missing orderId/publicId/planId' });
       return;
     }
 
-    const tracked = await getIntent(orderId);
-    if (tracked?.public_id && tracked.public_id !== publicId) {
-      res.status(409).json({ ok: false, error: 'Order belongs to another user' });
+    const out = await confirmPremiumForOrder({ orderId, publicId, planId, phone });
+    logger.info({ orderId, publicId, planId, premiumUntilMs: out.premiumUntilMs }, 'payment_confirm_activated');
+    res.json({ ok: true, premiumUntilMs: out.premiumUntilMs });
+  } catch (e) {
+    if (e && typeof e === 'object' && 'statusCode' in e) {
+      const he = e as { statusCode: number; message: string };
+      res.status(he.statusCode).json({ ok: false, error: he.message });
       return;
     }
-    if (tracked?.plan_id && tracked.plan_id !== planId) {
-      res.status(409).json({ ok: false, error: 'Order does not match selected plan' });
-      return;
-    }
-    if (tracked?.activated_at_ms != null) {
-      const until = await getUserPremiumStatus(publicId);
-      res.json({ ok: true, premiumUntilMs: until });
+    next(e);
+  }
+}
+
+/**
+ * Viewer app: verify payment on the server (Zeno or SonicPesa), then activate premium.
+ */
+publicRouter.post('/confirm-premium', handleConfirmPremium);
+
+/** Backward-compatible alias. */
+publicRouter.post('/confirm-zeno-premium', handleConfirmPremium);
+
+/** Unified checkout — respects SupaAdmin payment_provider (SonicPesa or ZenoPay). */
+publicRouter.post('/payments/start', async (req, res, next) => {
+  try {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const metadata = (b.metadata ?? {}) as Record<string, unknown>;
+    const publicId = String(
+      b.publicId ?? b.externalId ?? metadata.external_id ?? metadata.public_id ?? '',
+    ).trim();
+    const planId = String(b.planId ?? b.bundle ?? metadata.plan_id ?? '').trim();
+    const phone = String(b.phone ?? b.buyer_phone ?? metadata.buyer_phone ?? '').trim();
+    const amountTzs = Number(b.amount ?? b.amountTzs ?? 0);
+    const orderId = String(b.order_id ?? b.orderId ?? '').trim();
+
+    if (!publicId || !planId || !phone || amountTzs < 1) {
+      res.status(400).json({ ok: false, error: 'Missing publicId, planId, phone, or amount' });
       return;
     }
 
-    const row = await fetchZenoOrderStatus(orderId);
-    const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
-    if (ps) {
-      await updateIntentStatus({
-        orderId,
-        providerStatus: ps,
-        providerPayload: row ?? null,
-      });
-    }
-    if (!isZenoPaymentCompleted(ps)) {
-      const code = isZenoPaymentTerminalFailure(ps) ? 409 : 402;
-      res.status(code).json({ ok: false, error: 'Payment not completed', paymentStatus: ps || null });
-      return;
-    }
-
-    // Basic phone cross-check when available.
-    const zPhone = String((row as any)?.buyer_phone ?? '').trim();
-    if (phone && zPhone) {
-      const a = normalizeTzBuyerPhone(phone);
-      const zNorm = normalizeTzBuyerPhone(zPhone);
-      if (a.length >= 9 && zNorm.length >= 9 && a !== zNorm) {
-        res.status(409).json({ ok: false, error: 'Phone mismatch' });
-        return;
-      }
-    }
-
-    const activated = await activatePremiumForUser({
+    const out = await startUnifiedPayment({
+      orderId: orderId || undefined,
       publicId,
       planId,
+      amountTzs,
       phone,
-      note: `zeno:${orderId}`,
+      buyerName: String(b.buyer_name ?? b.buyerName ?? publicId).trim(),
+      buyerEmail: String(b.buyer_email ?? b.buyerEmail ?? `${publicId}@supasoka.app`).trim(),
     });
-    await markIntentActivated(orderId);
 
-    res.json({ ok: true, premiumUntilMs: activated.premiumUntilMs });
+    res.json({
+      ok: true,
+      status: out.status,
+      order_id: out.orderId,
+      orderId: out.orderId,
+      message: out.message,
+      provider: out.provider,
+      resultcode: '000',
+    });
   } catch (e) {
     next(e);
   }
 });
 
-/** Viewer app: backend-proxied Zeno create-order (uses server env `ZENO_API_KEY`). */
+/** Unified status poll — routes by payment_intents.payment_provider. */
+publicRouter.get('/payments/status', async (req, res, next) => {
+  try {
+    const orderId = String(req.query.orderId ?? req.query.order_id ?? '').trim();
+    if (!orderId) {
+      res.status(400).json({ resultcode: '400', status: 'error', message: 'orderId required' });
+      return;
+    }
+    const out = await pollUnifiedPaymentStatus(orderId);
+    const row =
+      out.raw && typeof out.raw === 'object' && 'data' in (out.raw as object)
+        ? (out.raw as { data: unknown[] }).data?.[0]
+        : out.raw;
+    res.json({
+      resultcode: out.resultcode ?? (out.status === 'COMPLETED' ? '000' : '200'),
+      status: out.status === 'COMPLETED' ? 'success' : 'success',
+      data: row != null ? (Array.isArray((out.raw as { data?: unknown[] })?.data) ? (out.raw as { data: unknown[] }).data : [row]) : [],
+      paymentStatus: out.status,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Viewer app: create-order — uses admin-selected provider (SonicPesa or ZenoPay). */
 publicRouter.post('/zeno/create-order', async (req, res, next) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const metadata = (body.metadata ?? {}) as Record<string, unknown>;
+    const publicId = String(metadata.external_id ?? metadata.public_id ?? '').trim();
+    const planId = String(metadata.plan_id ?? '').trim();
+    const phone = String(body.buyer_phone ?? metadata.buyer_phone ?? '').trim();
+    const amountTzs = Number(body.amount ?? 0);
+    const requestedOrderId = String(body.order_id ?? body.orderId ?? '').trim();
+
+    if (publicId && planId && phone && amountTzs >= 1) {
+      const out = await startUnifiedPayment({
+        orderId: requestedOrderId || undefined,
+        publicId,
+        planId,
+        amountTzs,
+        phone,
+        buyerName: String(body.buyer_name ?? publicId).trim(),
+        buyerEmail: String(body.buyer_email ?? `${publicId}@supasoka.app`).trim(),
+      });
+      res.json({
+        status: 'success',
+        resultcode: '000',
+        order_id: out.orderId,
+        orderId: out.orderId,
+        message: out.message,
+        provider: out.provider,
+      });
+      return;
+    }
+
     const out = await createZenoOrder(body);
     const orderId = String(out.order_id ?? out.orderId ?? '').trim();
     if (orderId) {
-      const metadata = (body.metadata ?? {}) as Record<string, unknown>;
       await upsertPendingIntent({
         orderId,
-        publicId: String(metadata.external_id ?? metadata.public_id ?? '').trim(),
-        planId: String(metadata.plan_id ?? '').trim(),
-        amountTzs: Number(body.amount ?? 0),
-        buyerPhone: String(body.buyer_phone ?? metadata.buyer_phone ?? '').trim(),
+        publicId,
+        planId,
+        amountTzs,
+        buyerPhone: phone,
+        provider: PAYMENT_PROVIDERS.ZENO,
         providerPayload: out,
       });
+      logger.info({ orderId, publicId, planId, amountTzs }, 'payment_order_created');
     }
     res.json(out);
   } catch (e) {
@@ -256,12 +339,103 @@ publicRouter.post('/zeno/webhook', async (req, res, next) => {
     }
 
     if (!isZenoPaymentCompleted(ps)) {
+      logger.info({ orderId, paymentStatus: ps || null }, 'payment_webhook_not_completed');
       res.json({ ok: true, received: true, activated: false, paymentStatus: ps || null });
       return;
     }
 
     const tracked = await getIntent(orderId);
     if (!tracked || !tracked.public_id || !tracked.plan_id) {
+      logger.warn({ orderId }, 'payment_webhook_intent_missing_metadata');
+      res.json({ ok: true, received: true, activated: false, reason: 'Intent metadata missing' });
+      return;
+    }
+    if (tracked.activated_at_ms != null) {
+      logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_idempotent_hit');
+      res.json({ ok: true, received: true, activated: true, already: true });
+      return;
+    }
+
+    await activatePremiumForUser({
+      publicId: tracked.public_id,
+      planId: tracked.plan_id,
+      phone: tracked.buyer_phone ?? '',
+      note: `zeno:${orderId}`,
+    });
+    await markIntentActivated(orderId);
+    logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_activated');
+    res.json({ ok: true, received: true, activated: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Viewer app: order-status — SonicPesa or ZenoPay based on stored provider. */
+publicRouter.get('/zeno/order-status', async (req, res, next) => {
+  try {
+    const orderId = String(req.query.order_id ?? req.query.orderId ?? '').trim();
+    if (!orderId) {
+      res.status(400).json({ resultcode: '400', status: 'error', message: 'order_id is required' });
+      return;
+    }
+    const out = await pollUnifiedPaymentStatus(orderId);
+    const data =
+      out.raw && typeof out.raw === 'object' && Array.isArray((out.raw as { data?: unknown[] }).data)
+        ? (out.raw as { data: unknown[] }).data
+        : out.status
+          ? [{ payment_status: out.status, order_id: orderId }]
+          : [];
+    logger.info({ orderId, paymentStatus: out.status }, 'payment_status_polled');
+    res.json({
+      resultcode: out.resultcode ?? '000',
+      status: 'success',
+      data,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** SonicPesa webhook — configure in SonicPesa dashboard (same account as EaMax). */
+publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
+  try {
+    ensureSonicPesaConfigured();
+    const rawBodyString = JSON.stringify(req.body ?? {});
+    const sigHeader =
+      (req.headers['x-sonicpesa-signature'] as string | undefined) ??
+      (req.headers['x-webhook-signature'] as string | undefined) ??
+      (req.headers['x-signature'] as string | undefined);
+    const signatureValid = verifySonicPesaWebhookHmac(rawBodyString, sigHeader);
+    const payload = (req.body ?? {}) as Record<string, unknown>;
+    const { orderId, paid } = extractSonicWebhookPaid(payload);
+
+    if (!orderId) {
+      res.status(400).json({ ok: false, error: 'Missing order reference' });
+      return;
+    }
+
+    const tracked = await getIntent(orderId);
+    const hasPendingSonic =
+      tracked != null &&
+      tracked.payment_provider === PAYMENT_PROVIDERS.SONICPESA &&
+      tracked.activated_at_ms == null;
+
+    if (process.env.SONICPESA_WEBHOOK_SECRET?.trim()) {
+      if (!signatureValid) {
+        res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
+        return;
+      }
+    } else if (!hasPendingSonic) {
+      res.status(401).json({ ok: false, error: 'Webhook not verified' });
+      return;
+    }
+
+    if (!paid) {
+      res.json({ ok: true, received: true, activated: false });
+      return;
+    }
+
+    if (!tracked?.public_id || !tracked.plan_id) {
       res.json({ ok: true, received: true, activated: false, reason: 'Intent metadata missing' });
       return;
     }
@@ -274,47 +448,11 @@ publicRouter.post('/zeno/webhook', async (req, res, next) => {
       publicId: tracked.public_id,
       planId: tracked.plan_id,
       phone: tracked.buyer_phone ?? '',
-      note: `zeno:${orderId}`,
+      note: `sonicpesa:${orderId}`,
     });
     await markIntentActivated(orderId);
+    logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_activated');
     res.json({ ok: true, received: true, activated: true });
-  } catch (e) {
-    next(e);
-  }
-});
-
-/** Viewer app: backend-proxied Zeno order-status (uses server env `ZENO_API_KEY`). */
-publicRouter.get('/zeno/order-status', async (req, res, next) => {
-  try {
-    const orderId = String(req.query.order_id ?? '').trim();
-    if (!orderId) {
-      res.status(400).json({ resultcode: '400', status: 'error', message: 'order_id is required' });
-      return;
-    }
-    const local = await getIntent(orderId);
-    if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
-      res.json({
-        resultcode: '000',
-        status: 'success',
-        data: [{ payment_status: 'COMPLETED', order_id: orderId }],
-      });
-      return;
-    }
-
-    const row = await fetchZenoOrderStatus(orderId);
-    const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
-    if (ps) {
-      await updateIntentStatus({
-        orderId,
-        providerStatus: ps,
-        providerPayload: row ?? null,
-      });
-    }
-    res.json({
-      resultcode: row ? '000' : '404',
-      status: row ? 'success' : 'error',
-      data: row ? [row] : [],
-    });
   } catch (e) {
     next(e);
   }

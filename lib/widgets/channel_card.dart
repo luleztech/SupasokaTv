@@ -369,7 +369,7 @@ class _AccessBadge extends StatelessWidget {
           border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
         ),
         child: Text(
-          'FREE',
+          'Bure',
           style: orbitron(7, weight: FontWeight.w900).copyWith(
             color: const Color(0xFFa1a1aa),
             letterSpacing: 0.8,

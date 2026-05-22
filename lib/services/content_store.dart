@@ -345,6 +345,9 @@ class ContentStore extends ChangeNotifier {
           free: m['free'] as bool? ?? true,
           viewers: m['viewers'] as String? ?? '',
           streamUrl: stream,
+          drm: (m['drm'] ?? 'none').toString(),
+          clearKeyKidKey: (m['clearKeyKidKey'] ?? '').toString(),
+          licenseUrl: (m['licenseUrl'] ?? '').toString(),
         ),
       );
     }

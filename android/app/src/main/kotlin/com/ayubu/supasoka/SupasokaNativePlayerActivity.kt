@@ -13,7 +13,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
-import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
@@ -47,6 +46,21 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     /** After landscape once, do not show rotate hint again this session. */
     private var hasBeenLandscapeThisSession = false
     private var playbackReady = false
+
+    /** Never expose URLs / HTTP / DRM details to the user (security). */
+    private fun showChannelUnavailableAndFinish() {
+        if (isFinishing) return
+        try {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.channel_unavailable_message)
+                .setPositiveButton(R.string.ok_understood) { _, _ -> finish() }
+                .setOnCancelListener { finish() }
+                .setCancelable(true)
+                .show()
+        } catch (_: Exception) {
+            finish()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,14 +107,13 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         val session = try {
             StreamSessionBuilder.fromFlutterBundle(extras)
         } catch (e: Exception) {
-            Toast.makeText(this, e.message ?: "Invalid playback", Toast.LENGTH_LONG).show()
-            finish()
+            Log.e(TAG, "Invalid playback bundle", e)
+            showChannelUnavailableAndFinish()
             return
         }
 
         if (session.mpdUrl.isEmpty()) {
-            Toast.makeText(this, "Missing URL", Toast.LENGTH_SHORT).show()
-            finish()
+            showChannelUnavailableAndFinish()
             return
         }
 
@@ -117,8 +130,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             onError = { msg ->
                 runOnUiThread {
                     if (isFinishing) return@runOnUiThread
-                    Toast.makeText(this@SupasokaNativePlayerActivity, msg, Toast.LENGTH_LONG).show()
-                    finish()
+                    Log.w(TAG, "Playback error: $msg")
+                    showChannelUnavailableAndFinish()
                 }
             },
             onTracksAvailable = {},
@@ -128,10 +141,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     playbackReady = true
                     try {
                         if (playerManager.isWebViewPlayback()) {
-                            if (exoBoundToView) {
-                                playerView.player = null
-                                exoBoundToView = false
-                            }
+                            playerView.player = null
                             okoaBundle.visibility = View.VISIBLE
                             playerView.visibility = View.GONE
                             webContainer.visibility = View.VISIBLE
@@ -145,18 +155,18 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                                     ),
                                 )
                             } ?: run {
-                                Toast.makeText(this@SupasokaNativePlayerActivity, "Haikuweza kupakia kiunganishi", Toast.LENGTH_LONG).show()
-                                finish()
+                                showChannelUnavailableAndFinish()
                             }
                             playerManager.setQuality(selectedOkoaQuality)
                         } else {
-                            okoaBundle.visibility = View.GONE
+                            okoaBundle.visibility = View.VISIBLE
+                            playerManager.setQuality(selectedOkoaQuality)
                             bindExoToPlayerViewIfNeeded(playerView, strictNull = true)
                         }
                         maybeShowRotateHint()
                     } catch (e: Exception) {
-                        Toast.makeText(this@SupasokaNativePlayerActivity, e.message ?: "Playback error", Toast.LENGTH_LONG).show()
-                        finish()
+                        Log.e(TAG, "onReady", e)
+                        showChannelUnavailableAndFinish()
                     }
                 }
             },
@@ -292,8 +302,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         val p = playerManager.getExoPlayer()
         if (p == null) {
             if (strictNull) {
-                Toast.makeText(this, "Haikuweza kuanza kichezaji", Toast.LENGTH_LONG).show()
-                finish()
+                showChannelUnavailableAndFinish()
             }
             return
         }
@@ -308,8 +317,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             }
             exoBoundToView = true
         } catch (e: Exception) {
-            Toast.makeText(this, e.message ?: "Playback error", Toast.LENGTH_LONG).show()
-            finish()
+            Log.e(TAG, "bindExoToPlayerViewIfNeeded", e)
+            showChannelUnavailableAndFinish()
         }
     }
 

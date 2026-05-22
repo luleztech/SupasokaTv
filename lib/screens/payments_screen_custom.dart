@@ -18,6 +18,7 @@ import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
 import 'package:supasoka/data/pay_plan.dart';
+import 'package:supasoka/widgets/audio_guide_card.dart';
 
 const _accentCta = Color(0xFF22C55E);
 const _accentBlue = Color(0xFF2563EB);
@@ -97,7 +98,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   String? _pendingBundleLabel;
   String? _pollingOrderId;
   int _notFoundStreak = 0;
-  bool _simulating = false;
   int _waitingSeconds = _kPaymentWaitSeconds;
   Timer? _waitingTimer;
   _PaymentUiPhase _paymentUiPhase = _PaymentUiPhase.none;
@@ -232,7 +232,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (pending == null || pending.isEmpty) return;
 
     try {
-      final res = await paymentsApi.checkZenoStatus(pending);
+      final res = await paymentsApi.checkPaymentStatus(pending);
       final st = _paymentStatusFromCheckResponse(res);
       if (isPaymentCompleted(st)) {
         _stopPaymentTimersOnly();
@@ -339,7 +339,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
 
       try {
-        final response = await paymentsApi.checkZenoStatus(orderId);
+        final response = await paymentsApi.checkPaymentStatus(orderId);
         if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
         final paymentStatus = _paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
@@ -419,7 +419,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       return;
     }
     try {
-      final response = await paymentsApi.checkZenoStatus(id);
+      final response = await paymentsApi.checkPaymentStatus(id);
       final paymentStatus = _paymentStatusFromCheckResponse(response);
       if (isPaymentCompleted(paymentStatus)) {
         _stopPaymentTimersOnly();
@@ -759,12 +759,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
     setState(() => _submitting = true);
     try {
-      final result = await paymentsApi.startZenoPayment(
+      final result = await paymentsApi.startPayment(
         externalId: _userId!,
         bundle: plan.id,
         amount: plan.value,
         phone: clean,
-        email: '$_userId@eamax.app',
+        email: '$_userId@supasoka.app',
         name: _userId!,
       );
       final orderId = (result['orderId']?.toString() ?? '').trim();
@@ -792,20 +792,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       _showStatus('Malipo hayajatumika', _mapPaymentError(e), _PayDialogTone.error);
     } finally {
       if (mounted) setState(() => _submitting = false);
-    }
-  }
-
-  Future<void> _simulatePaid() async {
-    final id = _pollingOrderId;
-    if (id == null || _simulating) return;
-    setState(() => _simulating = true);
-    try {
-      await paymentsApi.completePaymentForTesting(id);
-      await _markPaymentCompleted();
-    } catch (e) {
-      _showStatus('Tatizo', _mapPaymentError(e), _PayDialogTone.error);
-    } finally {
-      if (mounted) setState(() => _simulating = false);
     }
   }
 
@@ -844,6 +830,16 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                   _Reveal(
                     controller: _entryCtrlSafe,
                     delay: 0.00,
+                    child: const AudioGuideCard(
+                      assetPath: 'audio/fungua_zote_guide.mp3',
+                      title: 'Jinsi ya kufungua channel zote — bonyeza hapa kusikiliza',
+                      subtitle: 'Mwongozo mfupi wa hatua zote',
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _Reveal(
+                    controller: _entryCtrlSafe,
+                    delay: 0.04,
                     child: _PayPremiumHero(accent: ac),
                   ),
                   const SizedBox(height: 22),
@@ -1002,13 +998,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                           )
                         : const SizedBox.shrink(key: ValueKey('no-pay-button')),
                   ),
-                  if (kDebugMode && _pollingOrderId != null) ...[
-                    const SizedBox(height: 10),
-                    TextButton(
-                      onPressed: _simulating ? null : _simulatePaid,
-                      child: Text(_simulating ? '...' : 'Test: Mark as paid'),
-                    ),
-                  ],
                 ],
               ),
             ),

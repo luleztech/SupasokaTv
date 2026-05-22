@@ -10,6 +10,9 @@ class Channel {
     required this.free,
     required this.viewers,
     required this.streamUrl,
+    this.drm = 'none',
+    this.clearKeyKidKey = '',
+    this.licenseUrl = '',
   });
 
   final int id;
@@ -20,6 +23,12 @@ class Channel {
   final String viewers;
   /// Playback URL. Paths ending in `.php` (before `?`/`#`) use in-app WebView; others use native player.
   final String streamUrl;
+  /// DRM type from admin/API, e.g. `none` or `clearkey`.
+  final String drm;
+  /// ClearKey payload in `kid:key` form for encrypted DASH streams.
+  final String clearKeyKidKey;
+  /// License server URL for server-backed DRM types when present.
+  final String licenseUrl;
 }
 
 class LiveMatch {

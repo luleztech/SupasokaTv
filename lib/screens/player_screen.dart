@@ -48,6 +48,24 @@ String _copyForIssue(_PlayerIssue issue) {
   }
 }
 
+String _nativeDrmTypeFor(Channel channel) {
+  final drm = channel.drm.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
+  switch (drm) {
+    case 'clearkey':
+      return channel.clearKeyKidKey.trim().isEmpty ? 'NONE' : 'CLEARKEY';
+    case 'widevine':
+      return 'WIDEVINE';
+    case 'widevinel1':
+      return 'WIDEVINE_L1';
+    case 'widevinel3':
+      return 'WIDEVINE_L3';
+    case 'playready':
+      return 'PLAYREADY';
+    default:
+      return 'NONE';
+  }
+}
+
 class _PlayerScreenState extends State<PlayerScreen> {
   late int _channelId;
   Channel? _channel;
@@ -98,6 +116,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (NativeAndroidPlayer.supported) {
       await NativeAndroidPlayer.open(
         url: url,
+        licenseUrl: ch.licenseUrl.trim(),
+        drmType: _nativeDrmTypeFor(ch),
+        clearKeyHex: ch.clearKeyKidKey.trim(),
         headers: playbackHttpHeaders(url),
       );
       if (mounted) Navigator.of(context).pop();

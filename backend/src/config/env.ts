@@ -23,6 +23,16 @@ export const env = {
   zenoApiBase: process.env.ZENO_API_BASE ?? 'https://zenoapi.com',
   /** Optional webhook callback URL for payment completion push. */
   zenoWebhookUrl: process.env.ZENO_WEBHOOK_URL ?? '',
+  /** SonicPesa — same account/credentials as EaMax (Railway env). */
+  sonicPesaApiKey: process.env.SONICPESA_API_KEY ?? '',
+  sonicPesaSecretKey:
+    process.env.SONICPESA_SECRET_KEY ??
+    process.env.SONICPESA_API_SECRET ??
+    process.env.SONICPESA_SECRETE_KEY ??
+    '',
+  sonicPesaWebhookSecret: process.env.SONICPESA_WEBHOOK_SECRET ?? '',
+  /** Set to `1` to send local 0… MSISDN to Sonic (default: 255…). */
+  sonicSendLocalPhone: process.env.SONIC_SEND_LOCAL_PHONE === '1',
   /** FCM service-account credentials for backend push broadcast. */
   fcmProjectId: process.env.FCM_PROJECT_ID ?? '',
   fcmClientEmail: process.env.FCM_CLIENT_EMAIL ?? '',

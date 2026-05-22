@@ -3,7 +3,6 @@ package com.ayubu.supasoka.player
 import android.content.Context
 import android.view.View
 import android.webkit.CookieManager
-import android.net.Uri
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -85,45 +84,17 @@ class WebViewEngine(
                         android.util.Log.d("ShakaConsole", "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
                         return true
                     }
-
-                    /** Gateway players often open `window.open` — route into the same WebView (blank/blocked otherwise). */
-                    override fun onCreateWindow(
-                        view: WebView?,
-                        isDialog: Boolean,
-                        isUserGesture: Boolean,
-                        resultMsg: android.os.Message?,
-                    ): Boolean {
-                        val wv = view ?: return false
-                        val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                        transport.webView = wv
-                        resultMsg.sendToTarget()
-                        return true
-                    }
                 }
 
                 jsInterface = WebViewJsInterface(onPlaybackStateChanged, onError)
                 addJavascriptInterface(jsInterface!!, "ShakaPlayerBridge")
             }
 
-            webView?.loadUrl(url, buildInitialLoadHeaders(streamSession, url))
+            webView?.loadUrl(url)
 
         } catch (e: Exception) {
             onError("Failed to initialize WebView: ${e.message}")
         }
-    }
-
-    private fun buildInitialLoadHeaders(streamSession: StreamSession, pageUrl: String): MutableMap<String, String> {
-        val h = LinkedHashMap<String, String>()
-        streamSession.headers.forEach { (k, v) -> h[k] = v }
-        if (!h.keys.any { it.equals("Referer", ignoreCase = true) }) {
-            val noHash = if (pageUrl.contains("#")) pageUrl.substring(0, pageUrl.indexOf("#")) else pageUrl
-            h["Referer"] = noHash
-        }
-        if (!h.keys.any { it.equals("Origin", ignoreCase = true) }) {
-            val uri = Uri.parse(pageUrl)
-            h["Origin"] = "${uri.scheme}://${uri.authority}"
-        }
-        return h
     }
 
     fun play() {

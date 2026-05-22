@@ -15,6 +15,7 @@ export type PaymentIntentRow = {
   plan_id: string | null;
   amount_tzs: number | null;
   buyer_phone: string | null;
+  payment_provider: string | null;
   status: PaymentIntentStatus;
   provider_status: string | null;
   activated_at_ms: string | null;
@@ -48,10 +49,12 @@ export async function ensurePaymentIntentsTable(): Promise<void> {
       provider_status TEXT,
       activated_at_ms BIGINT,
       provider_payload JSONB,
+      payment_provider TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
   );
+  await pool.query(`ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS payment_provider TEXT`);
 }
 
 export async function upsertPendingIntent(args: {
@@ -60,6 +63,7 @@ export async function upsertPendingIntent(args: {
   planId?: string;
   amountTzs?: number;
   buyerPhone?: string;
+  provider?: string;
   providerPayload?: unknown;
 }): Promise<void> {
   const pool = getPool();
@@ -68,13 +72,14 @@ export async function upsertPendingIntent(args: {
   const amount = Number.isFinite(args.amountTzs as number) ? Math.trunc(args.amountTzs as number) : null;
   await pool.query(
     `INSERT INTO payment_intents
-      (order_id, public_id, plan_id, amount_tzs, buyer_phone, status, provider_status, provider_payload, updated_at)
-     VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, NULLIF($5, ''), 'PENDING', 'PENDING', $6::jsonb, now())
+      (order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider, status, provider_status, provider_payload, updated_at)
+     VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, NULLIF($5, ''), NULLIF($6, ''), 'PENDING', 'PENDING', $7::jsonb, now())
      ON CONFLICT (order_id) DO UPDATE SET
       public_id = COALESCE(NULLIF(EXCLUDED.public_id, ''), payment_intents.public_id),
       plan_id = COALESCE(NULLIF(EXCLUDED.plan_id, ''), payment_intents.plan_id),
       amount_tzs = COALESCE(EXCLUDED.amount_tzs, payment_intents.amount_tzs),
       buyer_phone = COALESCE(NULLIF(EXCLUDED.buyer_phone, ''), payment_intents.buyer_phone),
+      payment_provider = COALESCE(NULLIF(EXCLUDED.payment_provider, ''), payment_intents.payment_provider),
       provider_payload = COALESCE(EXCLUDED.provider_payload, payment_intents.provider_payload),
       updated_at = now()`,
     [
@@ -83,6 +88,7 @@ export async function upsertPendingIntent(args: {
       args.planId ?? '',
       amount,
       args.buyerPhone ?? '',
+      args.provider ?? '',
       args.providerPayload != null ? JSON.stringify(args.providerPayload) : null,
     ],
   );
@@ -128,7 +134,7 @@ export async function getIntent(orderId: string): Promise<PaymentIntentRow | nul
   if (!pool) return null;
   await ensurePaymentIntentsTable();
   const res = await pool.query<PaymentIntentRow>(
-    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, status, provider_status, activated_at_ms
+    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider, status, provider_status, activated_at_ms
      FROM payment_intents
      WHERE order_id = $1
      LIMIT 1`,

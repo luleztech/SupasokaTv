@@ -113,13 +113,22 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
 
     if (!mounted) return;
 
-    final savedPhone = await UserIdentity.getSavedPhoneNumber();
-    await UserIdentity.registerWithBackend(phone: savedPhone);
-    if (!mounted) return;
+    unawaited(_registerUserIdentityAfterHome());
 
     setState(() => _status = 'Ready');
     await _exitCtrl.forward();
     _goDone();
+  }
+
+  Future<void> _registerUserIdentityAfterHome() async {
+    try {
+      final savedPhone = await UserIdentity.getSavedPhoneNumber();
+      await UserIdentity.registerWithBackend(phone: savedPhone);
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('Deferred user registration failed: $e\n$st');
+      }
+    }
   }
 
   void _goDone() {

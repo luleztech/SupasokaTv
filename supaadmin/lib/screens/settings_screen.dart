@@ -44,6 +44,15 @@ class SettingsScreen extends StatelessWidget {
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 2,
+              child: const _PaymentProviderCard(),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          sliver: SliverToBoxAdapter(
+            child: StaggerEntrance(
+              index: 3,
               child: Container(
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
@@ -71,7 +80,7 @@ class SettingsScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
-              index: 3,
+              index: 4,
               slide: 12,
               child: _CustomerCareCard(
                 digits: c.customerCareWhatsapp,
@@ -81,6 +90,260 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PaymentProviderCard extends StatefulWidget {
+  const _PaymentProviderCard();
+
+  @override
+  State<_PaymentProviderCard> createState() => _PaymentProviderCardState();
+}
+
+class _PaymentProviderCardState extends State<_PaymentProviderCard> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final store = context.read<AdminStore>();
+      if (store.hasAdminSession && !store.loadingPaymentProvider) {
+        store.refreshPaymentProvider();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AdminStore>();
+    final cs = Theme.of(context).colorScheme;
+    final isSonic = store.paymentProvider == 'sonicpesa';
+    final activeColor = isSonic ? const Color(0xFF22c55e) : const Color(0xFF3b82f6);
+    final activeLabel = isSonic ? 'SonicPesa' : 'ZenoPay';
+    final apiReady = store.paymentProviderApiReady;
+    final zenoReady = store.zenoConfigured;
+    final sonicReady = store.sonicConfigured;
+    final activeReady = isSonic ? sonicReady : zenoReady;
+    final saving = store.savingPaymentProvider;
+    final loading = store.loadingPaymentProvider;
+    final hint = store.paymentProviderStatusHint;
+    final loggedIn = store.hasAdminSession;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            activeColor.withValues(alpha: 0.18),
+            const Color(0xFF7c3aed).withValues(alpha: 0.1),
+            const Color(0xFF161a24),
+          ],
+        ),
+        border: Border.all(
+          color: activeColor.withValues(alpha: 0.45),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: activeColor.withValues(alpha: 0.12),
+            blurRadius: 28,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  color: activeColor.withValues(alpha: 0.22),
+                ),
+                child: Icon(Icons.account_balance_wallet_rounded, color: activeColor, size: 26),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Payment gateway',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Chagua API inayopokea malipo mapya kutoka app. Malipo yaliyoanzishwa tayari hayabadiliki.',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+              if (loading || saving)
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: activeColor),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: Colors.black.withValues(alpha: 0.25),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.bolt_rounded, color: activeColor, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$activeLabel — live',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.92),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        hint ??
+                            (activeReady
+                                ? 'API key ipo kwenye Supasoka Railway'
+                                : 'Hakuna API key — nakili kutoka EaMax Variables'),
+                        style: TextStyle(
+                          color: hint != null
+                              ? Colors.amberAccent.withValues(alpha: 0.95)
+                              : activeReady
+                                  ? const Color(0xFF86efac)
+                                  : Colors.amberAccent.withValues(alpha: 0.9),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _ProviderChip(
+                label: 'ZenoPay',
+                subtitle: zenoReady ? 'Ready' : 'No key on Supasoka',
+                icon: Icons.flash_on_rounded,
+                color: const Color(0xFF3b82f6),
+                selected: !isSonic,
+                enabled: !loading && !saving && loggedIn && apiReady && zenoReady,
+                onTap: () => store.updatePaymentProvider('zeno'),
+              ),
+              const SizedBox(width: 10),
+              _ProviderChip(
+                label: 'SonicPesa',
+                subtitle: sonicReady ? 'Ready' : 'No key on Supasoka',
+                icon: Icons.speed_rounded,
+                color: const Color(0xFF22c55e),
+                selected: isSonic,
+                enabled: !loading && !saving && loggedIn && apiReady && sonicReady,
+                onTap: () => store.updatePaymentProvider('sonicpesa'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '1) Deploy backend mpya kwenye Supasoka Railway. 2) Ongeza SONICPESA_API_KEY + SONICPESA_WEBHOOK_SECRET (sawa na EaMax) kwenye Supasoka Variables — si EaMax pekee.',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.42), fontSize: 10.5, height: 1.35),
+          ),
+          if (!loggedIn) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Login kwanza ili kubadilisha mtoa huduma.',
+              style: TextStyle(color: cs.error.withValues(alpha: 0.85), fontSize: 11),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderChip extends StatelessWidget {
+  const _ProviderChip({
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: (enabled == true) ? onTap : null,
+          borderRadius: BorderRadius.circular(16),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              color: selected ? color.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.04),
+              border: Border.all(
+                color: selected ? color.withValues(alpha: 0.7) : Colors.white.withValues(alpha: 0.08),
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Icon(icon, color: selected ? color : Colors.white54, size: 22),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: selected ? Colors.white : Colors.white70,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: selected ? color.withValues(alpha: 0.95) : Colors.white38,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
