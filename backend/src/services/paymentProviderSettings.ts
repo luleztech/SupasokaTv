@@ -55,18 +55,23 @@ function paymentProviderFromEnv(): PaymentProviderId | null {
 }
 
 export async function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
+  const pool = getPool();
+  if (pool) {
+    await ensureAppSettingsTable();
+    const res = await pool.query<{ value: string }>(
+      `SELECT value FROM app_settings WHERE key = $1 LIMIT 1`,
+      [PAYMENT_PROVIDER_SETTING_KEY],
+    );
+    const dbRaw = res.rows[0]?.value;
+    if (dbRaw != null && String(dbRaw).trim() !== '') {
+      return normalizePaymentProvider(dbRaw);
+    }
+  }
+
   const fromEnv = paymentProviderFromEnv();
   if (fromEnv) return fromEnv;
 
-  const pool = getPool();
-  if (!pool) return PAYMENT_PROVIDERS.ZENO;
-  await ensureAppSettingsTable();
-  const res = await pool.query<{ value: string }>(
-    `SELECT value FROM app_settings WHERE key = $1 LIMIT 1`,
-    [PAYMENT_PROVIDER_SETTING_KEY],
-  );
-  const raw = res.rows[0]?.value ?? PAYMENT_PROVIDERS.ZENO;
-  return normalizePaymentProvider(raw);
+  return PAYMENT_PROVIDERS.ZENO;
 }
 
 /** Throws when admin selected SonicPesa — blocks any outbound call to zenoapi.com. */
