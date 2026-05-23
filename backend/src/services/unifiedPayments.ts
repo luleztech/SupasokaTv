@@ -70,7 +70,7 @@ export function normalizePhoneToLocal0(rawPhone: string): { local?: string; erro
   return { local: normalizedPhone };
 }
 
-function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
+export function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
   if (!row || typeof row !== 'object') return '';
   const keys = [
     'payment_status', 'PaymentStatus', 'paymentStatus',
@@ -83,6 +83,9 @@ function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefine
     const s = String(v).trim();
     if (s.length > 0) return s.toUpperCase();
   }
+  if (row.success === true) return 'COMPLETED';
+  const rc = String(row.resultcode ?? row.result_code ?? row.code ?? '').trim();
+  if (rc === '000' || rc === '0') return 'COMPLETED';
   return '';
 }
 
@@ -322,25 +325,62 @@ async function resolvePaidStatusForOrder(
   return paymentStatusFromZenoRow(row as Record<string, unknown> | null);
 }
 
-/** Idempotent: activate premium when provider reports paid (poll / webhook / confirm). */
-export async function activatePremiumIfCompletedOrder(
+type ActivateOverrides = {
+  publicId?: string;
+  planId?: string;
+  phone?: string;
+};
+
+function resolveOrderIdentity(
   orderId: string,
-): Promise<{ activated: boolean; premiumUntilMs?: number }> {
-  const intent = await getIntent(orderId);
-  let publicId = String(intent?.public_id ?? '').trim();
-  let planId = String(intent?.plan_id ?? '').trim();
+  intent: Awaited<ReturnType<typeof getIntent>>,
+  overrides?: ActivateOverrides,
+): { publicId: string; planId: string; phone: string } {
+  let publicId = String(overrides?.publicId ?? intent?.public_id ?? '').trim();
+  let planId = String(overrides?.planId ?? intent?.plan_id ?? '').trim();
   if (!publicId || !planId) {
     const fromPayload = metadataFromProviderPayload(intent?.provider_payload);
     publicId = publicId || fromPayload.publicId;
     planId = planId || fromPayload.planId;
   }
-  if (!publicId || !planId) {
+  const phoneNorm = normalizePhoneToLocal0(overrides?.phone ?? intent?.buyer_phone ?? '');
+  const phone = phoneNorm.local ?? String(overrides?.phone ?? intent?.buyer_phone ?? '').trim();
+  return { publicId, planId, phone };
+}
+
+async function writePremiumForOrder(
+  orderId: string,
+  gateway: PaymentProviderId,
+  identity: { publicId: string; planId: string; phone: string },
+): Promise<{ premiumUntilMs: number }> {
+  const activated = await activatePremiumForUser({
+    publicId: identity.publicId,
+    planId: identity.planId,
+    phone: identity.phone,
+    note: `${gateway}:${orderId}`,
+  });
+  await markIntentActivated(orderId);
+  logger.info(
+    { orderId, publicId: identity.publicId, planId: identity.planId, premiumUntilMs: activated.premiumUntilMs },
+    'payment_activated_premium',
+  );
+  return { premiumUntilMs: activated.premiumUntilMs };
+}
+
+/** Idempotent: activate premium when provider reports paid (poll / webhook / confirm). */
+export async function activatePremiumIfCompletedOrder(
+  orderId: string,
+  overrides?: ActivateOverrides,
+): Promise<{ activated: boolean; premiumUntilMs?: number }> {
+  const intent = await getIntent(orderId);
+  const identity = resolveOrderIdentity(orderId, intent, overrides);
+  if (!identity.publicId || !identity.planId) {
     logger.warn({ orderId }, 'payment_activate_missing_metadata');
     return { activated: false };
   }
   if (intent?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
-    const until = await getUserPremiumStatus(publicId);
+    const until = await getUserPremiumStatus(identity.publicId);
     return { activated: true, premiumUntilMs: until ?? undefined };
   }
 
@@ -350,19 +390,44 @@ export async function activatePremiumIfCompletedOrder(
     return { activated: false };
   }
 
-  const phoneNorm = normalizePhoneToLocal0(intent?.buyer_phone ?? '');
-  const activated = await activatePremiumForUser({
-    publicId,
-    planId,
-    phone: phoneNorm.local ?? intent?.buyer_phone ?? '',
-    note: `${gateway}:${orderId}`,
-  });
-  await markIntentActivated(orderId);
-  logger.info(
-    { orderId, publicId, planId, premiumUntilMs: activated.premiumUntilMs },
-    'payment_poll_activated_premium',
-  );
-  return { activated: true, premiumUntilMs: activated.premiumUntilMs };
+  const out = await writePremiumForOrder(orderId, gateway, identity);
+  return { activated: true, premiumUntilMs: out.premiumUntilMs };
+}
+
+/**
+ * Provider already confirmed paid — always persist premium when we know user + plan
+ * (covers DB races, webhook/poll timing, or a failed first activation attempt).
+ */
+export async function ensurePremiumActivatedForPaidOrder(
+  orderId: string,
+  overrides?: ActivateOverrides,
+): Promise<{ activated: boolean; premiumUntilMs?: number }> {
+  const trimmed = orderId.trim();
+  if (!trimmed) return { activated: false };
+
+  let act = await activatePremiumIfCompletedOrder(trimmed, overrides);
+  if (act.activated && act.premiumUntilMs != null) return act;
+
+  const intent = await getIntent(trimmed);
+  const identity = resolveOrderIdentity(trimmed, intent, overrides);
+  if (!identity.publicId || !identity.planId) {
+    logger.warn({ orderId: trimmed }, 'payment_force_activate_missing_metadata');
+    return { activated: false };
+  }
+  if (intent?.activated_at_ms != null) {
+    const { getUserPremiumStatus } = await import('./userDirectory');
+    const until = await getUserPremiumStatus(identity.publicId);
+    return { activated: true, premiumUntilMs: until ?? undefined };
+  }
+
+  try {
+    const gateway = await resolveGatewayForOrder(trimmed);
+    const out = await writePremiumForOrder(trimmed, gateway, identity);
+    return { activated: true, premiumUntilMs: out.premiumUntilMs };
+  } catch (e) {
+    logger.error({ orderId: trimmed, err: e }, 'payment_force_activate_failed');
+    return { activated: false };
+  }
 }
 
 export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
@@ -406,7 +471,7 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       });
     }
     if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
-      const act = await activatePremiumIfCompletedOrder(trimmed);
+      const act = await ensurePremiumActivatedForPaidOrder(trimmed);
       return {
         status: 'COMPLETED',
         resultcode: '000',
@@ -428,7 +493,7 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     });
   }
   if (isPaymentCompletedStatus(ps)) {
-    const act = await activatePremiumIfCompletedOrder(trimmed);
+    const act = await ensurePremiumActivatedForPaidOrder(trimmed);
     return {
       status: 'COMPLETED',
       resultcode: '000',
@@ -493,14 +558,11 @@ export async function confirmPremiumForOrder(args: {
     throw new HttpError(code, 'Payment not completed', 'NOT_COMPLETED');
   }
 
-  const activated = await activatePremiumForUser({
-    publicId,
-    planId,
-    phone: phone || phoneNorm.local || '',
-    note: `${gateway}:${orderId}`,
-  });
-  await markIntentActivated(orderId);
-  return { premiumUntilMs: activated.premiumUntilMs };
+  const act = await ensurePremiumActivatedForPaidOrder(orderId, { publicId, planId, phone });
+  if (!act.activated || act.premiumUntilMs == null) {
+    throw new HttpError(500, 'Payment completed but premium could not be activated', 'ACTIVATE_FAILED');
+  }
+  return { premiumUntilMs: act.premiumUntilMs };
 }
 
 export function providerHealthSnapshot(selected: PaymentProviderId): {

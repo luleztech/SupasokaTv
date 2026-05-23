@@ -342,10 +342,29 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
         final paymentStatus = _paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
-          _stopPaymentTimersOnly();
           final premiumMs = response['premiumUntilMs'];
-          await _markPaymentCompleted(serverPremiumUntilMs: premiumMs is num ? premiumMs.toInt() : null);
-          return;
+          final serverActivated = response['activated'] == true;
+          if (serverActivated && premiumMs is num) {
+            _stopPaymentTimersOnly();
+            await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
+            return;
+          }
+          final prefs = await SharedPreferences.getInstance();
+          final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+          final phone = prefs.getString('pendingPaymentPhone')?.trim();
+          final publicId = await UserIdentity.getOrCreatePublicId();
+          final serverUntil = await _confirmPremiumOnBackend(
+            orderId: orderId,
+            publicId: publicId,
+            planId: planId ?? '',
+            phone: phone ?? '',
+          );
+          if (serverUntil != null) {
+            _stopPaymentTimersOnly();
+            await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
+            return;
+          }
+          // Provider says paid but server premium not written yet — keep polling.
         }
         if (isPaymentTerminalFailure(paymentStatus)) {
           await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
@@ -423,8 +442,18 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       final response = await paymentsApi.checkPaymentStatus(id);
       final paymentStatus = _paymentStatusFromCheckResponse(response);
       if (isPaymentCompleted(paymentStatus)) {
+        final prefs = await SharedPreferences.getInstance();
+        final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+        final phone = prefs.getString('pendingPaymentPhone')?.trim();
+        final publicId = await UserIdentity.getOrCreatePublicId();
+        final serverUntil = await _confirmPremiumOnBackend(
+          orderId: id,
+          publicId: publicId,
+          planId: planId ?? '',
+          phone: phone ?? '',
+        );
         _stopPaymentTimersOnly();
-        await _markPaymentCompleted();
+        await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
         return;
       }
       if (isPaymentTerminalFailure(paymentStatus)) {

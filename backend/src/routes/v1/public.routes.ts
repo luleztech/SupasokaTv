@@ -1,17 +1,17 @@
 import { Router } from 'express';
 import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicConfig';
 import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
-import { activatePremiumForUser } from '../../services/premiumActivation';
 import { logger } from '../../lib/logger';
 import {
   getIntent,
-  markIntentActivated,
   upsertPendingIntent,
   updateIntentStatus,
 } from '../../services/paymentIntents';
 import { getSelectedPaymentProvider } from '../../services/paymentProviderSettings';
 import {
   confirmPremiumForOrder,
+  ensurePremiumActivatedForPaidOrder,
+  isPaymentCompletedStatus,
   parseStartPaymentFromLegacyBody,
   pollUnifiedPaymentStatus,
   providerHealthSnapshot,
@@ -24,24 +24,6 @@ import {
   verifySonicPesaWebhookHmac,
 } from '../../services/sonicPesa';
 import { PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
-
-function isZenoPaymentCompleted(paymentStatus: string): boolean {
-  const s = String(paymentStatus ?? '')
-    .trim()
-    .toUpperCase();
-  return (
-    s === 'COMPLETED' ||
-    s === 'COMPLETE' ||
-    s === 'SUCCESS' ||
-    s === 'SUCCESSFUL' ||
-    s === 'SUCCEEDED' ||
-    s === 'PAID' ||
-    s === 'APPROVED' ||
-    s === 'AUTHORIZED' ||
-    s === 'AUTHORISED' ||
-    s === 'SETTLED'
-  );
-}
 
 function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
@@ -289,33 +271,35 @@ publicRouter.post('/zeno/webhook', async (req, res, next) => {
       });
     }
 
-    if (!isZenoPaymentCompleted(ps)) {
+    if (!isPaymentCompletedStatus(ps)) {
       logger.info({ orderId, paymentStatus: ps || null }, 'payment_webhook_not_completed');
       res.json({ ok: true, received: true, activated: false, paymentStatus: ps || null });
       return;
     }
 
-    const tracked = await getIntent(orderId);
-    if (!tracked || !tracked.public_id || !tracked.plan_id) {
-      logger.warn({ orderId }, 'payment_webhook_intent_missing_metadata');
-      res.json({ ok: true, received: true, activated: false, reason: 'Intent metadata missing' });
-      return;
-    }
-    if (tracked.activated_at_ms != null) {
-      logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_idempotent_hit');
-      res.json({ ok: true, received: true, activated: true, already: true });
-      return;
+    const meta = (b.metadata ?? {}) as Record<string, unknown>;
+    const publicId = String(meta.external_id ?? meta.public_id ?? b.public_id ?? '').trim();
+    const planId = String(meta.plan_id ?? b.plan_id ?? '').trim();
+    const phone = String(b.buyer_phone ?? meta.buyer_phone ?? '').trim();
+    if (publicId && planId) {
+      await upsertPendingIntent({
+        orderId,
+        publicId,
+        planId,
+        buyerPhone: phone,
+        provider: PAYMENT_PROVIDERS.ZENO,
+        providerPayload: b,
+      });
     }
 
-    await activatePremiumForUser({
-      publicId: tracked.public_id,
-      planId: tracked.plan_id,
-      phone: tracked.buyer_phone ?? '',
-      note: `zeno:${orderId}`,
-    });
-    await markIntentActivated(orderId);
-    logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_activated');
-    res.json({ ok: true, received: true, activated: true });
+    const act = await ensurePremiumActivatedForPaidOrder(orderId, { publicId, planId, phone });
+    if (!act.activated) {
+      logger.warn({ orderId }, 'payment_webhook_activate_failed');
+      res.json({ ok: true, received: true, activated: false, reason: 'Activation failed' });
+      return;
+    }
+    logger.info({ orderId, publicId, planId, premiumUntilMs: act.premiumUntilMs }, 'payment_webhook_activated');
+    res.json({ ok: true, received: true, activated: true, premiumUntilMs: act.premiumUntilMs ?? null });
   } catch (e) {
     next(e);
   }
@@ -356,24 +340,21 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
-    if (!tracked?.public_id || !tracked.plan_id) {
-      res.json({ ok: true, received: true, activated: false, reason: 'Intent metadata missing' });
-      return;
-    }
-    if (tracked.activated_at_ms != null) {
-      res.json({ ok: true, received: true, activated: true, already: true });
-      return;
-    }
-
-    await activatePremiumForUser({
-      publicId: tracked.public_id,
-      planId: tracked.plan_id,
-      phone: tracked.buyer_phone ?? '',
-      note: `sonicpesa:${orderId}`,
+    const act = await ensurePremiumActivatedForPaidOrder(orderId, {
+      publicId: tracked?.public_id ?? undefined,
+      planId: tracked?.plan_id ?? undefined,
+      phone: tracked?.buyer_phone ?? undefined,
     });
-    await markIntentActivated(orderId);
-    logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_activated');
-    res.json({ ok: true, received: true, activated: true });
+    if (!act.activated) {
+      logger.warn({ orderId }, 'payment_sonic_webhook_activate_failed');
+      res.json({ ok: true, received: true, activated: false, reason: 'Activation failed' });
+      return;
+    }
+    logger.info(
+      { orderId, publicId: tracked?.public_id, planId: tracked?.plan_id, premiumUntilMs: act.premiumUntilMs },
+      'payment_webhook_activated',
+    );
+    res.json({ ok: true, received: true, activated: true, premiumUntilMs: act.premiumUntilMs ?? null });
   } catch (e) {
     next(e);
   }
