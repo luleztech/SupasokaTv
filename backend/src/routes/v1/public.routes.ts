@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicConfig';
 import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
-import { createZenoOrder, fetchZenoOrderStatus } from '../../services/zenoPay';
 import { activatePremiumForUser } from '../../services/premiumActivation';
 import { logger } from '../../lib/logger';
 import {
@@ -13,8 +12,10 @@ import {
 import { getSelectedPaymentProvider } from '../../services/paymentProviderSettings';
 import {
   confirmPremiumForOrder,
+  parseStartPaymentFromLegacyBody,
   pollUnifiedPaymentStatus,
   providerHealthSnapshot,
+  startPaymentSuccessJson,
   startUnifiedPayment,
 } from '../../services/unifiedPayments';
 import {
@@ -202,56 +203,43 @@ publicRouter.post('/confirm-premium', handleConfirmPremium);
 /** Backward-compatible alias. */
 publicRouter.post('/confirm-zeno-premium', handleConfirmPremium);
 
-/** Unified checkout — respects SupaAdmin payment_provider (SonicPesa or ZenoPay). */
-publicRouter.post('/payments/start', async (req, res, next) => {
+async function handleUnifiedPaymentStart(
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+): Promise<void> {
   try {
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const metadata = (b.metadata ?? {}) as Record<string, unknown>;
-    const publicId = String(
-      b.publicId ?? b.externalId ?? metadata.external_id ?? metadata.public_id ?? '',
-    ).trim();
-    const planId = String(b.planId ?? b.bundle ?? metadata.plan_id ?? '').trim();
-    const phone = String(b.phone ?? b.buyer_phone ?? metadata.buyer_phone ?? '').trim();
-    const amountTzs = Number(b.amount ?? b.amountTzs ?? 0);
-    const orderId = String(b.order_id ?? b.orderId ?? '').trim();
-
-    if (!publicId || !planId || !phone || amountTzs < 1) {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const parsed = parseStartPaymentFromLegacyBody(body);
+    if (!parsed) {
       res.status(400).json({ ok: false, error: 'Missing publicId, planId, phone, or amount' });
       return;
     }
 
-    const out = await startUnifiedPayment({
-      orderId: orderId || undefined,
-      publicId,
-      planId,
-      amountTzs,
-      phone,
-      buyerName: String(b.buyer_name ?? b.buyerName ?? publicId).trim(),
-      buyerEmail: String(b.buyer_email ?? b.buyerEmail ?? `${publicId}@supasoka.app`).trim(),
-    });
-
+    const out = await startUnifiedPayment(parsed);
     logger.info(
-      { orderId: out.orderId, publicId, planId, provider: out.provider },
+      { orderId: out.orderId, publicId: parsed.publicId, planId: parsed.planId, provider: out.provider },
       'payment_start',
     );
-
-    res.json({
-      ok: true,
-      status: out.status,
-      order_id: out.orderId,
-      orderId: out.orderId,
-      message: out.message,
-      provider: out.provider,
-      paymentProvider: out.provider,
-      resultcode: '000',
-    });
+    res.json({ ...startPaymentSuccessJson(out), status: out.status });
   } catch (e) {
     next(e);
   }
-});
+}
 
-/** Unified status poll — routes by payment_intents.payment_provider. */
-publicRouter.get('/payments/status', async (req, res, next) => {
+/** Unified checkout — only active admin gateway (SonicPesa or ZenoPay). */
+publicRouter.post('/payments/start', handleUnifiedPaymentStart);
+
+/** Legacy Zeno path names — same unified checkout (never bypasses admin gateway). */
+publicRouter.post('/zeno/create-order', handleUnifiedPaymentStart);
+publicRouter.post('/create-order', handleUnifiedPaymentStart);
+publicRouter.post('/payments/mobile_money_tanzania', handleUnifiedPaymentStart);
+
+async function handleUnifiedPaymentStatus(
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+): Promise<void> {
   try {
     const orderId = String(req.query.orderId ?? req.query.order_id ?? '').trim();
     if (!orderId) {
@@ -273,69 +261,15 @@ publicRouter.get('/payments/status', async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}
 
-/** Viewer app: create-order — uses admin-selected provider (SonicPesa or ZenoPay). */
-publicRouter.post('/zeno/create-order', async (req, res, next) => {
-  try {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const metadata = (body.metadata ?? {}) as Record<string, unknown>;
-    const publicId = String(metadata.external_id ?? metadata.public_id ?? '').trim();
-    const planId = String(metadata.plan_id ?? '').trim();
-    const phone = String(body.buyer_phone ?? metadata.buyer_phone ?? '').trim();
-    const amountTzs = Number(body.amount ?? 0);
-    const requestedOrderId = String(body.order_id ?? body.orderId ?? '').trim();
+/** Unified status poll — active admin gateway only. */
+publicRouter.get('/payments/status', handleUnifiedPaymentStatus);
+publicRouter.get('/payments/order-status', handleUnifiedPaymentStatus);
+publicRouter.get('/order-status', handleUnifiedPaymentStatus);
 
-    if (publicId && planId && phone && amountTzs >= 1) {
-      const out = await startUnifiedPayment({
-        orderId: requestedOrderId || undefined,
-        publicId,
-        planId,
-        amountTzs,
-        phone,
-        buyerName: String(body.buyer_name ?? publicId).trim(),
-        buyerEmail: String(body.buyer_email ?? `${publicId}@supasoka.app`).trim(),
-      });
-      res.json({
-        status: 'success',
-        resultcode: '000',
-        order_id: out.orderId,
-        orderId: out.orderId,
-        message: out.message,
-        provider: out.provider,
-      });
-      return;
-    }
-
-    const activeProvider = await getSelectedPaymentProvider();
-    if (activeProvider === PAYMENT_PROVIDERS.SONICPESA) {
-      res.status(400).json({
-        ok: false,
-        error:
-          'SonicPesa imewashwa na admin. Tumia /api/v1/public/payments/start na publicId, planId, phone.',
-      });
-      return;
-    }
-
-    const out = await createZenoOrder(body);
-    const orderId = String(out.order_id ?? out.orderId ?? '').trim();
-    if (orderId) {
-      await upsertPendingIntent({
-        orderId,
-        publicId,
-        planId,
-        amountTzs,
-        buyerPhone: phone,
-        provider: PAYMENT_PROVIDERS.ZENO,
-        providerPayload: out,
-      });
-      logger.info({ orderId, publicId, planId, amountTzs }, 'payment_order_created');
-    }
-    res.json(out);
-  } catch (e) {
-    next(e);
-  }
-});
+/** Legacy alias — same handler (no direct zenoapi.com from server when Sonic active). */
+publicRouter.get('/zeno/order-status', handleUnifiedPaymentStatus);
 
 /** Optional provider webhook callback. Activates premium server-side without waiting for client polling. */
 publicRouter.post('/zeno/webhook', async (req, res, next) => {
@@ -382,32 +316,6 @@ publicRouter.post('/zeno/webhook', async (req, res, next) => {
     await markIntentActivated(orderId);
     logger.info({ orderId, publicId: tracked.public_id, planId: tracked.plan_id }, 'payment_webhook_activated');
     res.json({ ok: true, received: true, activated: true });
-  } catch (e) {
-    next(e);
-  }
-});
-
-/** Viewer app: order-status — SonicPesa or ZenoPay based on stored provider. */
-publicRouter.get('/zeno/order-status', async (req, res, next) => {
-  try {
-    const orderId = String(req.query.order_id ?? req.query.orderId ?? '').trim();
-    if (!orderId) {
-      res.status(400).json({ resultcode: '400', status: 'error', message: 'order_id is required' });
-      return;
-    }
-    const out = await pollUnifiedPaymentStatus(orderId);
-    const data =
-      out.raw && typeof out.raw === 'object' && Array.isArray((out.raw as { data?: unknown[] }).data)
-        ? (out.raw as { data: unknown[] }).data
-        : out.status
-          ? [{ payment_status: out.status, order_id: orderId }]
-          : [];
-    logger.info({ orderId, paymentStatus: out.status }, 'payment_status_polled');
-    res.json({
-      resultcode: out.resultcode ?? '000',
-      status: 'success',
-      data,
-    });
   } catch (e) {
     next(e);
   }

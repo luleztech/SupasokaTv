@@ -27,30 +27,22 @@ class ZenoPayService {
   static const _createTimeout = Duration(seconds: 40);
   static const _statusTimeout = Duration(seconds: 22);
 
-  static bool get _useBackendProxy => kZenoApiKey.trim().isEmpty;
+  /// Always proxy via Supasoka backend so admin gateway toggle (SonicPesa / ZenoPay) is enforced.
+  static bool get _useBackendProxy => true;
 
   static List<Uri> _backendCreateUris() {
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     return <Uri>[
+      Uri.parse('$origin/api/v1/public/payments/start'),
       Uri.parse('$origin/api/v1/public/zeno/create-order'),
-      // Backward-compat fallbacks for older backend deployments.
-      Uri.parse('$origin/api/v1/public/create-order'),
-      Uri.parse('$origin/api/v1/public/payments/mobile_money_tanzania'),
     ];
   }
 
   static List<Uri> _backendStatusUris(String orderId) {
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     return <Uri>[
-      Uri.parse('$origin/api/v1/public/zeno/order-status').replace(
-        queryParameters: {'order_id': orderId},
-      ),
-      // Backward-compat fallbacks for older backend deployments.
-      Uri.parse('$origin/api/v1/public/order-status').replace(
-        queryParameters: {'order_id': orderId},
-      ),
-      Uri.parse('$origin/api/v1/public/payments/order-status').replace(
-        queryParameters: {'order_id': orderId},
+      Uri.parse('$origin/api/v1/public/payments/status').replace(
+        queryParameters: {'orderId': orderId},
       ),
     ];
   }

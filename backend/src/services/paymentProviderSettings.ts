@@ -1,4 +1,5 @@
 import { getPool } from '../db/pool';
+import { HttpError } from '../middleware/errorHandler';
 
 export const PAYMENT_PROVIDER_SETTING_KEY = 'payment_provider';
 
@@ -46,7 +47,17 @@ async function ensureAppSettingsTable(): Promise<void> {
   );
 }
 
+/** Optional Railway override: PAYMENT_PROVIDER=sonicpesa|zeno (DB setting used when unset). */
+function paymentProviderFromEnv(): PaymentProviderId | null {
+  const raw = process.env.PAYMENT_PROVIDER?.trim();
+  if (!raw) return null;
+  return normalizePaymentProvider(raw);
+}
+
 export async function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
+  const fromEnv = paymentProviderFromEnv();
+  if (fromEnv) return fromEnv;
+
   const pool = getPool();
   if (!pool) return PAYMENT_PROVIDERS.ZENO;
   await ensureAppSettingsTable();
@@ -56,6 +67,18 @@ export async function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
   );
   const raw = res.rows[0]?.value ?? PAYMENT_PROVIDERS.ZENO;
   return normalizePaymentProvider(raw);
+}
+
+/** Throws when admin selected SonicPesa — blocks any outbound call to zenoapi.com. */
+export async function assertZenoPayAllowed(): Promise<void> {
+  const selected = await getSelectedPaymentProvider();
+  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
+    throw new HttpError(
+      403,
+      'SonicPesa imewashwa na admin. Malipo mapya hayaruhusiwi kwenda ZenoPay.',
+      'ZENO_DISABLED_BY_ADMIN',
+    );
+  }
 }
 
 export async function setPaymentProvider(provider: PaymentProviderId): Promise<void> {

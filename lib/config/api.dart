@@ -39,6 +39,7 @@ class _PaymentsApi {
     required String name,
   }) async {
     await UserIdentity.registerWithBackend(phone: phone);
+    final expectedProvider = await settingsApi.getActivePaymentProvider();
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/payments/start');
     final body = <String, dynamic>{
@@ -105,10 +106,21 @@ class _PaymentsApi {
     if (orderId.isEmpty) {
       throw Exception('Seva haikurudisha order id.');
     }
+    final provider = (j['provider'] ?? j['paymentProvider'] ?? 'zeno').toString().toLowerCase();
+    if (expectedProvider == 'sonicpesa' && provider != 'sonicpesa') {
+      throw Exception(
+        'Seva imerudisha $provider lakini SonicPesa imewashwa. Hakikisha backend imedeploy na jaribu tena.',
+      );
+    }
+    if (expectedProvider == 'zeno' && provider == 'sonicpesa') {
+      throw Exception(
+        'Seva imerudisha SonicPesa lakini ZenoPay imewashwa kwenye admin. Sasisha mipangilio.',
+      );
+    }
     return {
       'orderId': orderId,
       'message': (j['message'] ?? 'Ombi la malipo limetumwa.').toString(),
-      'provider': (j['provider'] ?? 'zeno').toString(),
+      'provider': provider,
     };
   }
 

@@ -114,10 +114,15 @@ function normalizeStoredProvider(raw: string | null | undefined): PaymentProvide
 }
 
 async function resolveGatewayForOrder(orderId: string): Promise<PaymentProviderId> {
+  const selected = await getSelectedPaymentProvider();
+  // Admin toggle is authoritative: when SonicPesa is active, never call Zeno for status/confirm.
+  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
+    return PAYMENT_PROVIDERS.SONICPESA;
+  }
   const intent = await getIntent(orderId);
   const fromIntent = normalizeStoredProvider(intent?.payment_provider);
   if (fromIntent) return fromIntent;
-  return getSelectedPaymentProvider();
+  return selected;
 }
 
 function metadataFromProviderPayload(payload: unknown): { publicId: string; planId: string } {
@@ -143,6 +148,57 @@ export type StartPaymentInput = {
   buyerName?: string;
   buyerEmail?: string;
 };
+
+/** Map legacy Zeno-shaped POST bodies to unified checkout fields. */
+export function parseStartPaymentFromLegacyBody(
+  body: Record<string, unknown>,
+): StartPaymentInput | null {
+  const metadata = (body.metadata ?? {}) as Record<string, unknown>;
+  const publicId = String(
+    body.publicId ??
+      body.externalId ??
+      metadata.external_id ??
+      metadata.public_id ??
+      '',
+  ).trim();
+  const planId = String(body.planId ?? body.bundle ?? metadata.plan_id ?? '').trim();
+  const phone = String(
+    body.phone ?? body.buyer_phone ?? metadata.buyer_phone ?? '',
+  ).trim();
+  const amountTzs = Number(body.amount ?? body.amountTzs ?? 0);
+  const orderId = String(body.order_id ?? body.orderId ?? '').trim();
+
+  if (!publicId || !planId || !phone || amountTzs < 1) {
+    return null;
+  }
+
+  return {
+    orderId: orderId || undefined,
+    publicId,
+    planId,
+    amountTzs,
+    phone,
+    buyerName: String(body.buyer_name ?? body.buyerName ?? publicId).trim(),
+    buyerEmail: String(body.buyer_email ?? body.buyerEmail ?? `${publicId}@supasoka.app`).trim(),
+  };
+}
+
+export function startPaymentSuccessJson(out: {
+  orderId: string;
+  message: string;
+  provider: PaymentProviderId;
+}) {
+  return {
+    ok: true,
+    status: 'success',
+    resultcode: '000',
+    order_id: out.orderId,
+    orderId: out.orderId,
+    message: out.message,
+    provider: out.provider,
+    paymentProvider: out.provider,
+  };
+}
 
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   orderId: string;

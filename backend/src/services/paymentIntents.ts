@@ -87,7 +87,10 @@ export async function upsertPendingIntent(args: {
       plan_id = COALESCE(NULLIF(EXCLUDED.plan_id, ''), payment_intents.plan_id),
       amount_tzs = COALESCE(EXCLUDED.amount_tzs, payment_intents.amount_tzs),
       buyer_phone = COALESCE(NULLIF(EXCLUDED.buyer_phone, ''), payment_intents.buyer_phone),
-      payment_provider = COALESCE(NULLIF(EXCLUDED.payment_provider, ''), payment_intents.payment_provider),
+      payment_provider = CASE
+        WHEN NULLIF(EXCLUDED.payment_provider, '') IS NOT NULL THEN EXCLUDED.payment_provider
+        ELSE payment_intents.payment_provider
+      END,
       provider_payload = COALESCE(EXCLUDED.provider_payload, payment_intents.provider_payload),
       updated_at = now()`,
     [

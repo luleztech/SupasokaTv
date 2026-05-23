@@ -1,5 +1,6 @@
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
+import { assertZenoPayAllowed } from './paymentProviderSettings';
 
 export type ZenoOrderStatusRow = {
   payment_status?: string;
@@ -52,6 +53,7 @@ export function applyZenoWalletProviderForPayload(
 }
 
 export async function createZenoOrder(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  await assertZenoPayAllowed();
   const key = env.zenoApiKey.trim();
   if (!key) {
     throw new HttpError(500, 'ZENO_API_KEY is not configured', 'ZENO_KEY_MISSING');
@@ -86,6 +88,7 @@ export async function createZenoOrder(body: Record<string, unknown>): Promise<Re
 }
 
 export async function fetchZenoOrderStatus(orderId: string): Promise<ZenoOrderStatusRow | null> {
+  await assertZenoPayAllowed();
   const key = env.zenoApiKey.trim();
   if (!key) {
     throw new HttpError(500, 'ZENO_API_KEY is not configured', 'ZENO_KEY_MISSING');
