@@ -24,4 +24,6 @@ plugins {
     id("com.google.gms.google-services") version "4.4.2" apply false
 }
 
+apply(from = "patch_plugins_built_in_kotlin.gradle")
+
 include(":app")

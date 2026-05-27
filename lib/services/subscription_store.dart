@@ -71,6 +71,7 @@ class SubscriptionStore {
   }
 
   /// Sync premium status from backend (for admin-granted subscriptions).
+  /// Never removes a still-valid local subscription when the server row is missing or lagging.
   static Future<void> syncPremiumFromBackend() async {
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return;
@@ -85,29 +86,45 @@ class SubscriptionStore {
         'Accept': 'application/json',
       }).timeout(const Duration(seconds: 10));
 
-      if (res.statusCode == 200) {
-        final j = jsonDecode(res.body) as Map<String, dynamic>;
-        if (j['ok'] == true) {
-          final rawUntil = j['premiumUntilMs'];
-          final premiumUntilMs = rawUntil is int
-              ? rawUntil
-              : rawUntil is num
-                  ? rawUntil.toInt()
-                  : null;
-          if (premiumUntilMs != null) {
-            final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
-            final p = await SharedPreferences.getInstance();
-            await p.setInt(_kUntilMs, premiumUntilMs);
-            premiumUntilNotifier.value = end;
-          } else {
-            // No premium
-            final p = await SharedPreferences.getInstance();
-            await p.remove(_kUntilMs);
-            await p.remove(_kPlanId);
-            premiumUntilNotifier.value = null;
-          }
+      if (res.statusCode != 200) return;
+
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return;
+
+      final rawUntil = j['premiumUntilMs'];
+      final premiumUntilMs = rawUntil is int
+          ? rawUntil
+          : rawUntil is num
+              ? rawUntil.toInt()
+              : null;
+
+      final p = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final localMs = p.getInt(_kUntilMs);
+      final localEnd = localMs != null ? DateTime.fromMillisecondsSinceEpoch(localMs) : null;
+      final localActive = localEnd != null && localEnd.isAfter(now);
+
+      if (premiumUntilMs != null) {
+        final serverEnd = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+        var mergedMs = premiumUntilMs;
+        // Keep the longer active window (do not shorten on sync).
+        if (localActive && localEnd.isAfter(serverEnd)) {
+          mergedMs = localEnd.millisecondsSinceEpoch;
         }
+        await p.setInt(_kUntilMs, mergedMs);
+        premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(mergedMs);
+        return;
       }
+
+      // Server has no premium — keep local unlock until it actually expires.
+      if (localActive) {
+        premiumUntilNotifier.value = localEnd;
+        return;
+      }
+
+      await p.remove(_kUntilMs);
+      await p.remove(_kPlanId);
+      premiumUntilNotifier.value = null;
     } catch (e) {
       if (kDebugMode) {
         debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/config/zeno_config.dart';
+import 'package:supasoka/services/tanzania_phone.dart';
 import 'package:uuid/uuid.dart';
 
 /// ZenoPay Mobile Money Tanzania — matches official JSON:
@@ -186,7 +187,7 @@ class ZenoPayService {
 
   /// Zeno doc: `07XXXXXXXX` Tanzanian mobile (all networks using national format).
   static bool isValidZenoBuyerPhone(String national0xx) =>
-      RegExp(r'^0[1-9]\d{8}$').hasMatch(national0xx.trim());
+      TanzaniaPhone.isValid(national0xx);
 
   /// Starts USSD push. Retries on transient network / 5xx. Returns [order_id] to poll.
   static Future<ZenoCreateResult> createOrder({
@@ -202,7 +203,7 @@ class ZenoPayService {
     }
     if (!isValidZenoBuyerPhone(buyerPhoneLocal0xx)) {
       return ZenoCreateResult.failure(
-        'Nambari lazima iwe ya Tanzania: 07XXXXXXXX au 06XXXXXXXX (mitandao yote).',
+        'Nambari lazima iwe ya Tanzania (10 tarakimu, mfano 0701234567). ${TanzaniaPhone.networksHint()}',
       );
     }
 

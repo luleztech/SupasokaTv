@@ -1,5 +1,6 @@
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
+import { zenoWalletProviderForLocalPhone } from '../lib/tzPhone';
 import { assertZenoPayAllowed } from './paymentProviderSettings';
 
 export type ZenoOrderStatusRow = {
@@ -22,34 +23,14 @@ function zenoCreateUrl(): string {
   return `${b}/api/payments/mobile_money_tanzania`;
 }
 
-/** Route STK to the correct Tanzanian wallet (Vodacom, Tigo, Airtel, Halotel, Yas). */
+/** Route STK to the correct Tanzanian wallet (Vodacom, Tigo/Yas, Airtel, Halotel, …). */
 export function applyZenoWalletProviderForPayload(
   payload: Record<string, unknown>,
   localPhone0: string,
 ): void {
   if (process.env.ZENO_SEND_PROVIDER === '0') return;
-  const p = String(localPhone0 || '');
-  if (p.startsWith('061') || p.startsWith('062') || p.startsWith('063')) {
-    const v = process.env.ZENO_HALOTEL_WALLET_PROVIDER;
-    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'HALOPESA';
-    return;
-  }
-  if (p.startsWith('074') || p.startsWith('075') || p.startsWith('076') || p.startsWith('079')) {
-    if (process.env.ZENO_VODACOM_SEND_PROVIDER !== '0') {
-      const v = process.env.ZENO_VODACOM_WALLET_PROVIDER;
-      payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'M-PESA';
-    }
-    return;
-  }
-  if (p.startsWith('065') || p.startsWith('067') || p.startsWith('071') || p.startsWith('077')) {
-    const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
-    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
-    return;
-  }
-  if (p.startsWith('068') || p.startsWith('069') || p.startsWith('078')) {
-    const v = process.env.ZENO_AIRTEL_WALLET_PROVIDER;
-    payload.provider = typeof v === 'string' && v.trim() ? v.trim() : 'AIRTEL MONEY';
-  }
+  const provider = zenoWalletProviderForLocalPhone(localPhone0);
+  if (provider) payload.provider = provider;
 }
 
 export async function createZenoOrder(body: Record<string, unknown>): Promise<Record<string, unknown>> {

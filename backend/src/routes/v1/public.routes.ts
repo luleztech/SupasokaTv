@@ -24,6 +24,7 @@ import {
   verifySonicPesaWebhookHmac,
 } from '../../services/sonicPesa';
 import { PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
+import { normalizePhoneToLocal0 } from '../../lib/tzPhone';
 
 function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
   const s = String(paymentStatus ?? '')
@@ -42,10 +43,10 @@ function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
 
 /** Compare TZ national numbers across `07…`, `+255…`, `255…` shapes. */
 function normalizeTzBuyerPhone(raw: string): string {
+  const norm = normalizePhoneToLocal0(raw);
+  if (norm.local) return norm.local;
   const d = String(raw ?? '').replace(/\D/g, '');
-  if (d.length >= 9 && d.startsWith('255')) {
-    return `0${d.slice(3, 12)}`.slice(0, 10);
-  }
+  if (d.length >= 9 && d.startsWith('255')) return `0${d.slice(3, 12)}`.slice(0, 10);
   if (d.length === 9) return `0${d}`.slice(0, 10);
   if (d.length >= 10 && d.startsWith('0')) return d.slice(0, 10);
   return d.slice(0, 12);

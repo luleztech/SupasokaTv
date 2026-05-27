@@ -9,6 +9,7 @@ import 'package:supasoka/screens/loader_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/push_notification_service.dart';
 import 'package:supasoka/services/user_identity.dart';
+import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 
@@ -47,6 +48,7 @@ Future<void> _initializeDeferredServices() async {
     }
   }
   try {
+    await PremiumRecovery.recoverPendingPaymentIfAny();
     await SubscriptionStore.syncPremiumFromBackend();
     final isPremium =
         SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
@@ -151,7 +153,9 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
           }),
         );
         unawaited(
-          SubscriptionStore.syncPremiumFromBackend().then((_) {
+          PremiumRecovery.recoverPendingPaymentIfAny().then((_) {
+            return SubscriptionStore.syncPremiumFromBackend();
+          }).then((_) {
             final isPremium =
                 SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
             return PushNotificationService.syncAudienceTopics(isPremium: isPremium);

@@ -1,0 +1,74 @@
+// Patches Flutter Android plugins so they do not declare kotlin-android in Gradle.
+// Flutter applies KGP centrally (removes the KGP warning). Kotlin sources keep compiling.
+
+import groovy.json.JsonSlurper
+
+def patchKts(File file) {
+    if (!file.exists()) return
+    def text = file.getText('UTF-8')
+    def original = text
+
+    text = text.replaceAll(/(?m)^[ \t]*id\("kotlin-android"\)\s*\r?\n/, '')
+    text = text.replaceAll(/(?m)^[ \t]*id\("org\.jetbrains\.kotlin\.android"\)\s*\r?\n/, '')
+    text = text.replaceAll(
+        /[ \t]*classpath\("org\.jetbrains\.kotlin:kotlin-gradle-plugin:[^"]+"\)\s*\r?\n/,
+        ''
+    )
+    // kotlin {} requires the plugin at configuration time; Flutter applies KGP after this file is read.
+    text = text.replaceAll(
+        /(?s)\r?\nkotlin \{\s*\r?\n\s*compilerOptions \{\s*\r?\n[^}]*\}\s*\r?\n\}\s*\r?\n/,
+        '\n'
+    )
+
+    if (text != original) {
+        file.setText(text, 'UTF-8')
+    }
+}
+
+def patchGroovy(File file) {
+    if (!file.exists()) return
+    def kotlinSrc = new File(file.parentFile, 'src/main/kotlin')
+    if (!kotlinSrc.exists()) return
+
+    def text = file.getText('UTF-8')
+    def original = text
+
+    text = text.replaceAll(/(?m)^[ \t]*apply plugin:\s*['"]kotlin-android['"]\s*\r?\n/, '')
+    text = text.replaceAll(
+        /[ \t]*classpath\s+["']org\.jetbrains\.kotlin:kotlin-gradle-plugin:[^"']+["']\s*\r?\n/,
+        ''
+    )
+    if (!text.contains('src/main/kotlin')) {
+        def matcher = (text =~ /(?m)^(android \{\s*\r?\n)/)
+        if (matcher.find()) {
+            text = matcher.replaceFirst(
+                'android {\n    sourceSets {\n        main.java.srcDirs += \'src/main/kotlin\'\n    }\n\n'
+            )
+        }
+    }
+
+    if (text != original) {
+        file.setText(text, 'UTF-8')
+    }
+}
+
+def rootDir = settings.rootDir.parentFile
+def depsFile = new File(rootDir, '.flutter-plugins-dependencies')
+if (!depsFile.exists()) return
+
+def json = new JsonSlurper().parse(depsFile)
+def androidPlugins = json?.plugins?.android
+if (!(androidPlugins instanceof List)) return
+
+androidPlugins.each { plugin ->
+    def path = plugin?.path
+    if (!(path instanceof String) || path.isEmpty()) return
+    def androidDir = new File(path, 'android')
+    def kts = new File(androidDir, 'build.gradle.kts')
+    def groovy = new File(androidDir, 'build.gradle')
+    if (kts.exists()) {
+        patchKts(kts)
+    } else if (groovy.exists()) {
+        patchGroovy(groovy)
+    }
+}

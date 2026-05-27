@@ -24,51 +24,9 @@ import {
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
 import { env } from '../config/env';
+import { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
-const TZ_PREFIXES = [
-  '061', '062', '063', '065', '067', '068', '069',
-  '071', '074', '075', '076', '077', '078', '079',
-];
-
-export function normalizePhoneToLocal0(rawPhone: string): { local?: string; error?: string } {
-  let normalizedPhone = String(rawPhone ?? '').replace(/\s+/g, '');
-  if (normalizedPhone.startsWith('+') && !normalizedPhone.startsWith('+255')) {
-    return {
-      error:
-        'Malipo yanatumwa kwa nambari za simu za Tanzania pekee. Tumia muundo wa ndani unaoanza na 0 (mfano 0712345678).',
-    };
-  }
-  if (normalizedPhone.startsWith('00') && !normalizedPhone.startsWith('00255')) {
-    return {
-      error:
-        'Malipo yanatumwa kwa nambari za simu za Tanzania pekee. Tumia muundo wa ndani unaoanza na 0 (mfano 0712345678).',
-    };
-  }
-  if (normalizedPhone.startsWith('+255')) {
-    normalizedPhone = `0${normalizedPhone.slice(4)}`;
-  } else if (normalizedPhone.startsWith('00255')) {
-    normalizedPhone = `0${normalizedPhone.slice(5)}`;
-  } else if (normalizedPhone.startsWith('255') && normalizedPhone.length >= 12) {
-    normalizedPhone = `0${normalizedPhone.slice(3)}`;
-  }
-  if (/^[1-9]\d{8}$/.test(normalizedPhone)) {
-    normalizedPhone = `0${normalizedPhone}`;
-  }
-  if (!/^\d+$/.test(normalizedPhone)) {
-    return {
-      error: 'Nambari ya simu lazima iwe nambari ya Tanzania tu: anza kwa 0 (mfano 0712345678).',
-    };
-  }
-  const isValidFormat = /^0[0-9]{8,9}$/.test(normalizedPhone);
-  const hasValidPrefix = TZ_PREFIXES.some((p) => normalizedPhone.startsWith(p));
-  if (!isValidFormat || !hasValidPrefix) {
-    return {
-      error:
-        'Invalid Tanzanian phone number. Use format: 061–063 (Halotel), 065/071 (Yas), 067/077 (Tigo), 068–069/078 (Airtel), 074–076/079 (Vodacom).',
-    };
-  }
-  return { local: normalizedPhone };
-}
+export { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
 export function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
   if (!row || typeof row !== 'object') return '';

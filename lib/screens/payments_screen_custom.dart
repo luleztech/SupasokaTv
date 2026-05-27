@@ -12,7 +12,9 @@ import 'package:supasoka/config/payment_helpers.dart'
     show
         isPaymentCompleted,
         isPaymentTerminalFailure,
-        normalizedPaymentStatus;
+        normalizedPaymentStatus,
+        paymentStatusFromCheckResponse;
+import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
@@ -23,23 +25,6 @@ import 'package:supasoka/widgets/audio_guide_card.dart';
 
 const _accentCta = Color(0xFF22C55E);
 const _accentBlue = Color(0xFF2563EB);
-
-const _tzPrefixes = [
-  '061',
-  '062',
-  '063',
-  '065',
-  '067',
-  '068',
-  '069',
-  '071',
-  '074',
-  '075',
-  '076',
-  '077',
-  '078',
-  '079',
-];
 
 const _paySurface = Color(0xFF0C1222);
 const _paySurface2 = Color(0xFF151B2E);
@@ -60,12 +45,14 @@ enum _PayDialogTone { success, error, info }
 enum _ConfirmProbeKind { pending, completed, terminalFailure }
 
 class _ConfirmProbeOutcome {
-  const _ConfirmProbeOutcome._(this.kind, {this.paymentStatus});
+  const _ConfirmProbeOutcome._(this.kind, {this.paymentStatus, this.premiumUntilMs});
   final _ConfirmProbeKind kind;
   final String? paymentStatus;
+  final int? premiumUntilMs;
 
   factory _ConfirmProbeOutcome.pending() => const _ConfirmProbeOutcome._(_ConfirmProbeKind.pending);
-  factory _ConfirmProbeOutcome.completed() => const _ConfirmProbeOutcome._(_ConfirmProbeKind.completed);
+  factory _ConfirmProbeOutcome.completed({int? premiumUntilMs}) =>
+      _ConfirmProbeOutcome._(_ConfirmProbeKind.completed, premiumUntilMs: premiumUntilMs);
   factory _ConfirmProbeOutcome.terminalFailure(String? status) =>
       _ConfirmProbeOutcome._(_ConfirmProbeKind.terminalFailure, paymentStatus: status);
 }
@@ -155,61 +142,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   String get _cleanPhone => TanzaniaPhone.normalize(_phoneCtrl.text) ?? '';
   bool get _phoneOk => _phoneValid(_phoneCtrl.text);
 
-  /// Zeno / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
-  Object? _paymentStatusFromCheckResponse(Map<String, dynamic> response) {
-    Object? pickRow(Map<String, dynamic> m) {
-      for (final k in const [
-        'payment_status',
-        'PaymentStatus',
-        'paymentStatus',
-        'transaction_status',
-        'TransactionStatus',
-        'order_status',
-        'OrderStatus',
-        'payment_state',
-        'PaymentState',
-      ]) {
-        final v = m[k];
-        if (v == null) continue;
-        if (v.toString().trim().isEmpty) continue;
-        return v;
-      }
-      return null;
-    }
-
-    final top = pickRow(response);
-    if (top != null) return top;
-
-    final direct = response['status']?.toString().trim();
-    if (direct != null && direct.isNotEmpty && direct != 'null') return direct;
-
-    final raw = response['raw'];
-    if (raw is Map) {
-      final rawMap = Map<String, dynamic>.from(raw);
-      final fromRaw = pickRow(rawMap);
-      if (fromRaw != null) return fromRaw;
-
-      final data = rawMap['data'];
-      if (data is List && data.isNotEmpty && data.first is Map) {
-        final row = pickRow(Map<String, dynamic>.from(data.first as Map));
-        if (row != null) return row;
-      }
-      if (data is Map) {
-        final row = pickRow(Map<String, dynamic>.from(data));
-        if (row != null) return row;
-      }
-    }
-
-    final dataTop = response['data'];
-    if (dataTop is List && dataTop.isNotEmpty && dataTop.first is Map) {
-      return pickRow(Map<String, dynamic>.from(dataTop.first as Map));
-    }
-    if (dataTop is Map) {
-      return pickRow(Map<String, dynamic>.from(dataTop));
-    }
-    return null;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -232,7 +164,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
     try {
       final res = await paymentsApi.checkPaymentStatus(pending);
-      final st = _paymentStatusFromCheckResponse(res);
+      final st = paymentStatusFromCheckResponse(res);
       if (isPaymentCompleted(st)) {
         _stopPaymentTimersOnly();
         await _markPaymentCompleted();
@@ -340,7 +272,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       try {
         final response = await paymentsApi.checkPaymentStatus(orderId);
         if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
-        final paymentStatus = _paymentStatusFromCheckResponse(response);
+        final paymentStatus = paymentStatusFromCheckResponse(response);
         if (isPaymentCompleted(paymentStatus)) {
           final premiumMs = response['premiumUntilMs'];
           final serverActivated = response['activated'] == true;
@@ -353,7 +285,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           final planId = prefs.getString('pendingPaymentPlanId')?.trim();
           final phone = prefs.getString('pendingPaymentPhone')?.trim();
           final publicId = await UserIdentity.getOrCreatePublicId();
-          final serverUntil = await _confirmPremiumOnBackend(
+          final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
             orderId: orderId,
             publicId: publicId,
             planId: planId ?? '',
@@ -364,7 +296,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
             return;
           }
-          // Provider says paid but server premium not written yet — keep polling.
+          // Provider says paid — unlock locally; background recovery will sync server.
+          if (planId != null && planId.isNotEmpty) {
+            _stopPaymentTimersOnly();
+            await _markPaymentCompleted();
+            return;
+          }
         }
         if (isPaymentTerminalFailure(paymentStatus)) {
           await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
@@ -377,7 +314,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
             if (probe.kind == _ConfirmProbeKind.completed) {
               _stopPaymentTimersOnly();
-              await _markPaymentCompleted();
+              await _markPaymentCompleted(serverPremiumUntilMs: probe.premiumUntilMs);
               return;
             }
             if (probe.kind == _ConfirmProbeKind.terminalFailure) {
@@ -440,13 +377,19 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
     try {
       final response = await paymentsApi.checkPaymentStatus(id);
-      final paymentStatus = _paymentStatusFromCheckResponse(response);
+      final paymentStatus = paymentStatusFromCheckResponse(response);
       if (isPaymentCompleted(paymentStatus)) {
+        final premiumMs = response['premiumUntilMs'];
+        if (response['activated'] == true && premiumMs is num) {
+          _stopPaymentTimersOnly();
+          await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
+          return;
+        }
         final prefs = await SharedPreferences.getInstance();
         final planId = prefs.getString('pendingPaymentPlanId')?.trim();
         final phone = prefs.getString('pendingPaymentPhone')?.trim();
         final publicId = await UserIdentity.getOrCreatePublicId();
-        final serverUntil = await _confirmPremiumOnBackend(
+        final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
           orderId: id,
           publicId: publicId,
           planId: planId ?? '',
@@ -464,6 +407,18 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       // fall through to timeout
     }
     if (!mounted || _paymentCompletionInProgress) return;
+    final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
+    if (recovered && mounted) {
+      _stopPaymentTimersOnly();
+      setState(() {
+        _pollingOrderId = null;
+        _paymentUiPhase = _PaymentUiPhase.none;
+        _sessionEndDetail = null;
+      });
+      _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+      await widget.onPaymentSuccess?.call();
+      return;
+    }
     await _finalizeSessionTimedOut(
       detail:
           'Muda wa dakika ${_kPaymentWaitSeconds ~/ 60} umeisha bila uthibitisho wa haraka. Malipo yako yanaweza bado yanaendelea — jaribu tena au subiri kidogo kisha fungua programu tena.',
@@ -473,7 +428,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   Future<void> _finalizeSessionTimedOut({String? detail}) async {
     if (_paymentCompletionInProgress) return;
     _stopPaymentTimersOnly();
-    await _clearPendingOrderPrefs();
+    // Keep pending order prefs so [PremiumRecovery] / [_load] can finish activation after reopen.
     if (!mounted) return;
     setState(() {
       _pollingOrderId = null;
@@ -569,62 +524,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
   }
 
-  /// Returns server [premiumUntilMs] only when the backend has verified Zeno and written premium.
-  Future<int?> _confirmPremiumOnBackend({
-    required String orderId,
-    required String publicId,
-    required String planId,
-    required String phone,
-  }) async {
-    final base = apiConfigUrl.trim();
-    if (base.isEmpty) return null;
-    final origin = base.replaceAll(RegExp(r'/$'), '');
-    final uris = [
-      Uri.parse('$origin/api/v1/public/confirm-premium'),
-      Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
-    ];
-    for (var attempt = 0; attempt < 5; attempt++) {
-      final uri = uris[attempt < uris.length ? (attempt % uris.length) : 0];
-      final res = await http
-          .post(
-            uri,
-            headers: const {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-              'Cache-Control': 'no-cache',
-            },
-            body: jsonEncode({
-              'orderId': orderId,
-              'publicId': publicId,
-              'planId': planId,
-              'phone': phone,
-            }),
-          )
-          .timeout(const Duration(seconds: 25));
-
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        try {
-          final j = jsonDecode(res.body) as Map<String, dynamic>;
-          if (j['ok'] == true) {
-            final raw = j['premiumUntilMs'];
-            if (raw is int) return raw;
-            if (raw is num) return raw.toInt();
-          }
-        } catch (_) {}
-      } else if (kDebugMode) {
-        debugPrint('confirm-zeno-premium HTTP ${res.statusCode}: ${res.body}');
-      }
-
-      // 402 from backend means "still not completed on provider side".
-      if (res.statusCode == 402 && attempt < 4) {
-        await Future<void>.delayed(Duration(milliseconds: 900 + (attempt * 600)));
-        continue;
-      }
-      break;
-    }
-    return null;
-  }
-
   Future<_ConfirmProbeOutcome> _probeConfirmWhilePending(String orderId) async {
     final prefs = await SharedPreferences.getInstance();
     final planId = prefs.getString('pendingPaymentPlanId')?.trim();
@@ -667,6 +566,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (res == null) return _ConfirmProbeOutcome.pending();
 
     if (res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        final j = jsonDecode(res.body) as Map<String, dynamic>;
+        if (j['ok'] == true) {
+          final raw = j['premiumUntilMs'];
+          if (raw is int) return _ConfirmProbeOutcome.completed(premiumUntilMs: raw);
+          if (raw is num) return _ConfirmProbeOutcome.completed(premiumUntilMs: raw.toInt());
+        }
+      } catch (_) {}
       return _ConfirmProbeOutcome.completed();
     }
 
@@ -705,7 +612,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       int? serverUntilMs = serverPremiumUntilMs;
       if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
         try {
-          serverUntilMs = await _confirmPremiumOnBackend(
+          serverUntilMs = await PremiumRecovery.confirmPremiumOnBackend(
             orderId: orderId,
             publicId: publicId,
             planId: planId,
@@ -720,9 +627,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
-        await SubscriptionStore.syncPremiumFromBackend();
       } else if (planId != null && planId.isNotEmpty) {
-        // Server not updated yet — keep local unlock until next sync succeeds.
+        // Provider paid; server row may lag — unlock locally until app sync/recovery updates server.
         await SubscriptionStore.activatePlan(planId);
       }
       SubscriptionStore.refreshNotifierFromPrefs();
@@ -766,7 +672,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
       _showStatus(
         'Nambari ya simu',
-        'Hakikisha umeandika namba yako kwa usahihi na ukamilifu.',
+        'Hakikisha umeandika nambari 10 za Tanzania (mfano 0701234567 au 0712345678). ${TanzaniaPhone.networksHint()}',
         _PayDialogTone.error,
       );
       return;
@@ -938,7 +844,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                   ),
                                   decoration: InputDecoration(
                                     border: InputBorder.none,
-                                    hintText: '074xxxxxxx',
+                                    hintText: '07xxxxxxxx',
                                     hintStyle: TextStyle(
                                       color: _payMuted.withValues(alpha: 0.65),
                                       fontWeight: FontWeight.w500,
@@ -1492,9 +1398,9 @@ class _PayTrustStrip extends StatelessWidget {
         ),
       ),
       child: Text(
-        'Mitandao ya Tanzania: M-Pesa, Airtel, Mix, HaloPesa',
+        TanzaniaPhone.networksHint(),
         textAlign: TextAlign.center,
-        style: TextStyle(color: _payMuted, fontWeight: FontWeight.w600),
+        style: TextStyle(color: _payMuted, fontWeight: FontWeight.w600, fontSize: 12.5),
       ),
     );
   }
