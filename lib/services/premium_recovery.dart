@@ -17,6 +17,7 @@ class PremiumRecovery {
   static const _pendingOrderKey = 'pendingPaymentOrderId';
   static const _pendingPlanKey = 'pendingPaymentPlanId';
   static const _pendingPhoneKey = 'pendingPaymentPhone';
+  static const _pendingCreatedAtKey = 'pendingPaymentCreatedAtMs';
 
   /// Returns server [premiumUntilMs] when confirm succeeds.
   static Future<int?> confirmPremiumOnBackend({
@@ -81,6 +82,33 @@ class PremiumRecovery {
     await prefs.remove(_pendingPlanKey);
     await prefs.remove(_pendingPhoneKey);
     await prefs.remove('pendingPaymentProvider');
+    await prefs.remove(_pendingCreatedAtKey);
+  }
+
+  static Future<void> markPendingPaymentCreatedNow() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_pendingCreatedAtKey, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// Returns true while a pending payment is still fresh enough to trust local fallback premium.
+  static Future<bool> hasRecentPendingPayment({
+    Duration maxAge = const Duration(hours: 6),
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final orderId = prefs.getString(_pendingOrderKey)?.trim();
+    if (orderId == null || orderId.isEmpty) return false;
+
+    final createdAtMs = prefs.getInt(_pendingCreatedAtKey);
+    if (createdAtMs == null || createdAtMs <= 0) {
+      // Backward compatibility: old pending records had no timestamp.
+      return true;
+    }
+    final ageMs = DateTime.now().millisecondsSinceEpoch - createdAtMs;
+    if (ageMs <= maxAge.inMilliseconds) return true;
+
+    // Stale pending marker should not block admin premium removal.
+    await _clearPendingOrderPrefs();
+    return false;
   }
 
   /// Completes premium for a paid order left in prefs (app closed mid-poll / timeout).
@@ -132,7 +160,9 @@ class PremiumRecovery {
         await UserIdentity.registerWithBackend(phone: phone);
       }
 
-      await _clearPendingOrderPrefs();
+      if (serverUntilMs != null) {
+        await _clearPendingOrderPrefs();
+      }
       await SubscriptionStore.refreshNotifierFromPrefs();
       return true;
     } catch (e) {

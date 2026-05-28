@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicConfig';
-import { registerPublicUser, getUserPremiumStatus } from '../../services/userDirectory';
+import { registerPublicUser, getUserPremiumRecord } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
   getIntent,
@@ -133,8 +133,8 @@ publicRouter.post('/register-user', async (req, res, next) => {
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
     const userId = String(req.params.userId ?? '').trim();
-    const premiumUntilMs = await getUserPremiumStatus(userId);
-    res.json({ ok: true, premiumUntilMs });
+    const out = await getUserPremiumRecord(userId);
+    res.json({ ok: true, premiumUntilMs: out.premiumUntilMs, userExists: out.userExists });
   } catch (e) {
     next(e);
   }

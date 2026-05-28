@@ -89,17 +89,25 @@ export async function deleteUserById(id: string): Promise<boolean> {
 }
 
 export async function getUserPremiumStatus(userId: string): Promise<number | null> {
+  const row = await getUserPremiumRecord(userId);
+  return row.premiumUntilMs;
+}
+
+export async function getUserPremiumRecord(userId: string): Promise<{ userExists: boolean; premiumUntilMs: number | null }> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
   }
   const trimmed = userId.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return { userExists: false, premiumUntilMs: null };
   const res = await pool.query<{ premium_until_ms: string | null }>(
     `SELECT premium_until_ms FROM users WHERE id = $1`,
     [trimmed],
   );
   const row = res.rows[0];
-  if (!row) return null;
-  return row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
+  if (!row) return { userExists: false, premiumUntilMs: null };
+  return {
+    userExists: true,
+    premiumUntilMs: row.premium_until_ms != null ? Number(row.premium_until_ms) : null,
+  };
 }

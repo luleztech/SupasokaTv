@@ -356,6 +356,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     await prefs.remove('pendingPaymentPlanId');
     await prefs.remove('pendingPaymentPhone');
     await prefs.remove('pendingPaymentProvider');
+    await prefs.remove('pendingPaymentCreatedAtMs');
   }
 
   void _handleWaitWindowExpired() {
@@ -632,7 +633,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         await SubscriptionStore.activatePlan(planId);
       }
       SubscriptionStore.refreshNotifierFromPrefs();
-      await _clearPendingOrderPrefs();
+      if (serverUntilMs != null) {
+        await _clearPendingOrderPrefs();
+      }
 
       if (mounted) {
         // Clear the waiting modal completely and show success
@@ -722,6 +725,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         await prefs.setString('pendingPaymentOrderId', orderId);
         await prefs.setString('pendingPaymentPlanId', plan.id);
         await prefs.setString('pendingPaymentPhone', TanzaniaPhone.normalize(clean) ?? clean);
+        await PremiumRecovery.markPendingPaymentCreatedNow();
         if (provider.isNotEmpty) {
           await prefs.setString('pendingPaymentProvider', provider);
         }

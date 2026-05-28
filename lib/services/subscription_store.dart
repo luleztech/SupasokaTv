@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:supasoka/config/api_config.dart';
+import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/user_identity.dart';
 
 /// Local premium expiry (set after successful Malipo flow).
@@ -97,6 +98,7 @@ class SubscriptionStore {
           : rawUntil is num
               ? rawUntil.toInt()
               : null;
+      final userExists = j['userExists'] == true;
 
       final p = await SharedPreferences.getInstance();
       final now = DateTime.now();
@@ -116,10 +118,15 @@ class SubscriptionStore {
         return;
       }
 
-      // Server has no premium — keep local unlock until it actually expires.
+      // Server has no premium:
+      // - keep local premium only while a recent payment is still pending;
+      // - otherwise trust backend (important for admin "remove premium").
       if (localActive) {
-        premiumUntilNotifier.value = localEnd;
-        return;
+        final hasPending = await PremiumRecovery.hasRecentPendingPayment();
+        if (!userExists || hasPending) {
+          premiumUntilNotifier.value = localEnd;
+          return;
+        }
       }
 
       await p.remove(_kUntilMs);
