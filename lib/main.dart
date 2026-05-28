@@ -127,15 +127,21 @@ class _RootNavigator extends StatefulWidget {
 class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObserver {
   bool _loaded = false;
   bool _notifPromptChecked = false;
+  Timer? _premiumSyncTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _premiumSyncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      if (!mounted || !_loaded) return;
+      unawaited(_syncPremiumAndTopics());
+    });
   }
 
   @override
   void dispose() {
+    _premiumSyncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -152,17 +158,16 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
             return PushNotificationService.syncDirectUserTopic(pid);
           }),
         );
-        unawaited(
-          PremiumRecovery.recoverPendingPaymentIfAny().then((_) {
-            return SubscriptionStore.syncPremiumFromBackend();
-          }).then((_) {
-            final isPremium =
-                SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
-            return PushNotificationService.syncAudienceTopics(isPremium: isPremium);
-          }),
-        );
+        unawaited(_syncPremiumAndTopics());
       });
     }
+  }
+
+  Future<void> _syncPremiumAndTopics() async {
+    await PremiumRecovery.recoverPendingPaymentIfAny();
+    await SubscriptionStore.syncPremiumFromBackend();
+    final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
   }
 
   @override

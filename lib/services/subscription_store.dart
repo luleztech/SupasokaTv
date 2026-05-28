@@ -71,8 +71,7 @@ class SubscriptionStore {
     premiumUntilNotifier.value = end;
   }
 
-  /// Sync premium status from backend (for admin-granted subscriptions).
-  /// Never removes a still-valid local subscription when the server row is missing or lagging.
+  /// Sync premium status from backend (authoritative for existing users).
   static Future<void> syncPremiumFromBackend() async {
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return;
@@ -107,14 +106,10 @@ class SubscriptionStore {
       final localActive = localEnd != null && localEnd.isAfter(now);
 
       if (premiumUntilMs != null) {
-        final serverEnd = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
-        var mergedMs = premiumUntilMs;
-        // Keep the longer active window (do not shorten on sync).
-        if (localActive && localEnd.isAfter(serverEnd)) {
-          mergedMs = localEnd.millisecondsSinceEpoch;
-        }
-        await p.setInt(_kUntilMs, mergedMs);
-        premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(mergedMs);
+        // Existing backend user: server timestamp is the exact source of truth.
+        // This guarantees correct weekly/monthly/3-month durations and exact expiry time.
+        await p.setInt(_kUntilMs, premiumUntilMs);
+        premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
         return;
       }
 
