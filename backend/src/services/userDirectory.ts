@@ -93,6 +93,22 @@ export async function getUserPremiumStatus(userId: string): Promise<number | nul
   return row.premiumUntilMs;
 }
 
+export async function setUserPremiumUntilMs(userId: string, premiumUntilMs: number | null): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) {
+    throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
+  }
+  const trimmed = userId.trim();
+  if (!trimmed) return false;
+  const res = await pool.query(
+    `UPDATE users
+     SET premium_until_ms = $2, updated_at = now()
+     WHERE id = $1`,
+    [trimmed, premiumUntilMs],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 export async function getUserPremiumRecord(userId: string): Promise<{ userExists: boolean; premiumUntilMs: number | null }> {
   const pool = getPool();
   if (!pool) {

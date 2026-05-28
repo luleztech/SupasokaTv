@@ -5,7 +5,7 @@ import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
-import { deleteUserById, isValidPublicUserId, listUsersForAdmin } from '../../services/userDirectory';
+import { deleteUserById, isValidPublicUserId, listUsersForAdmin, setUserPremiumUntilMs } from '../../services/userDirectory';
 import {
   checkEamaxBridgeConfiguration,
   mirrorPushToEamax,
@@ -212,6 +212,35 @@ adminRouter.delete('/users/:id', requireAdmin, async (req, res, next) => {
   try {
     const ok = await deleteUserById(String(req.params.id ?? ''));
     res.json({ ok: true, deleted: ok });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/users/:id/premium', requireAdmin, async (req, res, next) => {
+  try {
+    const userId = String(req.params.id ?? '').trim();
+    if (!userId) {
+      res.status(400).json({ ok: false, error: 'user id is required' });
+      return;
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const raw = b.premiumUntilMs;
+    let premiumUntilMs: number | null = null;
+    if (raw !== null && raw !== undefined && raw.toString().trim().length > 0) {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        res.status(400).json({ ok: false, error: 'premiumUntilMs must be null or a valid timestamp' });
+        return;
+      }
+      premiumUntilMs = Math.trunc(n);
+    }
+    const updated = await setUserPremiumUntilMs(userId, premiumUntilMs);
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'user not found' });
+      return;
+    }
+    res.json({ ok: true, userId, premiumUntilMs });
   } catch (e) {
     next(e);
   }

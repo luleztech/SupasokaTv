@@ -119,13 +119,15 @@ class SubscriptionStore {
       }
 
       // Server has no premium:
-      // - keep local premium only while a recent payment is still pending;
-      // - otherwise trust backend (important for admin "remove premium").
+      // - if user exists, trust backend immediately (admin remove should apply fast);
+      // - keep local premium only for users not yet created on backend while payment is pending.
       if (localActive) {
-        final hasPending = await PremiumRecovery.hasRecentPendingPayment();
-        if (!userExists || hasPending) {
-          premiumUntilNotifier.value = localEnd;
-          return;
+        if (!userExists) {
+          final hasPending = await PremiumRecovery.hasRecentPendingPayment();
+          if (hasPending) {
+            premiumUntilNotifier.value = localEnd;
+            return;
+          }
         }
       }
 

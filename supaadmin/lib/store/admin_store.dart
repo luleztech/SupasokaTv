@@ -578,6 +578,13 @@ class AdminStore extends ChangeNotifier {
     await _pushConfigToServer();
   }
 
+  Future<void> _saveLocalConfigOnly() async {
+    _normalizeConfigForServer();
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_prefsKey, _config.toJsonString());
+    notifyListeners();
+  }
+
   Future<void> replaceConfig(AppConfig next) async {
     _config = next;
     await _persist();
@@ -1006,9 +1013,46 @@ class AdminStore extends ChangeNotifier {
     final i = _config.users.indexWhere((x) => x.id == userId);
     if (i < 0) return;
     final u = _config.users[i];
-    _config.users[i] = endUtc == null
+    final next = endUtc == null
         ? u.copyWith(clearPremiumUntilMs: true)
         : u.copyWith(premiumUntilMs: endUtc.millisecondsSinceEpoch);
+    _config.users[i] = next;
+
+    // Fast path: single-user premium update, avoids heavy full-config import latency.
+    if (hasAdminSession) {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(userId)}/premium');
+      _syncing = true;
+      _lastSyncError = null;
+      notifyListeners();
+      try {
+        final res = await http
+            .put(
+              uri,
+              headers: _authHeaders(contentType: 'application/json'),
+              body: jsonEncode({
+                'premiumUntilMs': endUtc?.millisecondsSinceEpoch,
+              }),
+            )
+            .timeout(const Duration(seconds: 20));
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          await _saveLocalConfigOnly();
+          return;
+        }
+        _lastSyncError =
+            'Premium update failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
+      } catch (e) {
+        _lastSyncError = 'Premium update failed: $e';
+      } finally {
+        _syncing = false;
+        notifyListeners();
+        if (_lastSyncError != null && _lastSyncError!.isNotEmpty) {
+          _snack(_lastSyncError!);
+        }
+      }
+    }
+
+    // Fallback for older backend versions.
     await _persist();
   }
 
