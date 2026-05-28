@@ -85,9 +85,34 @@ class PremiumRecovery {
     await prefs.remove(_pendingCreatedAtKey);
   }
 
+  static Future<void> clearPendingPaymentState() async {
+    await _clearPendingOrderPrefs();
+  }
+
   static Future<void> markPendingPaymentCreatedNow() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_pendingCreatedAtKey, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  static Future<({bool userExists, int? premiumUntilMs})> fetchUserPremiumRecord(String publicId) async {
+    final base = apiConfigUrl.trim();
+    if (base.isEmpty) return (userExists: false, premiumUntilMs: null);
+    final origin = base.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$origin/api/v1/public/user-premium/$publicId');
+    try {
+      final res = await http.get(uri, headers: const {
+        'Cache-Control': 'no-cache',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return (userExists: false, premiumUntilMs: null);
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return (userExists: false, premiumUntilMs: null);
+      final raw = j['premiumUntilMs'];
+      final premiumUntilMs = raw is int ? raw : raw is num ? raw.toInt() : null;
+      return (userExists: j['userExists'] == true, premiumUntilMs: premiumUntilMs);
+    } catch (_) {
+      return (userExists: false, premiumUntilMs: null);
+    }
   }
 
   /// Returns true while a pending payment is still fresh enough to trust local fallback premium.
@@ -147,6 +172,22 @@ class PremiumRecovery {
           planId: planId,
           phone: phone,
         );
+      }
+
+      // Final guard: if backend already knows this user has no premium, do not re-grant locally.
+      if (serverUntilMs == null) {
+        final rec = await fetchUserPremiumRecord(publicId);
+        if (rec.userExists) {
+          if (rec.premiumUntilMs != null) {
+            await SubscriptionStore.setPremiumUntilMs(rec.premiumUntilMs!);
+            await _clearPendingOrderPrefs();
+            await SubscriptionStore.refreshNotifierFromPrefs();
+            return true;
+          }
+          await _clearPendingOrderPrefs();
+          await SubscriptionStore.refreshNotifierFromPrefs();
+          return false;
+        }
       }
 
       if (serverUntilMs != null) {

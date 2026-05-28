@@ -126,6 +126,11 @@ class SubscriptionStore {
         }
       }
 
+      // Backend explicitly says this existing user has no premium: clear stale local pending grants too.
+      if (userExists) {
+        await PremiumRecovery.clearPendingPaymentState();
+      }
+
       await p.remove(_kUntilMs);
       await p.remove(_kPlanId);
       premiumUntilNotifier.value = null;
