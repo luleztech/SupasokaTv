@@ -5,7 +5,7 @@ import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/screens/payment_screen.dart';
-import 'package:supasoka/screens/player_screen.dart';
+import 'package:supasoka/player/channel_playback.dart';
 import 'package:supasoka/screens/settings_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/subscription_store.dart';
@@ -154,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (ch != null && !ch.free && !isPremium) {
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PaymentScreen()));
     } else {
-      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => PlayerScreen(channelId: channelId)));
+      openChannelPlayback(context, channelId);
     }
   }
 

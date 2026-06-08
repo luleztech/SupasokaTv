@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
@@ -17,11 +18,14 @@ import androidx.appcompat.app.AlertDialog
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.C
+import androidx.media3.common.ErrorMessageProvider
+import androidx.media3.common.PlaybackException
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.ayubu.supasoka.domain.model.DrmType
 import com.ayubu.supasoka.domain.model.PlaybackState
 import com.ayubu.supasoka.domain.model.StreamQuality
 import com.ayubu.supasoka.player.PlayerManager
@@ -82,28 +86,6 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             return
         }
 
-        val playerView = findViewById<PlayerView>(R.id.player_view).apply {
-            applyResizeModeForOrientation()
-            setKeepScreenOn(true)
-        }
-        val webContainer = findViewById<FrameLayout>(R.id.webview_container)
-        rotateHintOverlay = findViewById(R.id.rotate_hint_overlay)
-        rotateHintPhone = findViewById(R.id.rotate_hint_phone)
-        findViewById<Button>(R.id.btn_rotate_hint_later).setOnClickListener {
-            rotateHintDismissedThisSession = true
-            hideRotateHintOverlay()
-        }
-        findViewById<Button>(R.id.btn_rotate_hint_never).setOnClickListener {
-            RotateHintPreferences.setNeverShowHint(this, true)
-            rotateHintDismissedThisSession = true
-            hideRotateHintOverlay()
-        }
-
-        val close = findViewById<ImageButton>(R.id.btn_close)
-        close.setOnClickListener { finish() }
-        val okoaBundle = findViewById<Button>(R.id.btn_okoa_bundle)
-        okoaBundle.setOnClickListener { showOkoaQualityDialog() }
-
         val session = try {
             StreamSessionBuilder.fromFlutterBundle(extras)
         } catch (e: Exception) {
@@ -115,6 +97,23 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         if (session.mpdUrl.isEmpty()) {
             showChannelUnavailableAndFinish()
             return
+        }
+
+        val playerView = findViewById<PlayerView>(R.id.player_view).apply {
+            applyResizeModeForOrientation()
+            setKeepScreenOn(true)
+            setErrorMessageProvider(
+                ErrorMessageProvider { _: PlaybackException ->
+                    android.util.Pair(0, getString(R.string.channel_unavailable_message))
+                },
+            )
+        }
+        val webContainer = findViewById<FrameLayout>(R.id.webview_container)
+
+        // Widevine L1 on Huawei requires a secure SurfaceView (TextureView → decoder start fails).
+        if (session.drmType != DrmType.NONE) {
+            (playerView.videoSurfaceView as? SurfaceView)?.setSecure(true)
+            Log.d(TAG, "Secure surface enabled for DRM: ${session.drmType}")
         }
 
         playerManager = PlayerManager(
@@ -140,9 +139,10 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     if (isFinishing) return@runOnUiThread
                     playbackReady = true
                     try {
+                        val okoaBtn = findViewById<Button>(R.id.btn_okoa_bundle)
                         if (playerManager.isWebViewPlayback()) {
                             playerView.player = null
-                            okoaBundle.visibility = View.VISIBLE
+                            okoaBtn.visibility = View.VISIBLE
                             playerView.visibility = View.GONE
                             webContainer.visibility = View.VISIBLE
                             webContainer.removeAllViews()
@@ -159,7 +159,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                             }
                             playerManager.setQuality(selectedOkoaQuality)
                         } else {
-                            okoaBundle.visibility = View.VISIBLE
+                            okoaBtn.visibility = View.VISIBLE
                             playerManager.setQuality(selectedOkoaQuality)
                             bindExoToPlayerViewIfNeeded(playerView, strictNull = true)
                         }
@@ -172,6 +172,20 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             },
         )
         playerManager.initialize(session)
+
+        rotateHintOverlay = findViewById(R.id.rotate_hint_overlay)
+        rotateHintPhone = findViewById(R.id.rotate_hint_phone)
+        findViewById<Button>(R.id.btn_rotate_hint_later).setOnClickListener {
+            rotateHintDismissedThisSession = true
+            hideRotateHintOverlay()
+        }
+        findViewById<Button>(R.id.btn_rotate_hint_never).setOnClickListener {
+            RotateHintPreferences.setNeverShowHint(this, true)
+            rotateHintDismissedThisSession = true
+            hideRotateHintOverlay()
+        }
+        findViewById<ImageButton>(R.id.btn_close).setOnClickListener { finish() }
+        findViewById<Button>(R.id.btn_okoa_bundle).setOnClickListener { showOkoaQualityDialog() }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

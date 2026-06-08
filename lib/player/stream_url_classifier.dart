@@ -9,6 +9,25 @@ class StreamUrlClassifier {
     return RegExp(r'\.php(\$|[/?#])', caseSensitive: false).hasMatch(u);
   }
 
+  /// PHP, ASP, /player/, /embed/ gateways — need in-app web player, not direct Exo.
+  static bool isLikelyGatewayUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return false;
+    final u = url.toLowerCase();
+    return RegExp(r'\.(php|asp|aspx|cgi|jsp)(\?|#|\$|/)', caseSensitive: false).hasMatch(u) ||
+        u.contains('/embed/') ||
+        u.contains('/gateway/') ||
+        u.contains('/stream/') ||
+        u.contains('/play/') ||
+        u.contains('/player/');
+  }
+
+  static bool needsWebPlayer(String url) {
+    final u = url.trim();
+    if (u.isEmpty) return false;
+    final hasDirect = hasObviousM3u8(u) || hasObviousMpd(u) || hasObviousTs(u);
+    return (isPhpLikeUrl(u) || isLikelyGatewayUrl(u)) && !hasDirect;
+  }
+
   /// HLS — match `.m3u8` anywhere (path, redirect targets, signed URLs).
   static bool hasObviousM3u8(String url) {
     final u = url.toLowerCase();

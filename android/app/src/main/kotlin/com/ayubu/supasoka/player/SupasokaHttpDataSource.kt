@@ -67,6 +67,27 @@ object SupasokaHttpDataSource {
     /** Same sockets/DNS/TLS as playback — probe and Exo stay consistent. */
     fun probeClient(): OkHttpClient = sharedClient
 
+    /**
+     * Short-timeout client used only by [StreamProbe] for format detection.
+     * Falls back fast so users see playback (or error) without waiting 60s.
+     */
+    val fastProbeClient: OkHttpClient by lazy {
+        sharedClient.newBuilder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .callTimeout(12, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** PHP gateway HTML fetch — fail fast so Exo can start sooner. */
+    val gatewayFetchClient: OkHttpClient by lazy {
+        sharedClient.newBuilder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
+    }
+
     @Suppress("UNUSED_PARAMETER")
     fun factory(
         headers: Map<String, String>,

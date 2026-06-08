@@ -111,16 +111,14 @@ class ExoPlayerEngine(
     companion object {
         private const val TAG = "ExoPlayerEngine"
         
-        // Buffer configuration — slightly more tolerant on flaky Wi‑Fi / high latency
-        private const val MIN_BUFFER_MS = 15000
-        private const val MAX_BUFFER_MS = 50000
-        /// Faster start on tap (still enough headroom for bursty mobile networks).
-        private const val BUFFER_FOR_PLAYBACK_MS = 1200
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5000
+        // Buffer configuration tuned for live IPTV — start playback sooner (matches EaMax).
+        private const val MIN_BUFFER_MS = 10000
+        private const val MAX_BUFFER_MS = 30000
+        private const val BUFFER_FOR_PLAYBACK_MS = 1000
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1500
 
-        // Passed through to [SupasokaHttpDataSource] (shared client uses 60s internally).
-        private const val CONNECT_TIMEOUT_MS = 30000
-        private const val READ_TIMEOUT_MS = 30000
+        private const val CONNECT_TIMEOUT_MS = 10000
+        private const val READ_TIMEOUT_MS = 20000
     }
 
     /**
@@ -185,6 +183,7 @@ class ExoPlayerEngine(
                     BUFFER_FOR_PLAYBACK_MS,
                     BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
                 )
+                .setPrioritizeTimeOverSizeThresholds(true)
                 .build()
             exoPlayer = ExoPlayer.Builder(context, renderersFactory)
                 .setLoadControl(loadControl)

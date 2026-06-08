@@ -1,6 +1,7 @@
 package com.ayubu.supasoka
 
 import android.content.Intent
+import com.ayubu.supasoka.player.GatewayWebPlayerFactory
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -13,6 +14,13 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        flutterEngine
+            .platformViewsController
+            .registry
+            .registerViewFactory(
+                "com.ayubu.supasoka/gateway_web_player",
+                GatewayWebPlayerFactory(flutterEngine.dartExecutor.binaryMessenger),
+            )
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.ayubu.supasoka/native_player",

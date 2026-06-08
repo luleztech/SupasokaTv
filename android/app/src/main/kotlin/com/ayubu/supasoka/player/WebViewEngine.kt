@@ -12,13 +12,13 @@ import com.ayubu.supasoka.domain.model.StreamQuality
 import com.ayubu.supasoka.domain.model.PlaybackState
 
 /**
- * WebView Streaming Engine - Optimized for DRM and External Web Players
- * PATCHED: Shaka Player logic disabled in favor of ExoPlayer for DRM streams.
+ * WebView gateway fallback — decrypts PHP pages via JS and promotes to native ExoPlayer.
  */
 class WebViewEngine(
     private val context: Context,
     private val onPlaybackStateChanged: (PlaybackState) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onGatewayExtracted: ((PhpGatewayExtractor.Extracted) -> Unit)? = null,
 ) {
     private var webView: WebView? = null
     private var currentSession: StreamSession? = null
@@ -30,9 +30,8 @@ class WebViewEngine(
 
         try {
             webView = WebView(context).apply {
-                // Enable hardware acceleration for smooth video
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                
+
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
@@ -42,17 +41,13 @@ class WebViewEngine(
                     allowUniversalAccessFromFileURLs = true
                     mediaPlaybackRequiresUserGesture = false
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    
-                    // Essential for DRM / EME support in WebView
                     setSupportMultipleWindows(true)
                     javaScriptCanOpenWindowsAutomatically = true
                     loadWithOverviewMode = true
                     useWideViewPort = true
-                    
                     userAgentString = PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT
                 }
 
-                // Enable Cookies
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
@@ -67,47 +62,63 @@ class WebViewEngine(
                             url.contains(".php", ignoreCase = true)
                         if (injectRecovery) {
                             w.evaluateJavascript(PhpWebViewSupport.gatewayPageRecoveryScript(), null)
+                            w.postDelayed({
+                                w.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
+                            }, 400)
                         }
                         applyDefaultOkoa360(w)
-                        onPlaybackStateChanged(PlaybackState.PLAYING)
                     }
 
-                    override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                    override fun onReceivedError(
+                        view: WebView?,
+                        request: android.webkit.WebResourceRequest?,
+                        error: android.webkit.WebResourceError?,
+                    ) {
                         if (request?.isForMainFrame == true) {
-                            onError("WebView Error: ${error?.description}")
+                            onError("playback failed")
                         }
                     }
                 }
 
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
-                        android.util.Log.d("ShakaConsole", "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
+                        android.util.Log.d(
+                            "ShakaConsole",
+                            "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()}",
+                        )
                         return true
                     }
                 }
 
-                jsInterface = WebViewJsInterface(onPlaybackStateChanged, onError)
+                jsInterface = WebViewJsInterface(
+                    onPlaybackStateChanged,
+                    onError,
+                    onGatewayExtracted,
+                )
                 addJavascriptInterface(jsInterface!!, "ShakaPlayerBridge")
             }
 
             webView?.loadUrl(url)
-
-        } catch (e: Exception) {
-            onError("Failed to initialize WebView: ${e.message}")
+        } catch (_: Exception) {
+            onError("playback failed")
         }
     }
 
     fun play() {
         webView?.evaluateJavascript(
             "(function(){var v=document.querySelector('video');if(v){var p=v.play();if(p&&p.catch)p.catch(function(){});}})();",
-            null
+            null,
         )
     }
 
     fun pause() {
         webView?.evaluateJavascript("(function(){var v=document.querySelector('video');if(v)v.pause();})();", null)
     }
-    fun stop() { webView?.stopLoading(); webView?.loadUrl("about:blank") }
+
+    fun stop() {
+        webView?.stopLoading()
+        webView?.loadUrl("about:blank")
+    }
 
     fun setQuality(quality: StreamQuality) {
         val mode = when (quality) {
@@ -120,18 +131,14 @@ class WebViewEngine(
         )
     }
 
-    /** Re-apply Okoa cap as hls.js/Shaka attach after first paint (360p default). */
     private fun applyDefaultOkoa360(target: WebView) {
-        val js =
-            "try{window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('360');}catch(e){}"
+        val js = "try{window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('360');}catch(e){}"
         target.postDelayed({ target.evaluateJavascript(js, null) }, 450)
         target.postDelayed({ target.evaluateJavascript(js, null) }, 2200)
         target.postDelayed({ target.evaluateJavascript(js, null) }, 5500)
     }
 
-    fun setAudioLanguage(language: String) {
-        // webView?.evaluateJavascript("if (window.ShakaPlayer) window.ShakaPlayer.setAudioLanguage('$language');", null)
-    }
+    fun setAudioLanguage(@Suppress("UNUSED_PARAMETER") language: String) {}
 
     fun release() {
         webView?.apply {
@@ -154,16 +161,50 @@ class WebViewEngine(
 
 class WebViewJsInterface(
     private val onPlaybackStateChanged: (PlaybackState) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onGatewayExtracted: ((PhpGatewayExtractor.Extracted) -> Unit)? = null,
 ) {
     @android.webkit.JavascriptInterface
     fun onPlaybackStarted() { onPlaybackStateChanged(PlaybackState.PLAYING) }
+
     @android.webkit.JavascriptInterface
     fun onPlaybackPaused() { onPlaybackStateChanged(PlaybackState.PAUSED) }
+
     @android.webkit.JavascriptInterface
-    fun onPlaybackTick(seconds: Int) {}
+    fun onPlaybackTick(@Suppress("UNUSED_PARAMETER") seconds: Int) {}
+
     @android.webkit.JavascriptInterface
-    fun onPlaybackError(errorMessage: String) { onError("WebView Playback Error: $errorMessage") }
+    fun onPlaybackError(@Suppress("UNUSED_PARAMETER") errorMessage: String) { onError("playback failed") }
+
     @android.webkit.JavascriptInterface
     fun onPlaybackEnded() { onPlaybackStateChanged(PlaybackState.ENDED) }
+
+    @android.webkit.JavascriptInterface
+    fun onGatewayStreamExtracted(json: String) {
+        try {
+            val o = org.json.JSONObject(json)
+            val streamUrl = o.optString("streamUrl", "").trim()
+            if (streamUrl.isEmpty()) return
+            val clearKeyRaw = o.optString("clearKeyRaw", "").trim()
+            val clearKeys = if (clearKeyRaw.contains(':')) {
+                val parts = clearKeyRaw.split(':', limit = 2)
+                listOf(
+                    com.ayubu.supasoka.domain.model.ClearKey(
+                        kid = parts.getOrElse(0) { "" }.trim(),
+                        k = parts.getOrElse(1) { "" }.trim(),
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+            val extracted = PhpGatewayExtractor.Extracted(
+                streamUrl = streamUrl,
+                isHls = o.optBoolean("isHls", streamUrl.contains(".m3u8", ignoreCase = true)),
+                licenseUrl = o.optString("licenseUrl", "").trim(),
+                authToken = o.optString("authToken", "").trim(),
+                clearKeys = clearKeys,
+            )
+            onGatewayExtracted?.invoke(extracted)
+        } catch (_: Exception) { }
+    }
 }

@@ -1,100 +1,114 @@
 package com.ayubu.supasoka.player
 
+import android.net.Uri
 import android.util.Log
+import com.ayubu.supasoka.domain.model.ClearKey
+import com.ayubu.supasoka.domain.model.DrmType
 import com.ayubu.supasoka.domain.model.StreamSession
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import okhttp3.Request
 
 /**
  * Resolves arbitrary stream entry URLs (e.g. https://bailatv.live/sp1.php) to a concrete
  * playback URI + format, or marks the URL as requiring full WebView embedding.
- * Ported from EaMax `StreamEngine.probePlaybackKind` + manifest extraction.
  */
 object StreamProbe {
 
     private const val TAG = "StreamProbe"
-    private const val RANGE_BYTES = 65535
+    private const val RANGE_BYTES = 2047
+    private const val MAX_READ_BYTES = 4096
+    private const val CACHE_TTL_MS = 10 * 60 * 1000L
+
+    private data class CacheEntry(val result: Result, val expiresAt: Long)
+    private val probeCache = ConcurrentHashMap<String, CacheEntry>()
 
     enum class ResolvedKind {
         EXO_HLS,
         EXO_DASH,
         EXO_PROGRESSIVE,
-        /** Let Media3 [androidx.media3.exoplayer.source.DefaultMediaSourceFactory] sniff manifest/playlist. */
         EXO_SNIFF,
         WEB_VIEW_PAGE,
     }
 
     data class Result(
         val kind: ResolvedKind,
-        /** URI to pass to ExoPlayer when kind is EXO_*; original URL when WEB_VIEW_PAGE. */
         val playbackUri: String,
         val finalUrlAfterRedirects: String,
-        /** Merge into StreamSession headers (Referer for CDN policies). */
-        val headerOverlay: Map<String, String>
+        val headerOverlay: Map<String, String>,
+        val licenseUrl: String = "",
+        val drmType: DrmType? = null,
+        val authToken: String = "",
+        val clearKeys: List<ClearKey> = emptyList(),
     )
 
     fun resolveForSession(session: StreamSession): Result {
         val original = session.mpdUrl.trim()
+
+        val now = System.currentTimeMillis()
+        val isPhp = StreamUrlClassifier.isPhpLikeUrl(original)
+        if (!isPhp) {
+            probeCache[original]?.let { entry ->
+                if (now < entry.expiresAt) {
+                    Log.d(TAG, "cache hit for ${original.take(80)}")
+                    return entry.result
+                } else {
+                    probeCache.remove(original)
+                }
+            }
+        }
+
         val headers = buildRequestHeaders(session)
 
-        // PHP gateways build or gate playback in the page (JS, redirects, cookies). WebView matches browser behavior.
+        fun cache(r: Result): Result {
+            val skip = StreamUrlClassifier.isPhpLikeUrl(original)
+            if (!skip) {
+                probeCache[original] = CacheEntry(r, now + CACHE_TTL_MS)
+            } else {
+                Log.d(TAG, "Skipping cache for PHP gateway: ${original.take(80)}")
+            }
+            return r
+        }
+
         if (StreamUrlClassifier.isPhpLikeUrl(original)) {
-            return Result(ResolvedKind.WEB_VIEW_PAGE, original, original, refererOverlay(original, headers))
+            return cache(tryResolvePhpGateway(original, headers))
         }
 
         if (StreamUrlClassifier.hasObviousM3u8(original)) {
-            // Still probe once: some providers return HTML/login pages even for .m3u8 URLs.
-            return safeProbeFirst(
-                original = original,
-                headers = headers,
-                expectedKind = ResolvedKind.EXO_HLS,
-            )
+            Log.d(TAG, "fast-path HLS (m3u8 extension): ${original.take(80)}")
+            return cache(Result(ResolvedKind.EXO_HLS, original, original, refererOverlay(original, headers)))
         }
-        if (StreamUrlClassifier.hasObviousMpd(original)) {
-            // Still probe once: many DRM gateways redirect .mpd requests to non-manifest content.
-            return safeProbeFirst(
-                original = original,
-                headers = headers,
-                expectedKind = ResolvedKind.EXO_DASH,
-            )
+
+        if (StreamUrlClassifier.hasObviousMpd(original) && !StreamUrlClassifier.isLikelyGatewayUrl(original)) {
+            Log.d(TAG, "fast-path DASH (mpd extension): ${original.take(80)}")
+            return cache(Result(ResolvedKind.EXO_DASH, original, original, refererOverlay(original, headers)))
         }
+
         if (StreamUrlClassifier.hasObviousProgressiveExtension(original)) {
-            return Result(ResolvedKind.EXO_PROGRESSIVE, original, original, refererOverlay(original, headers))
+            return cache(Result(ResolvedKind.EXO_PROGRESSIVE, original, original, refererOverlay(original, headers)))
+        }
+
+        val lowerOriginal = original.lowercase()
+        val isIptvPortUrl = Regex("""^https?://[^/]+:\d{2,5}/(live|stream|play|hls|iptv|channel|ch)/""").containsMatchIn(lowerOriginal) ||
+            Regex("""^https?://[^/]+:\d{2,5}/[^/]+/[^/]+/[^/?#]+$""").containsMatchIn(lowerOriginal.split("#")[0])
+        if (isIptvPortUrl) {
+            Log.d(TAG, "fast-path HLS (IPTV/Xtream port URL): ${original.take(80)}")
+            return cache(Result(ResolvedKind.EXO_HLS, original, original, refererOverlay(original, headers)))
         }
 
         val useBrowserAccept = StreamUrlClassifier.isLikelyGatewayUrl(original)
         return try {
-            probeHttp(original, headers, useBrowserAccept)
+            cache(probeHttp(original, headers, useBrowserAccept))
         } catch (e: Exception) {
             Log.w(TAG, "probe failed, gateway fallback: ${e.message}")
-            if (StreamUrlClassifier.isLikelyGatewayUrl(original) || StreamUrlClassifier.isPhpLikeUrl(original)) {
+            val fallback = if (StreamUrlClassifier.isLikelyGatewayUrl(original) || StreamUrlClassifier.isPhpLikeUrl(original)) {
                 Result(ResolvedKind.WEB_VIEW_PAGE, original, original, refererOverlay(original, headers))
             } else {
                 Result(ResolvedKind.EXO_SNIFF, original, original, refererOverlay(original, headers))
             }
-        }
-    }
-
-    private fun safeProbeFirst(
-        original: String,
-        headers: Map<String, String>,
-        expectedKind: ResolvedKind,
-    ): Result {
-        return try {
-            val probed = probeHttp(original, headers, gatewayStyleAccept = false)
-            when (probed.kind) {
-                ResolvedKind.EXO_HLS,
-                ResolvedKind.EXO_DASH,
-                ResolvedKind.EXO_PROGRESSIVE,
-                ResolvedKind.EXO_SNIFF,
-                ResolvedKind.WEB_VIEW_PAGE -> probed
-            }
-        } catch (e: Exception) {
-            // Prefer sniffing over forcing DASH/HLS when probe fails — wrong format → malformed manifest.
-            Log.w(TAG, "probe failed for manifest URL, using EXO_SNIFF: ${e.message}")
-            Result(ResolvedKind.EXO_SNIFF, original, original, refererOverlay(original, headers))
+            cache(fallback)
         }
     }
 
@@ -109,10 +123,71 @@ object StreamProbe {
                 StreamUrlClassifier.isYcnRedirectHost(session.mpdUrl) ->
                 h["User-Agent"] = PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT
             else ->
-                h.putIfAbsent("User-Agent", "ExoPlayerLib/2.18.0 (Linux; Android 11)")
+                h.putIfAbsent("User-Agent", PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT)
+        }
+        if (!h.keys.any { it.equals("Referer", ignoreCase = true) }) {
+            try {
+                val u = Uri.parse(session.mpdUrl.trim())
+                if (u.scheme != null && u.host != null) {
+                    val portPart = when {
+                        u.port <= 0 || u.port == 80 || u.port == 443 -> ""
+                        else -> ":${u.port}"
+                    }
+                    h["Referer"] = "${u.scheme}://${u.host}$portPart/"
+                    if (!h.keys.any { it.equals("Origin", ignoreCase = true) }) {
+                        h["Origin"] = "${u.scheme}://${u.host}$portPart"
+                    }
+                }
+            } catch (_: Exception) {}
         }
         return h
     }
+
+    private fun tryResolvePhpGateway(url: String, headers: Map<String, String>): Result {
+        return try {
+            val html = fetchGatewayHtml(url, headers)
+            val extracted = PhpGatewayExtractor.extractFromHtml(html)
+            if (extracted != null) {
+                Log.d(TAG, "PHP gateway decrypted → ${extracted.resolvedKind()} ${extracted.streamUrl.take(80)}")
+                resultFromExtracted(extracted, url, headers)
+            } else {
+                Log.w(TAG, "PHP gateway decrypt failed, WebView fallback: $url")
+                Result(ResolvedKind.WEB_VIEW_PAGE, url, url, refererOverlay(url, headers))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "PHP gateway probe failed, WebView fallback: ${e.message}")
+            Result(ResolvedKind.WEB_VIEW_PAGE, url, url, refererOverlay(url, headers))
+        }
+    }
+
+    private fun fetchGatewayHtml(url: String, headers: Map<String, String>): String {
+        val reqHeaders = HashMap(headers).apply {
+            putIfAbsent("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+            putIfAbsent("User-Agent", PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT)
+        }
+        val client = SupasokaHttpDataSource.gatewayFetchClient
+        val b = Request.Builder().url(url)
+        reqHeaders.forEach { (k, v) -> b.header(k, v) }
+        return client.newCall(b.get().build()).execute().use { r ->
+            if (!r.isSuccessful) throw IllegalStateException("HTTP ${r.code}")
+            r.body?.string() ?: throw IllegalStateException("empty body")
+        }
+    }
+
+    fun resultFromExtracted(
+        extracted: PhpGatewayExtractor.Extracted,
+        gatewayUrl: String,
+        headers: Map<String, String>,
+    ): Result = Result(
+        kind = extracted.resolvedKind(),
+        playbackUri = extracted.streamUrl,
+        finalUrlAfterRedirects = extracted.streamUrl,
+        headerOverlay = refererOverlay(gatewayUrl, headers),
+        licenseUrl = extracted.licenseUrl,
+        drmType = extracted.drmType(),
+        authToken = extracted.authToken,
+        clearKeys = extracted.clearKeys,
+    )
 
     private fun refererOverlay(original: String, existing: Map<String, String>): Map<String, String> {
         val hasRef = existing.keys.any { it.equals("Referer", true) || it.equals("referer", true) }
@@ -131,7 +206,7 @@ object StreamProbe {
             "application/dash+xml,application/vnd.apple.mpegurl,application/x-mpegURL,application/xml,text/xml,*/*;q=0.8"
         }
         val reqHeaders = HashMap(headers).apply { putIfAbsent("Accept", accept) }
-        val client = SupasokaHttpDataSource.probeClient()
+        val client = SupasokaHttpDataSource.fastProbeClient
 
         fun buildRequest(withRange: Boolean): Request {
             val b = Request.Builder().url(url)
@@ -143,7 +218,6 @@ object StreamProbe {
         var response = client.newCall(buildRequest(true)).execute()
         var finalUrl = response.request.url.toString()
         var status = response.code
-        // Some CDNs return 404/403 for ranged GET on manifests; retry full GET once.
         if (status == 404 || status == 403) {
             response.close()
             response = client.newCall(buildRequest(false)).execute()
@@ -164,15 +238,13 @@ object StreamProbe {
             } catch (_: Exception) {
                 throw IllegalStateException("HTTP $status")
             }
-            val bodyText = readLimited(stream, 720896)
+            val bodyText = readLimited(stream, MAX_READ_BYTES)
             ctv to bodyText
         }
 
-        val headSample = if (body.length <= 32768) body else body.substring(0, 32768)
-        val headTrim = headSample.trim()
+        val headTrim = body.trim()
         val headLower = headTrim.lowercase()
-        // MPD/XML can start after whitespace; peek more than the UI sample for classification.
-        val manifestPeek = body.take(262144).trim()
+        val manifestPeek = headTrim
 
         val okStatus = status in 200..299 || status == 206
         if (!okStatus) {
@@ -196,11 +268,9 @@ object StreamProbe {
             ) {
                 return Result(ResolvedKind.WEB_VIEW_PAGE, url, finalUrl, refererOverlay(url, headers))
             }
-            // Let ExoPlayer surface the HTTP error (BAD_HTTP_STATUS) instead of mis-parsing as DASH.
             return Result(ResolvedKind.EXO_SNIFF, url, finalUrl, refererOverlay(url, headers))
         }
 
-        // --- 200/206: classify by *body first* — wrong Content-Type is common; HTML login pages must not become DASH. ---
         val looksHtml = looksLikeHtmlDocument(manifestPeek)
         val looksLogin = looksLikeLoginOrAuthWall(manifestPeek)
         val isHlsBody = manifestPeek.startsWith("#EXTM3U")
@@ -213,9 +283,8 @@ object StreamProbe {
             return Result(ResolvedKind.EXO_DASH, finalUrl, finalUrl, refererOverlay(url, headers))
         }
 
-        // Content-Type says DASH/HLS but body is not — do not hand Exo a bogus type (→ malformed manifest).
         if (ct.contains("dash") && ct.contains("xml")) {
-            Log.w(TAG, "probe: Content-Type claims DASH but body is not MPD (login page or wrong file). Sniffing. url=$finalUrl")
+            Log.w(TAG, "probe: Content-Type claims DASH but body is not MPD. Sniffing. url=$finalUrl")
             return Result(ResolvedKind.EXO_SNIFF, finalUrl, finalUrl, refererOverlay(url, headers))
         }
         if (ct.contains("mpegurl") || ct.contains("m3u8") || ct.contains("x-mpegurl")) {
@@ -223,7 +292,6 @@ object StreamProbe {
             return Result(ResolvedKind.EXO_SNIFF, finalUrl, finalUrl, refererOverlay(url, headers))
         }
 
-        // HTML / login without a real manifest → extract, WebView, or sniff (never force DASH on HTML)
         if (looksHtml || looksLogin) {
             val extracted = ManifestUrlExtractor.extract(body, finalUrl)
             if (extracted != null) {
@@ -270,11 +338,9 @@ object StreamProbe {
         if (t.contains(">sign in<") || t.contains("sign in to") || t.contains("please log in")) return true
         if (t.contains("unauthorized") || t.contains("access denied") || t.contains("forbidden")) return true
         if (t.contains("session expired") || t.contains("authentication required")) return true
-        // Avoid matching "login" inside unrelated words (e.g. "blog").
         return Regex("""(?i)(^|[^a-z])login([^a-z]|$)""").containsMatchIn(t)
     }
 
-    /** True if the response body looks like an MPD (not HTML with a random `<mpd` string). */
     private fun looksLikeDashMpd(s: String): Boolean {
         val t = s.trim().take(98304)
         val tl = t.lowercase()
@@ -290,9 +356,9 @@ object StreamProbe {
 
     private fun readLimited(stream: InputStream?, maxBytes: Int): String {
         if (stream == null) return ""
-        val buf = ByteArray(8192)
+        val buf = ByteArray(minOf(maxBytes, 4096))
         var total = 0
-        val out = ByteArrayOutputStream()
+        val out = ByteArrayOutputStream(maxBytes)
         while (total < maxBytes) {
             val n = stream.read(buf, 0, min(buf.size, maxBytes - total))
             if (n <= 0) break
@@ -301,4 +367,6 @@ object StreamProbe {
         }
         return out.toByteArray().decodeToString()
     }
+
+    fun clearCache() = probeCache.clear()
 }

@@ -195,21 +195,21 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   @override
   void dispose() {
-    _stopPaymentTimersOnly();
+    _stopPaymentTimersOnly(notify: false);
     _phoneCtrl.dispose();
     _entryCtrl?.dispose();
     super.dispose();
   }
 
-  void _stopPaymentTimersOnly() {
+  void _stopPaymentTimersOnly({bool notify = true}) {
     _pollGen++;
     _paymentPollArmed = false;
     _waitingTimer?.cancel();
     _waitingTimer = null;
-    if (mounted) {
-      setState(() {
-        _waitingSeconds = 0;
-      });
+    _waitingSeconds = 0;
+    // Never call setState from dispose — the element is already unmounting.
+    if (notify && mounted) {
+      setState(() {});
     }
   }
 
@@ -796,12 +796,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                     delay: 0.04,
                     child: _PayPremiumHero(accent: ac),
                   ),
-                  const SizedBox(height: 22),
-                  _Reveal(
-                    controller: _entryCtrlSafe,
-                    delay: 0.08,
-                    child: _PayTrustStrip(accent: ac),
-                  ),
                   const SizedBox(height: 26),
                   _Reveal(
                     controller: _entryCtrlSafe,
@@ -1380,32 +1374,6 @@ class _PayPremiumHero extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _PayTrustStrip extends StatelessWidget {
-  const _PayTrustStrip({required this.accent});
-  final Color accent;
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _payLine),
-        gradient: LinearGradient(
-          colors: [
-            _paySurface.withValues(alpha: 0.9),
-            _paySurface2.withValues(alpha: 0.5),
-          ],
-        ),
-      ),
-      child: Text(
-        TanzaniaPhone.networksHint(),
-        textAlign: TextAlign.center,
-        style: TextStyle(color: _payMuted, fontWeight: FontWeight.w600, fontSize: 12.5),
-      ),
     );
   }
 }

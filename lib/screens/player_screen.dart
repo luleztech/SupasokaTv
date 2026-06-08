@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/player/channel_playback.dart';
 import 'package:supasoka/player/php_gateway_js.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
@@ -38,32 +39,8 @@ enum _PlayerIssue {
 }
 
 String _copyForIssue(_PlayerIssue issue) {
-  switch (issue) {
-    case _PlayerIssue.missingChannel:
-      return 'Kituo hakipatikani. Jaribu tena baadaye.';
-    case _PlayerIssue.noStreamUrl:
-      return 'Kituo hiki hakina mfululizo kwa sasa.';
-    case _PlayerIssue.playbackUnavailable:
-      return _kPlaybackUnavailableCopy;
-  }
-}
-
-String _nativeDrmTypeFor(Channel channel) {
-  final drm = channel.drm.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
-  switch (drm) {
-    case 'clearkey':
-      return channel.clearKeyKidKey.trim().isEmpty ? 'NONE' : 'CLEARKEY';
-    case 'widevine':
-      return 'WIDEVINE';
-    case 'widevinel1':
-      return 'WIDEVINE_L1';
-    case 'widevinel3':
-      return 'WIDEVINE_L3';
-    case 'playready':
-      return 'PLAYREADY';
-    default:
-      return 'NONE';
-  }
+  // Never expose URLs, IDs, or technical errors — one friendly message for all stream failures.
+  return _kPlaybackUnavailableCopy;
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
@@ -113,23 +90,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
+    final needsWebPlayer = StreamUrlClassifier.needsWebPlayer(url);
+
+    // Android: all streams via native activity (PHP decrypt + Widevine Exo, like EaMax).
     if (NativeAndroidPlayer.supported) {
-      await NativeAndroidPlayer.open(
-        url: url,
-        licenseUrl: ch.licenseUrl.trim(),
-        drmType: _nativeDrmTypeFor(ch),
-        clearKeyHex: ch.clearKeyKidKey.trim(),
-        headers: playbackHttpHeaders(url),
-      );
-      if (mounted) Navigator.of(context).pop();
+      try {
+        await NativeAndroidPlayer.open(
+          url: url,
+          licenseUrl: ch.licenseUrl.trim(),
+          drmType: nativeDrmTypeFor(ch),
+          clearKeyHex: ch.clearKeyKidKey.trim(),
+          headers: playbackHttpHeaders(url),
+        );
+        if (mounted) Navigator.of(context).pop();
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _issue = _PlayerIssue.playbackUnavailable;
+        });
+      }
       return;
     }
 
-    final isPhpGateway = StreamUrlClassifier.isPhpLikeUrl(url);
-    final hasDirectStream = StreamUrlClassifier.hasObviousM3u8(url) ||
-        StreamUrlClassifier.hasObviousMpd(url) ||
-        StreamUrlClassifier.hasObviousTs(url);
-    _useWebView = isPhpGateway && !hasDirectStream;
+    _useWebView = needsWebPlayer;
     if (_useWebView) {
       await _initWebView(url);
     } else {
@@ -357,7 +341,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
-    context.watch<ContentStore>();
     final ch = _channel;
     final top = MediaQuery.paddingOf(context).top;
 
