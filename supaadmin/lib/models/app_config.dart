@@ -47,6 +47,12 @@ class AppConfig {
     required this.users,
     this.configVersion = 1,
     this.customerCareWhatsapp = '212600000000',
+    this.minAndroidBuild = 0,
+    this.minAndroidVersion = '',
+    this.latestAndroidVersion = '',
+    this.latestAndroidBuild = 0,
+    this.forceUpdateEnabled = false,
+    this.playStoreUrl = 'https://play.google.com/store/apps/details?id=com.ayubu.supasoka',
   });
 
   int configVersion;
@@ -60,6 +66,18 @@ class AppConfig {
   List<UserDto> users;
   /// E.164 digits only (no +), used for `wa.me` in the viewer app (FAB + Settings).
   String customerCareWhatsapp;
+  /// Minimum Android build number (`versionCode`) required to use the app. `0` = no force update.
+  int minAndroidBuild;
+  /// Minimum semver label shown to users (e.g. `1.1.8`).
+  String minAndroidVersion;
+  /// Latest release label shown on the update screen (e.g. `1.2.0`).
+  String latestAndroidVersion;
+  /// Latest Play Store build number (optional; falls back to [minAndroidBuild]).
+  int latestAndroidBuild;
+  /// When true, users below [minAndroidBuild] must update before using the app.
+  bool forceUpdateEnabled;
+  /// Play Store listing URL opened when users tap update.
+  String playStoreUrl;
 
   Map<String, dynamic> toJson() => {
         'configVersion': configVersion,
@@ -71,6 +89,12 @@ class AppConfig {
         'notificationLog': notificationLog.map((e) => e.toJson()).toList(),
         'users': users.map((e) => e.toJson()).toList(),
         'customerCareWhatsapp': customerCareWhatsapp,
+        'minAndroidBuild': minAndroidBuild,
+        'minAndroidVersion': minAndroidVersion,
+        'latestAndroidVersion': latestAndroidVersion,
+        'latestAndroidBuild': latestAndroidBuild,
+        'forceUpdateEnabled': forceUpdateEnabled,
+        'playStoreUrl': playStoreUrl,
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
@@ -84,6 +108,14 @@ class AppConfig {
       notificationLog: (j['notificationLog'] as List<dynamic>? ?? []).map((e) => NotificationEntryDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       users: (j['users'] as List<dynamic>? ?? []).map((e) => UserDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       customerCareWhatsapp: normalizeCustomerCareWhatsapp(j['customerCareWhatsapp'] as String?),
+      minAndroidBuild: (j['minAndroidBuild'] as num?)?.toInt() ?? 0,
+      minAndroidVersion: j['minAndroidVersion'] as String? ?? '',
+      latestAndroidVersion: j['latestAndroidVersion'] as String? ?? '',
+      latestAndroidBuild: (j['latestAndroidBuild'] as num?)?.toInt() ?? 0,
+      forceUpdateEnabled: j['forceUpdateEnabled'] as bool? ?? false,
+      playStoreUrl: (j['playStoreUrl'] as String?)?.trim().isNotEmpty == true
+          ? (j['playStoreUrl'] as String).trim()
+          : 'https://play.google.com/store/apps/details?id=com.ayubu.supasoka',
     );
   }
 

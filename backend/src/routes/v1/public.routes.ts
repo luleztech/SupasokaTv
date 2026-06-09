@@ -1,5 +1,13 @@
 import { Router } from 'express';
 import { fetchPublicConfig, fetchPublicConfigMeta } from '../../services/publicConfig';
+import {
+  buildAppUpdatePayload,
+  fetchAppUpdateSettings,
+  readClientAppIdentity,
+  redactPlaybackSecretsFromConfig,
+  stripCatalogForForcedUpdate,
+} from '../../services/appUpdatePolicy';
+import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../services/playbackAccess';
 import { registerPublicUser, getUserPremiumRecord } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
@@ -94,26 +102,123 @@ function paymentStatusFromUnknown(payload: unknown): string {
 
 export const publicRouter = Router();
 
-publicRouter.get('/config', async (_req, res, next) => {
+function sendUpdateRequired(
+  res: import('express').Response,
+  appUpdate: ReturnType<typeof buildAppUpdatePayload>,
+): void {
+  res.status(426).json({
+    ok: false,
+    updateRequired: true,
+    appUpdate,
+    minVersion: appUpdate.minVersion,
+    latestVersion: appUpdate.latestVersion,
+    error: 'App update required before using Supasoka',
+  });
+}
+
+publicRouter.get('/config', async (req, res, next) => {
   try {
-    const config = await fetchPublicConfig();
+    const [config, updateSettings] = await Promise.all([
+      fetchPublicConfig(),
+      fetchAppUpdateSettings(),
+    ]);
+    const client = readClientAppIdentity(req);
+    const appUpdate = buildAppUpdatePayload(updateSettings, client);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ ok: true, ...config });
+    const catalog = appUpdate.updateRequired
+      ? stripCatalogForForcedUpdate(config)
+      : redactPlaybackSecretsFromConfig(config);
+    const body = {
+      ok: true,
+      ...catalog,
+      appUpdate,
+      updateRequired: appUpdate.updateRequired,
+      minVersion: appUpdate.minVersion,
+      latestVersion: appUpdate.latestVersion,
+    };
+    res.json(body);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Lightweight update gate — always safe for older/newer app builds to poll. */
+publicRouter.get('/app-update', async (req, res, next) => {
+  try {
+    const updateSettings = await fetchAppUpdateSettings();
+    const client = readClientAppIdentity(req);
+    const appUpdate = buildAppUpdatePayload(updateSettings, client);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json({
+      ok: true,
+      appUpdate,
+      updateRequired: appUpdate.updateRequired,
+      minVersion: appUpdate.minVersion,
+      latestVersion: appUpdate.latestVersion,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Live playback session — server verifies app build + premium before returning stream URLs. */
+publicRouter.get('/playback/:channelId', async (req, res, next) => {
+  try {
+    const channelId = Number(req.params.channelId);
+    if (!Number.isFinite(channelId) || channelId <= 0) {
+      res.status(400).json({ ok: false, error: 'Invalid channel id' });
+      return;
+    }
+    const userId = String(req.query.userId ?? req.query.publicId ?? '').trim();
+    const out = await resolvePlaybackForChannel(channelId, userId, req);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    if (!out.ok) {
+      if (out.code === 'UPDATE_REQUIRED') {
+        const { appUpdate } = await assertSupportedAppClient(req);
+        sendUpdateRequired(res, appUpdate);
+        return;
+      }
+      if (out.code === 'PREMIUM_REQUIRED') {
+        res.status(403).json({ ok: false, premiumRequired: true, error: 'Premium subscription required' });
+        return;
+      }
+      res.status(404).json({ ok: false, error: out.code });
+      return;
+    }
+
+    res.json({ ok: true, ...out.session });
   } catch (e) {
     next(e);
   }
 });
 
 /** Lightweight viewer poll: same sync cursor as full `/config` without heavy joins. */
-publicRouter.get('/config-meta', async (_req, res, next) => {
+publicRouter.get('/config-meta', async (req, res, next) => {
   try {
-    const meta = await fetchPublicConfigMeta();
+    const [meta, updateSettings] = await Promise.all([
+      fetchPublicConfigMeta(),
+      fetchAppUpdateSettings(),
+    ]);
+    const client = readClientAppIdentity(req);
+    const appUpdate = buildAppUpdatePayload(updateSettings, client);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ ok: true, ...meta });
+    res.json({
+      ok: true,
+      ...meta,
+      appUpdate,
+      updateRequired: appUpdate.updateRequired,
+      minVersion: appUpdate.minVersion,
+      latestVersion: appUpdate.latestVersion,
+    });
   } catch (e) {
     next(e);
   }
@@ -153,6 +258,12 @@ publicRouter.get('/settings/payment-provider', async (_req, res, next) => {
 
 async function handleConfirmPremium(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) {
   try {
+    const gate = await assertSupportedAppClient(req);
+    if (gate.updateRequired) {
+      sendUpdateRequired(res, gate.appUpdate);
+      return;
+    }
+
     const b = (req.body ?? {}) as Record<string, unknown>;
     const orderId = String(b.orderId ?? '').trim();
     const publicId = String(b.publicId ?? '').trim();
@@ -192,6 +303,12 @@ async function handleUnifiedPaymentStart(
   next: import('express').NextFunction,
 ): Promise<void> {
   try {
+    const gate = await assertSupportedAppClient(req);
+    if (gate.updateRequired) {
+      sendUpdateRequired(res, gate.appUpdate);
+      return;
+    }
+
     const body = (req.body ?? {}) as Record<string, unknown>;
     const parsed = parseStartPaymentFromLegacyBody(body);
     if (!parsed) {

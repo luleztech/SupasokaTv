@@ -12,6 +12,7 @@ import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
+import 'package:supasoka/widgets/unlock_all_promo.dart';
 import 'package:supasoka/widgets/cat_pill.dart';
 import 'package:supasoka/widgets/channel_card.dart';
 import 'package:supasoka/widgets/pro_shimmer.dart';
@@ -31,6 +32,22 @@ double get _kRailPosterHeightDelta =>
 
 double get _kRailHeight =>
     channelHomeRailCellHeight(_kOriginalRailTileWidth) - _kRailHeightReduction;
+
+/// Free channels rail — 50px narrower and 40px shorter than standard home rails.
+const double _kFreeRailWidthReduction = 50;
+const double _kFreeRailHeightReduction = 40;
+double get _kFreeRailTileWidth => _kRailTileWidth - _kFreeRailWidthReduction;
+double get _kFreeRailHeight => _kRailHeight - _kFreeRailHeightReduction;
+double get _kFreeRailPosterHeightDelta =>
+    (_kFreeRailHeight - _kRailListBottomPadding) - (_kFreeRailTileWidth * 4 / 3);
+
+/// Mpira channels rail — 70px wider and 30px taller than standard home rails.
+const double _kMpiraRailWidthIncrease = 70;
+const double _kMpiraRailHeightReduction = -30;
+double get _kMpiraRailTileWidth => _kRailTileWidth + _kMpiraRailWidthIncrease;
+double get _kMpiraRailHeight => _kRailHeight - _kMpiraRailHeightReduction;
+double get _kMpiraRailPosterHeightDelta =>
+    (_kMpiraRailHeight - _kRailListBottomPadding) - (_kMpiraRailTileWidth * 4 / 3);
 
 String _catEmoji(String cat) {
   switch (cat) {
@@ -99,7 +116,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String _cat = 'all';
   String _query = '';
-  bool _searchOpen = false;
   final _searchFocus = FocusNode();
   final _carousel = PageController();
   int _carouselIndex = 0;
@@ -261,11 +277,21 @@ class _HomeScreenState extends State<HomeScreen> {
               SliverToBoxAdapter(
                 child: _ChannelRail(
                   title: 'Chaneli za bure',
-                  tileWidth: _kRailTileWidth,
-                  railHeight: _kRailHeight,
+                  tileWidth: _kFreeRailTileWidth,
+                  railHeight: _kFreeRailHeight,
+                  railPosterHeightDelta: _kFreeRailPosterHeightDelta,
                   channels: freeTop,
                   lockedFor: (_) => false,
                   onChannel: (ch) => _openChannel(context, ch.id),
+                ),
+              ),
+            );
+          }
+          if (!isPremium) {
+            browseSlivers.add(
+              SliverToBoxAdapter(
+                child: UnlockAllPromoCard(
+                  onPressed: () => context.read<AppNav>().setTab(3),
                 ),
               ),
             );
@@ -276,18 +302,41 @@ class _HomeScreenState extends State<HomeScreen> {
             final list = channels.where((ch) => keySet.contains(ch.cat)).toList();
             if (list.isEmpty) continue;
             renderedKeys.addAll(section.keys);
-            browseSlivers.add(
-              SliverToBoxAdapter(
-                child: _ChannelRail(
-                  title: section.title,
-                  tileWidth: _kRailTileWidth,
-                  railHeight: _kRailHeight,
-                  channels: list,
-                  lockedFor: (ch) => !ch.free && !isPremium,
-                  onChannel: (ch) => _openChannel(context, ch.id),
+            final isMpira = section.title == 'Mpira';
+            final isHabari = section.title == 'habari';
+            final isTamthilia = section.title == 'tamthilia';
+            if (isHabari) {
+              browseSlivers.add(
+                SliverToBoxAdapter(
+                  child: _ChannelGridSection(
+                    title: section.title,
+                    channels: list,
+                    lockedFor: (ch) => !ch.free && !isPremium,
+                    onChannel: (ch) => _openChannel(context, ch.id),
+                  ),
                 ),
-              ),
-            );
+              );
+            } else {
+              browseSlivers.add(
+                SliverToBoxAdapter(
+                  child: _ChannelRail(
+                    title: section.title,
+                    tileWidth: isMpira
+                        ? _kMpiraRailTileWidth
+                        : (isTamthilia ? _kFreeRailTileWidth : _kRailTileWidth),
+                    railHeight: isMpira
+                        ? _kMpiraRailHeight
+                        : (isTamthilia ? _kFreeRailHeight : _kRailHeight),
+                    railPosterHeightDelta: isMpira
+                        ? _kMpiraRailPosterHeightDelta
+                        : (isTamthilia ? _kFreeRailPosterHeightDelta : null),
+                    channels: list,
+                    lockedFor: (ch) => !ch.free && !isPremium,
+                    onChannel: (ch) => _openChannel(context, ch.id),
+                  ),
+                ),
+              );
+            }
           }
           final remainingCats = cats
               .where((cat) => cat.key != 'all' && !renderedKeys.contains(cat.key))
@@ -373,61 +422,45 @@ class _HomeScreenState extends State<HomeScreen> {
                     title: 'Supasoka',
                     subtitle: 'Mpira na Tamthilia',
                     onSettings: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen())),
-                    onSearch: () {
-                      setState(() {
-                        _searchOpen = !_searchOpen;
-                        if (!_searchOpen) {
-                          _query = '';
-                          _searchFocus.unfocus();
-                        } else {
-                          Future.microtask(_searchFocus.requestFocus);
-                        }
-                      });
-                    },
                   ),
                 ),
                 SliverToBoxAdapter(
-                  child: AnimatedCrossFade(
-                    firstChild: const SizedBox.shrink(),
-                    secondChild: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Container(
-                        height: 44,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xCC18181b),
-                          borderRadius: BorderRadius.circular(99),
-                          border: Border.all(color: _searchOpen ? t.accent : t.border),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Ionicons.search_outline, size: 16, color: const Color(0xFFa1a1aa)),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: TextField(
-                                spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                                focusNode: _searchFocus,
-                                onChanged: (v) => setState(() => _query = v),
-                                style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text),
-                                decoration: InputDecoration(
-                                  isDense: true,
-                                  border: InputBorder.none,
-                                  hintText: 'Tafuta channel…',
-                                  hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
-                                ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Container(
+                      height: 44,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xCC18181b),
+                        borderRadius: BorderRadius.circular(99),
+                        border: Border.all(color: t.border),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Ionicons.search_outline, size: 16, color: const Color(0xFFa1a1aa)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                              focusNode: _searchFocus,
+                              onChanged: (v) => setState(() => _query = v),
+                              style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                hintText: 'Tafuta channel…',
+                                hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
                               ),
                             ),
-                            if (_query.isNotEmpty)
-                              IconButton(
-                                onPressed: () => setState(() => _query = ''),
-                                icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
-                              ),
-                          ],
-                        ),
+                          ),
+                          if (_query.isNotEmpty)
+                            IconButton(
+                              onPressed: () => setState(() => _query = ''),
+                              icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
+                            ),
+                        ],
                       ),
                     ),
-                    crossFadeState: _searchOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                    duration: const Duration(milliseconds: 220),
                   ),
                 ),
                 if (carouselSlides.isNotEmpty)
@@ -450,7 +483,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(20),
                           child: SizedBox(
-                            height: 360,
+                            height: 380,
                             child: Stack(
                               fit: StackFit.expand,
                               children: [
@@ -497,30 +530,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
-                    child: Container(
-                      height: 52,
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        color: t.card.withValues(alpha: 0.45),
-                        border: Border.all(color: t.border.withValues(alpha: 0.55)),
-                      ),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        scrollDirection: Axis.horizontal,
-                        itemCount: cats.length,
-                        separatorBuilder: (context, _) => const SizedBox(width: 10),
-                        itemBuilder: (context, i) {
-                          final cat = cats[i];
-                          return CatPill(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+                    child: CatPillStrip(
+                      children: [
+                        for (final cat in cats)
+                          CatPill(
                             label: cat.label,
                             icon: cat.icon,
+                            categoryKey: cat.key,
                             active: fk == cat.key,
                             onPress: () => setState(() => _cat = cat.key),
-                          );
-                        },
-                      ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -618,19 +639,151 @@ class _CarouselSlide extends StatelessWidget {
   }
 }
 
-class _ChannelRail extends StatefulWidget {
-  const _ChannelRail({
+class _HomeChannelSectionHeader extends StatelessWidget {
+  const _HomeChannelSectionHeader({required this.title, required this.count});
+
+  final String title;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.watch<ThemeController>().colors;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          width: 4,
+          height: 22,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                t.accent,
+                t.accent.withValues(alpha: 0.4),
+              ],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: t.accent.withValues(alpha: 0.28),
+                blurRadius: 10,
+                spreadRadius: -1,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: rajdhani(12.5, weight: FontWeight.w800).copyWith(
+              color: t.text.withValues(alpha: 0.92),
+              letterSpacing: 1.05,
+              height: 1.05,
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: t.card.withValues(alpha: 0.55),
+            border: Border.all(color: t.border.withValues(alpha: 0.35)),
+          ),
+          child: Text(
+            '$count',
+            style: rajdhani(10.5, weight: FontWeight.w700).copyWith(
+              color: t.text2.withValues(alpha: 0.95),
+              letterSpacing: 0.4,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChannelGridSection extends StatelessWidget {
+  const _ChannelGridSection({
     required this.title,
-    required this.tileWidth,
-    required this.railHeight,
     required this.channels,
     required this.lockedFor,
     required this.onChannel,
   });
 
   final String title;
+  final List<Channel> channels;
+  final bool Function(Channel) lockedFor;
+  final void Function(Channel) onChannel;
+
+  @override
+  Widget build(BuildContext context) {
+    if (channels.isEmpty) return const SizedBox.shrink();
+
+    final w = MediaQuery.sizeOf(context).width;
+    const hPad = 18.0;
+    const gap = 10.0;
+    final cellW = (w - hPad * 2 - gap) / 2;
+    // Must match [ChannelCard] `compactGrid` poster height — do not scale down or overflow stripes appear.
+    final tileH = channelGridCellHeight(cellW).clamp(56.0, double.infinity);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(hPad, 2, hPad, 10),
+            child: _HomeChannelSectionHeader(title: title, count: channels.length),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: hPad),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: gap,
+                crossAxisSpacing: gap,
+                mainAxisExtent: tileH,
+              ),
+              itemCount: channels.length,
+              itemBuilder: (context, i) {
+                final ch = channels[i];
+                return ChannelCard(
+                  channel: ch,
+                  locked: lockedFor(ch),
+                  compactGrid: true,
+                  onPress: () => onChannel(ch),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChannelRail extends StatefulWidget {
+  _ChannelRail({
+    required this.title,
+    required this.tileWidth,
+    required this.railHeight,
+    required this.channels,
+    required this.lockedFor,
+    required this.onChannel,
+    this.railPosterHeightDelta,
+  });
+
+  final String title;
   final double tileWidth;
   final double railHeight;
+  final double? railPosterHeightDelta;
   final List<Channel> channels;
   final bool Function(Channel) lockedFor;
   final void Function(Channel) onChannel;
@@ -697,62 +850,7 @@ class _ChannelRailState extends State<_ChannelRail> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 2, 18, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 4,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        t.accent,
-                        t.accent.withValues(alpha: 0.4),
-                      ],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: t.accent.withValues(alpha: 0.28),
-                        blurRadius: 10,
-                        spreadRadius: -1,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    widget.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: rajdhani(12.5, weight: FontWeight.w800).copyWith(
-                      color: t.text.withValues(alpha: 0.92),
-                      letterSpacing: 1.05,
-                      height: 1.05,
-                    ),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    color: t.card.withValues(alpha: 0.55),
-                    border: Border.all(color: t.border.withValues(alpha: 0.35)),
-                  ),
-                  child: Text(
-                    '${widget.channels.length}',
-                    style: rajdhani(10.5, weight: FontWeight.w700).copyWith(
-                      color: t.text2.withValues(alpha: 0.95),
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            child: _HomeChannelSectionHeader(title: widget.title, count: widget.channels.length),
           ),
           SizedBox(
             height: widget.railHeight,
@@ -770,7 +868,7 @@ class _ChannelRailState extends State<_ChannelRail> {
                     final ch = widget.channels[i];
                     return ChannelCard(
                       width: widget.tileWidth,
-                      railPosterHeightDelta: _kRailPosterHeightDelta,
+                      railPosterHeightDelta: widget.railPosterHeightDelta ?? _kRailPosterHeightDelta,
                       channel: ch,
                       locked: widget.lockedFor(ch),
                       onPress: () => widget.onChannel(ch),

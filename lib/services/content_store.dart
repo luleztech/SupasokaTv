@@ -7,9 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/data/pay_plan.dart';
+import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/util/image_url.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v1';
+
+/// Last live update policy from server — never infer force-update from stale config cache alone.
+const _prefsKeyUpdatePolicyV1 = 'supasoka_update_policy_v1';
 
 /// Last applied `configVersion:configSyncedAt` from API — compared to `/public/config-meta` for fast updates.
 const _prefsKeySyncSig = 'supasoka_public_config_sync_sig_v1';
@@ -30,14 +34,15 @@ const _metaPollHeaders = {
 };
 
 /// Retries transient failures (EaMax-style) before surfacing an error.
-Future<http.Response> _getPublicConfig(Uri uri) async {
+Future<http.Response> _getPublicConfig(Uri uri, {Map<String, String>? versionHeaders}) async {
   Object? lastError;
-  const headers = {
+  final headers = {
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
     'Accept': 'application/json',
     'User-Agent': 'Supasoka/1.1 (Flutter; viewer)',
     'Accept-Encoding': 'gzip',
+    if (versionHeaders != null) ...versionHeaders,
   };
   for (var attempt = 0; attempt < _configFetchAttempts; attempt++) {
     try {
@@ -120,6 +125,11 @@ class ContentStore extends ChangeNotifier {
   List<PackageItem> _packages = [];
   List<PayPlan> _malipoPlans = [];
   String _customerCareWhatsapp = '';
+  AppUpdateStatus _updateStatus = AppUpdateStatus.upToDate(
+    currentVersion: '',
+    currentBuild: 0,
+    playStoreUrl: kDefaultPlayStoreUrl,
+  );
   bool _ready = false;
   bool _refreshing = false;
   bool _connectionBlocked = false;
@@ -143,6 +153,9 @@ class ContentStore extends ChangeNotifier {
   /// E.164 digits for `wa.me` (from API).
   String get customerCareWhatsapp => _customerCareWhatsapp;
 
+  bool get updateRequired => _updateStatus.required;
+  AppUpdateStatus get appUpdateStatus => _updateStatus;
+
   bool get hasValidCustomerCare {
     final d = _customerCareWhatsapp.replaceAll(RegExp(r'\D'), '');
     return d.length >= 8 && d.length <= 15;
@@ -153,6 +166,101 @@ class ContentStore extends ChangeNotifier {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  Future<Uri> _publicUri(String originPath, {Map<String, String>? extra}) async {
+    final versionParams = await appVersionQueryParams();
+    return Uri.parse(originPath).replace(
+      queryParameters: {
+        ...versionParams,
+        if (extra != null) ...extra,
+      },
+    );
+  }
+
+  Future<Map<String, String>> _versionHeaders() async {
+    final params = await appVersionQueryParams();
+    return {
+      'X-App-Build': params['appBuild'] ?? '',
+      'X-App-Version': params['appVersion'] ?? '',
+      'X-Supasoka-Build': params['appBuild'] ?? '',
+      'X-Supasoka-Version': params['appVersion'] ?? '',
+    };
+  }
+
+  Future<void> _persistUpdatePolicy(Map<String, dynamic> j) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeyUpdatePolicyV1, jsonEncode(j));
+  }
+
+  Future<Map<String, dynamic>?> _loadPersistedUpdatePolicy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKeyUpdatePolicyV1);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      await prefs.remove(_prefsKeyUpdatePolicyV1);
+      return null;
+    }
+  }
+
+  /// Apply update gate from playback/payment API (426) without loading catalog.
+  Future<void> applyServerUpdatePayload(Map<String, dynamic>? j) async {
+    if (j == null || j.isEmpty) {
+      await checkUpdateFromServer();
+      return;
+    }
+    await _persistUpdatePolicy(j);
+    await _syncUpdatePolicy(j);
+  }
+
+  /// Always hits the server first so older builds pick up new force-update rules.
+  Future<bool> checkUpdateFromServer() async {
+    final fetched = await _fetchUpdatePolicyFromServer();
+    if (fetched) return _updateStatus.required;
+    final cached = await _loadPersistedUpdatePolicy();
+    if (cached != null) {
+      await _syncUpdatePolicy(cached);
+    }
+    return _updateStatus.required;
+  }
+
+  Future<bool> _fetchUpdatePolicyFromServer() async {
+    final base = apiConfigUrl.trim();
+    if (base.isEmpty) return false;
+
+    final origin = base.replaceAll(RegExp(r'/$'), '');
+    final versionHeaders = await _versionHeaders();
+    final endpoints = [
+      '$origin/api/v1/public/app-update',
+      '$origin/api/v1/public/config-meta',
+    ];
+
+    for (final path in endpoints) {
+      try {
+        final uri = await _publicUri(path, extra: {'_': DateTime.now().millisecondsSinceEpoch.toString()});
+        final res = await http
+            .get(uri, headers: {..._metaPollHeaders, ...versionHeaders})
+            .timeout(const Duration(seconds: 12));
+        if (res.statusCode != 200) continue;
+
+        Map<String, dynamic>? j;
+        try {
+          j = jsonDecode(res.body) as Map<String, dynamic>?;
+        } catch (_) {
+          j = null;
+        }
+        if (j == null || j['ok'] != true) continue;
+
+        await _persistUpdatePolicy(j);
+        await _syncUpdatePolicy(j);
+        return true;
+      } catch (_) {
+        continue;
+      }
+    }
+    return false;
   }
 
   /// [silent]: keep current UI visible while fetching (used for pull-to-refresh and tab changes).
@@ -168,6 +276,23 @@ class ContentStore extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final base = apiConfigUrl;
+
+      // Live server policy always wins — do not rely on stale config cache for update gate.
+      final livePolicy = await _fetchUpdatePolicyFromServer();
+      if (!livePolicy) {
+        final cachedPolicy = await _loadPersistedUpdatePolicy();
+        if (cachedPolicy != null) {
+          await _syncUpdatePolicy(cachedPolicy);
+        }
+      }
+      if (_updateStatus.required) {
+        _clearCatalog();
+        _connectionBlocked = false;
+        _loadError = null;
+        _ready = true;
+        notifyListeners();
+        return;
+      }
 
       Future<void> applyCached() async {
         final raw = prefs.getString(_prefsKey);
@@ -191,14 +316,16 @@ class ContentStore extends ChangeNotifier {
       }
 
       final origin = base.replaceAll(RegExp(r'/$'), '');
-      final uri = Uri.parse('$origin/api/v1/public/config').replace(
-        queryParameters: {
+      final versionHeaders = await _versionHeaders();
+      final uri = await _publicUri(
+        '$origin/api/v1/public/config',
+        extra: {
           '_': DateTime.now().millisecondsSinceEpoch.toString(),
           'r': DateTime.now().microsecondsSinceEpoch.toString(),
         },
       );
       try {
-        final res = await _getPublicConfig(uri);
+        final res = await _getPublicConfig(uri, versionHeaders: versionHeaders);
         final body = res.body.trim();
 
         if (res.statusCode == 200) {
@@ -217,6 +344,16 @@ class ContentStore extends ChangeNotifier {
               j = null;
             }
             if (j != null && j['ok'] == true) {
+              await _persistUpdatePolicy(j);
+              await _syncUpdatePolicy(j);
+              if (_updateStatus.required) {
+                _clearCatalog();
+                _connectionBlocked = false;
+                _loadError = null;
+                _ready = true;
+                notifyListeners();
+                return;
+              }
               _applyConfig(j);
               await prefs.setString(_prefsKey, res.body);
               await _persistSyncSignature(j);
@@ -262,22 +399,46 @@ class ContentStore extends ChangeNotifier {
     }
   }
 
-  Future<void> refresh() => bootstrap(silent: true);
+  Future<void> refresh() async {
+    await checkUpdateFromServer();
+    if (_updateStatus.required) {
+      _clearCatalog();
+      _ready = true;
+      notifyListeners();
+      return;
+    }
+    await bootstrap(silent: true);
+  }
 
-  /// Lightweight poll (called ~every 8s from [MainShell]). Full config fetch only when admin synced new data.
+  /// Lightweight poll (called ~every 3s from [MainShell]). Full config fetch only when admin synced new data.
   Future<void> pollConfigMeta() async {
     if (!_ready || _refreshing) return;
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return;
 
+    final fetched = await _fetchUpdatePolicyFromServer();
+    if (!fetched) {
+      final cachedPolicy = await _loadPersistedUpdatePolicy();
+      if (cachedPolicy != null) {
+        await _syncUpdatePolicy(cachedPolicy);
+      }
+    }
+    if (_updateStatus.required) {
+      _clearCatalog();
+      notifyListeners();
+      return;
+    }
+
     final origin = base.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/config-meta').replace(
-      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
+    final versionHeaders = await _versionHeaders();
+    final uri = await _publicUri(
+      '$origin/api/v1/public/config-meta',
+      extra: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
 
     try {
       final res = await http
-          .get(uri, headers: _metaPollHeaders)
+          .get(uri, headers: {..._metaPollHeaders, ...versionHeaders})
           .timeout(const Duration(seconds: 12));
       if (res.statusCode != 200) return;
 
@@ -288,6 +449,14 @@ class ContentStore extends ChangeNotifier {
         j = null;
       }
       if (j == null || j['ok'] != true) return;
+
+      await _persistUpdatePolicy(j);
+      await _syncUpdatePolicy(j);
+      if (_updateStatus.required) {
+        _clearCatalog();
+        notifyListeners();
+        return;
+      }
 
       final remoteSig = _syncSignatureFromJson(j);
       final prefs = await SharedPreferences.getInstance();
@@ -333,9 +502,6 @@ class ContentStore extends ChangeNotifier {
     for (final e in chRaw) {
       final m = Map<String, dynamic>.from(e as Map);
       if (m['enabled'] == false) continue;
-      final stream = stripUnsafeUrlWhitespace(
-        (m['streamUrl'] ?? m['url'] ?? '') as String? ?? '',
-      );
       _channels.add(
         Channel(
           id: _asInt(m['id']),
@@ -344,10 +510,10 @@ class ContentStore extends ChangeNotifier {
           img: sanitizeImageUrl(m['img'] as String? ?? ''),
           free: m['free'] as bool? ?? true,
           viewers: m['viewers'] as String? ?? '',
-          streamUrl: stream,
-          drm: (m['drm'] ?? 'none').toString(),
-          clearKeyKidKey: (m['clearKeyKidKey'] ?? '').toString(),
-          licenseUrl: (m['licenseUrl'] ?? '').toString(),
+          streamUrl: '',
+          drm: 'none',
+          clearKeyKidKey: '',
+          licenseUrl: '',
         ),
       );
     }
@@ -420,5 +586,13 @@ class ContentStore extends ChangeNotifier {
     } else {
       _customerCareWhatsapp = '';
     }
+  }
+
+  Future<void> _syncUpdatePolicy(Map<String, dynamic> j) async {
+    _updateStatus = await evaluateAppUpdateFromConfig(j);
+    if (_updateStatus.required) {
+      _clearCatalog();
+    }
+    notifyListeners();
   }
 }

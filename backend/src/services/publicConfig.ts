@@ -121,7 +121,9 @@ export async function fetchPublicConfigMeta(): Promise<{
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
-  const setRes = await pool.query(`SELECT key, value FROM app_settings WHERE key IN ('configVersion', 'configSyncedAt')`);
+  const setRes = await pool.query(
+    `SELECT key, value FROM app_settings WHERE key IN ('configVersion', 'configSyncedAt')`,
+  );
   const settings: Record<string, string> = {};
   for (const row of setRes.rows as { key: string; value: string }[]) {
     settings[row.key] = row.value;

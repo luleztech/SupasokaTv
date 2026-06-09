@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { getPool } from '../../db/pool';
 import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
+import { importAppUpdateSettings } from '../../services/appUpdateSettingsImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
 import { deleteUserById, isValidPublicUserId, listUsersForAdmin, setUserPremiumUntilMs } from '../../services/userDirectory';
@@ -37,6 +38,24 @@ adminRouter.get('/export', requireAdmin, async (_req, res, next) => {
 adminRouter.post('/import', requireAdmin, async (req, res, next) => {
   try {
     await importAppConfig(req.body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Fast settings save — app update policy only (no full catalog re-import). */
+adminRouter.put('/settings/app-update', requireAdmin, async (req, res, next) => {
+  try {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    await importAppUpdateSettings({
+      forceUpdateEnabled: b.forceUpdateEnabled === true,
+      minAndroidBuild: Number(b.minAndroidBuild),
+      minAndroidVersion: String(b.minAndroidVersion ?? ''),
+      latestAndroidVersion: String(b.latestAndroidVersion ?? ''),
+      latestAndroidBuild: Number(b.latestAndroidBuild),
+      playStoreUrl: String(b.playStoreUrl ?? ''),
+    });
     res.json({ ok: true });
   } catch (e) {
     next(e);

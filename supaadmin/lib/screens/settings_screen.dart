@@ -48,7 +48,7 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 3,
@@ -56,6 +56,39 @@ class SettingsScreen extends StatelessWidget {
               child: _CustomerCareCard(
                 digits: c.customerCareWhatsapp,
                 onSave: (raw) => context.read<AdminStore>().setCustomerCareWhatsapp(raw),
+              ),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          sliver: SliverToBoxAdapter(
+            child: StaggerEntrance(
+              index: 4,
+              slide: 12,
+              child: _AppUpdateCard(
+                forceUpdateEnabled: c.forceUpdateEnabled,
+                minBuild: c.minAndroidBuild,
+                minVersion: c.minAndroidVersion,
+                latestVersion: c.latestAndroidVersion,
+                latestBuild: c.latestAndroidBuild,
+                playStoreUrl: c.playStoreUrl,
+                onSave: ({
+                  required forceUpdateEnabled,
+                  required minBuild,
+                  required minVersion,
+                  required latestVersion,
+                  required latestBuild,
+                  required playStoreUrl,
+                }) =>
+                    context.read<AdminStore>().setAppUpdatePolicy(
+                          forceUpdateEnabled: forceUpdateEnabled,
+                          minAndroidBuild: minBuild,
+                          minAndroidVersion: minVersion,
+                          latestAndroidVersion: latestVersion,
+                          latestAndroidBuild: latestBuild,
+                          playStoreUrl: playStoreUrl,
+                        ),
               ),
             ),
           ),
@@ -479,6 +512,231 @@ class _CustomerCareCardState extends State<_CustomerCareCard> {
                   )
                 : const Icon(Icons.save_rounded),
             label: Text(saving ? 'Saving...' : 'Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AppUpdateCard extends StatefulWidget {
+  const _AppUpdateCard({
+    required this.forceUpdateEnabled,
+    required this.minBuild,
+    required this.minVersion,
+    required this.latestVersion,
+    required this.latestBuild,
+    required this.playStoreUrl,
+    required this.onSave,
+  });
+
+  final bool forceUpdateEnabled;
+  final int minBuild;
+  final String minVersion;
+  final String latestVersion;
+  final int latestBuild;
+  final String playStoreUrl;
+  final Future<void> Function({
+    required bool forceUpdateEnabled,
+    required int minBuild,
+    required String minVersion,
+    required String latestVersion,
+    required int latestBuild,
+    required String playStoreUrl,
+  }) onSave;
+
+  @override
+  State<_AppUpdateCard> createState() => _AppUpdateCardState();
+}
+
+class _AppUpdateCardState extends State<_AppUpdateCard> {
+  late bool _forceUpdate = widget.forceUpdateEnabled;
+  bool _saving = false;
+  bool _editing = false;
+  late final TextEditingController _buildCtrl =
+      TextEditingController(text: widget.minBuild > 0 ? '${widget.minBuild}' : '');
+  late final TextEditingController _versionCtrl = TextEditingController(text: widget.minVersion);
+  late final TextEditingController _latestVersionCtrl =
+      TextEditingController(text: widget.latestVersion);
+  late final TextEditingController _latestBuildCtrl =
+      TextEditingController(text: widget.latestBuild > 0 ? '${widget.latestBuild}' : '');
+  late final TextEditingController _storeCtrl = TextEditingController(text: widget.playStoreUrl);
+
+  @override
+  void initState() {
+    super.initState();
+    for (final c in [_buildCtrl, _versionCtrl, _latestVersionCtrl, _latestBuildCtrl, _storeCtrl]) {
+      c.addListener(_markEditing);
+    }
+  }
+
+  void _markEditing() {
+    if (!_editing && mounted) setState(() => _editing = true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AppUpdateCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_saving || _editing) return;
+    _forceUpdate = widget.forceUpdateEnabled;
+    _buildCtrl.text = widget.minBuild > 0 ? '${widget.minBuild}' : '';
+    _versionCtrl.text = widget.minVersion;
+    _latestVersionCtrl.text = widget.latestVersion;
+    _latestBuildCtrl.text = widget.latestBuild > 0 ? '${widget.latestBuild}' : '';
+    _storeCtrl.text = widget.playStoreUrl;
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_buildCtrl, _versionCtrl, _latestVersionCtrl, _latestBuildCtrl, _storeCtrl]) {
+      c.removeListener(_markEditing);
+    }
+    _buildCtrl.dispose();
+    _versionCtrl.dispose();
+    _latestVersionCtrl.dispose();
+    _latestBuildCtrl.dispose();
+    _storeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _editing = false;
+    });
+    try {
+      final build = int.tryParse(_buildCtrl.text.trim()) ?? 0;
+      final latestBuild = int.tryParse(_latestBuildCtrl.text.trim()) ?? 0;
+      await widget.onSave(
+        forceUpdateEnabled: _forceUpdate,
+        minBuild: build,
+        minVersion: _versionCtrl.text.trim(),
+        latestVersion: _latestVersionCtrl.text.trim(),
+        latestBuild: latestBuild,
+        playStoreUrl: _storeCtrl.text.trim(),
+      );
+      if (!mounted) return;
+      final err = context.read<AdminStore>().lastSyncError;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            err == null || err.isEmpty ? 'Sera ya update imehifadhiwa' : err,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AdminStore>();
+    final saving = _saving || store.savingAppUpdatePolicy;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFFe8002d).withValues(alpha: 0.16),
+            const Color(0xFF161a24),
+          ],
+        ),
+        border: Border.all(color: const Color(0xFFe8002d).withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.system_update_alt_rounded, color: Color(0xFFfb7185)),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Lazima ku update app',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _forceUpdate,
+            onChanged: saving
+                ? null
+                : (v) => setState(() {
+                      _forceUpdate = v;
+                      _editing = true;
+                    }),
+            title: const Text('Lazima ku update app'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            controller: _buildCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Build ya chini (versionCode)',
+              hintText: '14',
+              prefixIcon: Icon(Icons.numbers_rounded),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            controller: _versionCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Toleo la chini',
+              hintText: '1.1.8',
+              prefixIcon: Icon(Icons.new_releases_outlined),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            controller: _latestVersionCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Toleo jipya',
+              hintText: '1.2.0',
+              prefixIcon: Icon(Icons.upgrade_rounded),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            controller: _latestBuildCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Build jipya (hiari)',
+              hintText: '14',
+              prefixIcon: Icon(Icons.build_circle_outlined),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+            controller: _storeCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Play Store URL',
+              prefixIcon: Icon(Icons.shop_rounded),
+            ),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: saving ? null : _save,
+            icon: saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.save_rounded),
+            label: Text(saving ? 'Inahifadhi…' : 'Hifadhi sera ya update'),
           ),
         ],
       ),

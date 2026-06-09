@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
-import 'package:supasoka/player/channel_playback.dart';
+import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/player/php_gateway_js.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
@@ -23,9 +23,14 @@ const _kPlaybackUnavailableCopy =
     'Mafundi wetu wanafanyia kazi. Channel itarejea hivi punde.';
 
 class PlayerScreen extends StatefulWidget {
-  const PlayerScreen({super.key, required this.channelId});
+  const PlayerScreen({
+    super.key,
+    required this.channelId,
+    this.playbackSession,
+  });
 
   final int channelId;
+  final PlaybackSession? playbackSession;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -72,16 +77,45 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _bootstrap() async {
     final store = context.read<ContentStore>();
-    final ch = store.channelById(_channelId);
-    _channel = ch;
-    if (ch == null) {
-      setState(() {
-        _loading = false;
-        _issue = _PlayerIssue.missingChannel;
-      });
+    if (store.updateRequired) {
+      if (mounted) Navigator.of(context).pop();
       return;
     }
-    final url = ch.streamUrl.trim();
+
+    PlaybackSession? session = widget.playbackSession;
+    if (session == null && widget.channelId > 0) {
+      final ch = store.channelById(widget.channelId);
+      _channel = ch;
+      if (ch == null) {
+        setState(() {
+          _loading = false;
+          _issue = _PlayerIssue.missingChannel;
+        });
+        return;
+      }
+
+      final resolved = await resolveChannelPlayback(widget.channelId);
+      if (!mounted) return;
+      switch (resolved.code) {
+        case PlaybackResolveCode.updateRequired:
+          await store.applyServerUpdatePayload(resolved.updatePayload);
+          if (mounted) Navigator.of(context).pop();
+          return;
+        case PlaybackResolveCode.premiumRequired:
+          if (mounted) Navigator.of(context).pop();
+          return;
+        case PlaybackResolveCode.unavailable:
+          setState(() {
+            _loading = false;
+            _issue = _PlayerIssue.playbackUnavailable;
+          });
+          return;
+        case PlaybackResolveCode.ok:
+          session = resolved.session;
+      }
+    }
+
+    final url = session?.streamUrl.trim() ?? '';
     if (url.isEmpty) {
       setState(() {
         _loading = false;
@@ -97,9 +131,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       try {
         await NativeAndroidPlayer.open(
           url: url,
-          licenseUrl: ch.licenseUrl.trim(),
-          drmType: nativeDrmTypeFor(ch),
-          clearKeyHex: ch.clearKeyKidKey.trim(),
+          licenseUrl: session!.licenseUrl.trim(),
+          drmType: nativeDrmTypeForSession(session),
+          clearKeyHex: session.clearKeyKidKey.trim(),
           headers: playbackHttpHeaders(url),
         );
         if (mounted) Navigator.of(context).pop();

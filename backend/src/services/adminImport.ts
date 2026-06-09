@@ -215,6 +215,54 @@ export async function importAppConfig(body: unknown): Promise<void> {
       [wa],
     );
 
+    const minBuildRaw = Number((b as Record<string, unknown>).minAndroidBuild);
+    const minBuild =
+      Number.isFinite(minBuildRaw) && minBuildRaw > 0 ? Math.trunc(minBuildRaw) : 0;
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('minAndroidBuild', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [String(minBuild)],
+    );
+
+    const minVer = String((b as Record<string, unknown>).minAndroidVersion ?? '').trim();
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('minAndroidVersion', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [minVer],
+    );
+
+    const latestVer = String((b as Record<string, unknown>).latestAndroidVersion ?? '').trim();
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('latestAndroidVersion', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [latestVer],
+    );
+
+    const latestBuildRaw = Number((b as Record<string, unknown>).latestAndroidBuild);
+    const latestBuild =
+      Number.isFinite(latestBuildRaw) && latestBuildRaw > 0 ? Math.trunc(latestBuildRaw) : 0;
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('latestAndroidBuild', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [String(latestBuild)],
+    );
+
+    const forceUpdate = (b as Record<string, unknown>).forceUpdateEnabled === true ? 'true' : 'false';
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('forceUpdateEnabled', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [forceUpdate],
+    );
+
+    const playUrl = String((b as Record<string, unknown>).playStoreUrl ?? '').trim();
+    await client.query(
+      `INSERT INTO app_settings (key, value) VALUES ('playStoreUrl', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [
+        playUrl || 'https://play.google.com/store/apps/details?id=com.ayubu.supasoka',
+      ],
+    );
+
     const verRow = await client.query(`SELECT value FROM app_settings WHERE key = 'configVersion'`);
     let nextVer = 1;
     const rawV = verRow.rows[0]?.value;

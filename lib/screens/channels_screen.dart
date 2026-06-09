@@ -23,7 +23,6 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
   /// `all` | `free` | `premium` | category key (e.g. `football`, `mpira`).
   String _filterKey = 'all';
   String _query = '';
-  bool _searchOpen = false;
   final _searchFocus = FocusNode();
 
   @override
@@ -121,61 +120,45 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
               child: AppHeader(
                 title: 'Channels',
                 subtitle: 'ALL STREAMS',
-                onSearch: () {
-                  setState(() {
-                    _searchOpen = !_searchOpen;
-                    if (!_searchOpen) {
-                      _query = '';
-                      _searchFocus.unfocus();
-                    } else {
-                      Future.microtask(_searchFocus.requestFocus);
-                    }
-                  });
-                },
               ),
             ),
             SliverToBoxAdapter(
-              child: AnimatedCrossFade(
-                firstChild: const SizedBox.shrink(),
-                secondChild: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Container(
-                    height: 44,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: t.card,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _searchOpen ? t.accent : t.border, width: 1.5),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Ionicons.search_outline, size: 16, color: t.accent),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                            focusNode: _searchFocus,
-                            onChanged: (v) => setState(() => _query = v),
-                            style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text),
-                            decoration: InputDecoration(
-                              isDense: true,
-                              border: InputBorder.none,
-                              hintText: 'Search channels...',
-                              hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
-                            ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Container(
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: t.card,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: t.border, width: 1.5),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Ionicons.search_outline, size: 16, color: t.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                          focusNode: _searchFocus,
+                          onChanged: (v) => setState(() => _query = v),
+                          style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            hintText: 'Search channels...',
+                            hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
                           ),
                         ),
-                        if (_query.isNotEmpty)
-                          IconButton(
-                            onPressed: () => setState(() => _query = ''),
-                            icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
-                          ),
-                      ],
-                    ),
+                      ),
+                      if (_query.isNotEmpty)
+                        IconButton(
+                          onPressed: () => setState(() => _query = ''),
+                          icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
+                        ),
+                    ],
                   ),
                 ),
-                crossFadeState: _searchOpen ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                duration: const Duration(milliseconds: 220),
               ),
             ),
             SliverToBoxAdapter(

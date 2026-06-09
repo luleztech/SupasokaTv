@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
+import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/player_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
+import 'package:supasoka/services/playback_service.dart';
 
 String nativeDrmTypeFor(Channel channel) {
   final drm = channel.drm.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
@@ -24,10 +26,41 @@ String nativeDrmTypeFor(Channel channel) {
   }
 }
 
-/// Android: opens native player directly (skips Flutter [PlayerScreen]).
-/// Other platforms: [PlayerScreen].
+Future<void> _applyUpdatePayload(BuildContext context, Map<String, dynamic>? payload) async {
+  if (payload == null) return;
+  final store = context.read<ContentStore>();
+  await store.applyServerUpdatePayload(payload);
+}
+
+Future<bool> _openResolvedPlayback(BuildContext context, PlaybackSession session) async {
+  if (NativeAndroidPlayer.supported) {
+    await NativeAndroidPlayer.open(
+      url: session.streamUrl,
+      licenseUrl: session.licenseUrl.trim(),
+      drmType: nativeDrmTypeForSession(session),
+      clearKeyHex: session.clearKeyKidKey.trim(),
+      headers: playbackHttpHeaders(session.streamUrl),
+    );
+    return true;
+  }
+  if (!context.mounted) return false;
+  await Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => PlayerScreen(
+        channelId: 0,
+        playbackSession: session,
+      ),
+    ),
+  );
+  return true;
+}
+
+/// Resolves stream from server (build + premium checks) before opening the player.
 Future<void> openChannelPlayback(BuildContext context, int channelId) async {
-  final ch = context.read<ContentStore>().channelById(channelId);
+  final store = context.read<ContentStore>();
+  if (store.updateRequired) return;
+
+  final ch = store.channelById(channelId);
   if (ch == null) {
     if (!context.mounted) return;
     await Navigator.of(context).push<void>(
@@ -39,19 +72,28 @@ Future<void> openChannelPlayback(BuildContext context, int channelId) async {
 }
 
 Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel) async {
-  final url = channel.streamUrl.trim();
-  if (NativeAndroidPlayer.supported && url.isNotEmpty) {
-    await NativeAndroidPlayer.open(
-      url: url,
-      licenseUrl: channel.licenseUrl.trim(),
-      drmType: nativeDrmTypeFor(channel),
-      clearKeyHex: channel.clearKeyKidKey.trim(),
-      headers: playbackHttpHeaders(url),
-    );
-    return;
-  }
+  final store = context.read<ContentStore>();
+  if (store.updateRequired) return;
+
+  final resolved = await resolveChannelPlayback(channel.id);
   if (!context.mounted) return;
-  await Navigator.of(context).push<void>(
-    MaterialPageRoute<void>(builder: (_) => PlayerScreen(channelId: channel.id)),
-  );
+
+  switch (resolved.code) {
+    case PlaybackResolveCode.updateRequired:
+      await _applyUpdatePayload(context, resolved.updatePayload);
+      return;
+    case PlaybackResolveCode.premiumRequired:
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(builder: (_) => const PaymentScreen()),
+      );
+      return;
+    case PlaybackResolveCode.unavailable:
+      if (!context.mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(builder: (_) => PlayerScreen(channelId: channel.id)),
+      );
+      return;
+    case PlaybackResolveCode.ok:
+      await _openResolvedPlayback(context, resolved.session!);
+  }
 }

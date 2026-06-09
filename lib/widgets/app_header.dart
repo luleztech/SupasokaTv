@@ -12,7 +12,6 @@ class AppHeader extends StatelessWidget {
     this.subtitle,
     this.logoLetter = 'S',
     this.onSettings,
-    this.onSearch,
     this.rightSlot,
     this.leftSlot,
   });
@@ -21,7 +20,6 @@ class AppHeader extends StatelessWidget {
   final String? subtitle;
   final String logoLetter;
   final VoidCallback? onSettings;
-  final VoidCallback? onSearch;
   final Widget? rightSlot;
   final Widget? leftSlot;
 
@@ -47,35 +45,47 @@ class AppHeader extends StatelessWidget {
         children: [
           SizedBox(height: top + 8),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (leftSlot != null) ...[leftSlot!, const SizedBox(width: 10)],
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: t.accent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    logoLetter,
-                    style: inter(18, weight: FontWeight.w900).copyWith(
-                      color: Colors.white,
-                      fontStyle: FontStyle.italic,
-                      height: 1,
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (leftSlot != null) ...[leftSlot!, const SizedBox(width: 10)],
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: t.accent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            logoLetter,
+                            style: inter(18, weight: FontWeight.w900).copyWith(
+                              color: Colors.white,
+                              fontStyle: FontStyle.italic,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
                 Expanded(
+                  flex: 2,
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Text(
                         title.toUpperCase(),
+                        textAlign: TextAlign.center,
                         style: inter(21, weight: FontWeight.w900).copyWith(
                           color: t.accent,
                           letterSpacing: -1,
@@ -86,6 +96,7 @@ class AppHeader extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           subtitle!,
+                          textAlign: TextAlign.center,
                           style: rajdhani(10, weight: FontWeight.w700).copyWith(
                             color: const Color(0xFFa1a1aa),
                             letterSpacing: 2,
@@ -95,20 +106,22 @@ class AppHeader extends StatelessWidget {
                     ],
                   ),
                 ),
-                ...?(rightSlot == null ? null : <Widget>[rightSlot as Widget]),
-                if (onSettings != null)
-                  _IconBtn(
-                    onTap: onSettings!,
-                    child: Icon(Ionicons.settings_outline, size: 18, color: const Color(0xFFd4d4d8)),
-                  ),
-                if (onSearch != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: _IconBtn(
-                      onTap: onSearch!,
-                      child: Icon(Ionicons.search_outline, size: 18, color: const Color(0xFFd4d4d8)),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ...?(rightSlot == null ? null : <Widget>[rightSlot as Widget]),
+                        if (onSettings != null)
+                          _IconBtn(
+                            onTap: onSettings!,
+                            child: Icon(Ionicons.settings_outline, size: 18, color: const Color(0xFFd4d4d8)),
+                          ),
+                      ],
                     ),
                   ),
+                ),
               ],
             ),
           ),

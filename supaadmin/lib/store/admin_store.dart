@@ -50,6 +50,7 @@ class AdminStore extends ChangeNotifier {
 
   String? _lastSyncError;
   bool _syncing = false;
+  bool _savingAppUpdatePolicy = false;
   Timer? _syncRetryTimer;
   Map<String, int> _paymentHealthSummary = const {};
   List<Map<String, String?>> _paymentHealthRecent = const [];
@@ -69,6 +70,7 @@ class AdminStore extends ChangeNotifier {
   String? get lastSyncError => _lastSyncError;
 
   bool get syncingToServer => _syncing;
+  bool get savingAppUpdatePolicy => _savingAppUpdatePolicy;
   Map<String, int> get paymentHealthSummary => _paymentHealthSummary;
   List<Map<String, String?>> get paymentHealthRecent => _paymentHealthRecent;
   bool get loadingPaymentHealth => _loadingPaymentHealth;
@@ -598,6 +600,72 @@ class AdminStore extends ChangeNotifier {
   Future<void> setCustomerCareWhatsapp(String raw) async {
     _config.customerCareWhatsapp = normalizeCustomerCareWhatsapp(raw);
     await _persist();
+  }
+
+  Future<void> setAppUpdatePolicy({
+    required bool forceUpdateEnabled,
+    required int minAndroidBuild,
+    required String minAndroidVersion,
+    required String latestAndroidVersion,
+    required int latestAndroidBuild,
+    String? playStoreUrl,
+  }) async {
+    _config.forceUpdateEnabled = forceUpdateEnabled;
+    _config.minAndroidBuild = minAndroidBuild < 0 ? 0 : minAndroidBuild;
+    _config.minAndroidVersion = minAndroidVersion.trim();
+    _config.latestAndroidVersion = latestAndroidVersion.trim();
+    _config.latestAndroidBuild = latestAndroidBuild < 0 ? 0 : latestAndroidBuild;
+    final storeUrl = playStoreUrl?.trim() ?? '';
+    if (storeUrl.isNotEmpty) {
+      _config.playStoreUrl = storeUrl;
+    }
+
+    await _saveLocalConfigOnly();
+
+    if (!hasAdminSession) return;
+
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/settings/app-update');
+    _savingAppUpdatePolicy = true;
+    _lastSyncError = null;
+    notifyListeners();
+
+    try {
+      final res = await http
+          .put(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({
+              'forceUpdateEnabled': forceUpdateEnabled,
+              'minAndroidBuild': _config.minAndroidBuild,
+              'minAndroidVersion': _config.minAndroidVersion,
+              'latestAndroidVersion': _config.latestAndroidVersion,
+              'latestAndroidBuild': _config.latestAndroidBuild,
+              'playStoreUrl': _config.playStoreUrl,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        _lastSyncError = 'Unauthorized — login again with your admin password.';
+      } else if (res.statusCode >= 200 && res.statusCode < 300) {
+        _lastSyncError = null;
+      } else if (res.statusCode == 404) {
+        // Older backend without fast route — fall back once to full import.
+        await _pushConfigToServer();
+      } else {
+        _lastSyncError =
+            'Update policy save failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
+      }
+    } catch (e) {
+      _lastSyncError = 'Update policy save failed: $e';
+    } finally {
+      _savingAppUpdatePolicy = false;
+      notifyListeners();
+      if (_lastSyncError != null && _lastSyncError!.isNotEmpty) {
+        _snack(_lastSyncError!);
+      }
+    }
   }
 
   Future<void> upsertChannel(ChannelDto c) async {

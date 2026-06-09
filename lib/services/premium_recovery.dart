@@ -192,8 +192,6 @@ class PremiumRecovery {
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
-      } else {
-        await SubscriptionStore.activatePlan(planId);
       }
 
       if (phone.isNotEmpty) {

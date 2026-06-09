@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/main_shell.dart';
+import 'package:supasoka/screens/force_update_screen.dart';
 import 'package:supasoka/screens/loader_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/push_notification_service.dart';
@@ -151,7 +152,11 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
     if (state == AppLifecycleState.resumed && _loaded && mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        context.read<ContentStore>().refresh();
+        unawaited(() async {
+          await context.read<ContentStore>().checkUpdateFromServer();
+          if (!mounted) return;
+          await context.read<ContentStore>().refresh();
+        }());
         unawaited(
           UserIdentity.registerWithBackend().then((_) async {
             final pid = await UserIdentity.getOrCreatePublicId();
@@ -177,6 +182,22 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
         onDone: () => setState(() => _loaded = true),
       );
     }
+
+    final store = context.watch<ContentStore>();
+    if (store.updateRequired) {
+      final update = store.appUpdateStatus;
+      return ForceUpdateScreen(
+        currentVersion: update.currentVersion,
+        currentBuild: update.currentBuild,
+        minVersion: update.minVersion,
+        latestVersion: update.latestVersion,
+        minBuild: update.minBuild,
+        latestBuild: update.latestBuild,
+        playStoreUrl: update.playStoreUrl,
+        onRecheck: () => store.checkUpdateFromServer(),
+      );
+    }
+
     if (!_notifPromptChecked) {
       _notifPromptChecked = true;
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAskNotificationPermission());
