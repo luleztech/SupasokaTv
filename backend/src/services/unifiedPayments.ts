@@ -289,6 +289,10 @@ type ActivateOverrides = {
   phone?: string;
 };
 
+function isPremiumUntilActive(until: number | null | undefined): until is number {
+  return until != null && Number.isFinite(until) && until > Date.now();
+}
+
 function resolveOrderIdentity(
   orderId: string,
   intent: Awaited<ReturnType<typeof getIntent>>,
@@ -339,7 +343,10 @@ export async function activatePremiumIfCompletedOrder(
   if (intent?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
     const until = await getUserPremiumStatus(identity.publicId);
-    return { activated: true, premiumUntilMs: until ?? undefined };
+    if (isPremiumUntilActive(until)) {
+      return { activated: true, premiumUntilMs: until };
+    }
+    // Intent marked paid but premium missing/expired — re-grant below when provider confirms paid.
   }
 
   const gateway = await resolveGatewayForOrder(orderId);
@@ -363,23 +370,32 @@ export async function ensurePremiumActivatedForPaidOrder(
   const trimmed = orderId.trim();
   if (!trimmed) return { activated: false };
 
-  let act = await activatePremiumIfCompletedOrder(trimmed, overrides);
-  if (act.activated && act.premiumUntilMs != null) return act;
-
   const intent = await getIntent(trimmed);
   const identity = resolveOrderIdentity(trimmed, intent, overrides);
   if (!identity.publicId || !identity.planId) {
     logger.warn({ orderId: trimmed }, 'payment_force_activate_missing_metadata');
     return { activated: false };
   }
-  if (intent?.activated_at_ms != null) {
-    const { getUserPremiumStatus } = await import('./userDirectory');
-    const until = await getUserPremiumStatus(identity.publicId);
-    return { activated: true, premiumUntilMs: until ?? undefined };
+
+  const { getUserPremiumStatus } = await import('./userDirectory');
+  const existingUntil = await getUserPremiumStatus(identity.publicId);
+  if (isPremiumUntilActive(existingUntil)) {
+    return { activated: true, premiumUntilMs: existingUntil };
   }
+
+  const act = await activatePremiumIfCompletedOrder(trimmed, overrides);
+  if (act.activated && isPremiumUntilActive(act.premiumUntilMs)) return act;
 
   try {
     const gateway = await resolveGatewayForOrder(trimmed);
+    if (intent?.activated_at_ms != null) {
+      const out = await writePremiumForOrder(trimmed, gateway, identity);
+      return { activated: true, premiumUntilMs: out.premiumUntilMs };
+    }
+    const ps = await resolvePaidStatusForOrder(trimmed, gateway);
+    if (!isPaymentCompletedStatus(ps)) {
+      return { activated: false };
+    }
     const out = await writePremiumForOrder(trimmed, gateway, identity);
     return { activated: true, premiumUntilMs: out.premiumUntilMs };
   } catch (e) {
@@ -402,14 +418,16 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
 
   const local = await getIntent(trimmed);
   if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
-    const { getUserPremiumStatus } = await import('./userDirectory');
-    const until = local.public_id ? await getUserPremiumStatus(local.public_id) : null;
+    const act = await ensurePremiumActivatedForPaidOrder(trimmed, {
+      publicId: local?.public_id ?? undefined,
+      planId: local?.plan_id ?? undefined,
+    });
     return {
       status: 'COMPLETED',
       resultcode: '000',
       raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
-      activated: true,
-      premiumUntilMs: until ?? undefined,
+      activated: act.activated,
+      premiumUntilMs: act.premiumUntilMs,
     };
   }
 
@@ -490,7 +508,12 @@ export async function confirmPremiumForOrder(args: {
   if (tracked?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
     const until = await getUserPremiumStatus(publicId);
-    return { premiumUntilMs: until ?? Date.now() };
+    if (isPremiumUntilActive(until)) {
+      return { premiumUntilMs: until };
+    }
+    const gateway = await resolveGatewayForOrder(orderId);
+    const out = await writePremiumForOrder(orderId, gateway, { publicId, planId, phone });
+    return { premiumUntilMs: out.premiumUntilMs };
   }
 
   const gateway = await resolveGatewayForOrder(orderId);

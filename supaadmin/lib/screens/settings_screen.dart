@@ -599,6 +599,15 @@ class _AppUpdateCardState extends State<_AppUpdateCard> {
     super.dispose();
   }
 
+  void _syncFieldsFromWidget() {
+    _forceUpdate = widget.forceUpdateEnabled;
+    _buildCtrl.text = widget.minBuild > 0 ? '${widget.minBuild}' : '';
+    _versionCtrl.text = widget.minVersion;
+    _latestVersionCtrl.text = widget.latestVersion;
+    _latestBuildCtrl.text = widget.latestBuild > 0 ? '${widget.latestBuild}' : '';
+    _storeCtrl.text = widget.playStoreUrl;
+  }
+
   Future<void> _save() async {
     if (_saving) return;
     setState(() {
@@ -617,7 +626,11 @@ class _AppUpdateCardState extends State<_AppUpdateCard> {
         playStoreUrl: _storeCtrl.text.trim(),
       );
       if (!mounted) return;
-      final err = context.read<AdminStore>().lastSyncError;
+      final store = context.read<AdminStore>();
+      final err = store.lastSyncError;
+      if (mounted) {
+        setState(_syncFieldsFromWidget);
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(

@@ -58,8 +58,9 @@ class PremiumRecovery {
             final j = jsonDecode(res.body) as Map<String, dynamic>;
             if (j['ok'] == true) {
               final raw = j['premiumUntilMs'];
-              if (raw is int) return raw;
-              if (raw is num) return raw.toInt();
+              final nowMs = DateTime.now().millisecondsSinceEpoch;
+              if (raw is int && raw > nowMs) return raw;
+              if (raw is num && raw.toInt() > nowMs) return raw.toInt();
             }
           } catch (_) {}
         } else if (res.statusCode == 402 && attempt < 4) {
@@ -174,24 +175,18 @@ class PremiumRecovery {
         );
       }
 
-      // Final guard: if backend already knows this user has no premium, do not re-grant locally.
       if (serverUntilMs == null) {
         final rec = await fetchUserPremiumRecord(publicId);
-        if (rec.userExists) {
-          if (rec.premiumUntilMs != null) {
-            await SubscriptionStore.setPremiumUntilMs(rec.premiumUntilMs!);
-            await _clearPendingOrderPrefs();
-            await SubscriptionStore.refreshNotifierFromPrefs();
-            return true;
-          }
-          await _clearPendingOrderPrefs();
-          await SubscriptionStore.refreshNotifierFromPrefs();
-          return false;
+        if (rec.premiumUntilMs != null) {
+          serverUntilMs = rec.premiumUntilMs;
         }
       }
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+      } else {
+        // Provider confirmed paid but server activation lagged — unlock locally for the selected plan.
+        await SubscriptionStore.activatePlan(planId);
       }
 
       if (phone.isNotEmpty) {

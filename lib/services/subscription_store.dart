@@ -34,9 +34,11 @@ class SubscriptionStore {
 
   /// Sets expiry from server confirmation (same source as admin / other devices).
   static Future<void> setPremiumUntilMs(int premiumUntilMs) async {
+    final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+    if (!end.isAfter(DateTime.now())) return;
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kUntilMs, premiumUntilMs);
-    premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+    premiumUntilNotifier.value = end;
   }
 
   /// Stacks on top of an active subscription if still valid. Prefer server [confirm-zeno-premium] for exact duration from admin malipo row.
@@ -106,27 +108,39 @@ class SubscriptionStore {
       final localActive = localEnd != null && localEnd.isAfter(now);
 
       if (premiumUntilMs != null) {
-        // Existing backend user: server timestamp is the exact source of truth.
-        // This guarantees correct weekly/monthly/3-month durations and exact expiry time.
-        await p.setInt(_kUntilMs, premiumUntilMs);
-        premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+        final serverEnd = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+        final serverActive = serverEnd.isAfter(now);
+
+        if (serverActive) {
+          // Prefer the later expiry (covers stacking and transient server lag).
+          final bestMs = localActive && localEnd!.isAfter(serverEnd)
+              ? localEnd.millisecondsSinceEpoch
+              : premiumUntilMs;
+          await p.setInt(_kUntilMs, bestMs);
+          premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(bestMs);
+          return;
+        }
+
+        // Server timestamp is in the past — subscription ended.
+        if (localActive) {
+          // Keep local grant until its own expiry if server briefly disagrees.
+          premiumUntilNotifier.value = localEnd;
+          return;
+        }
+
+        await p.remove(_kUntilMs);
+        await p.remove(_kPlanId);
+        premiumUntilNotifier.value = null;
         return;
       }
 
-      // Server has no premium:
-      // - if user exists, trust backend immediately (admin remove should apply fast);
-      // - keep local premium only for users not yet created on backend while payment is pending.
+      // Server has no premium timestamp — keep an active local subscription until it expires.
       if (localActive) {
-        if (!userExists) {
-          final hasPending = await PremiumRecovery.hasRecentPendingPayment();
-          if (hasPending) {
-            premiumUntilNotifier.value = localEnd;
-            return;
-          }
-        }
+        premiumUntilNotifier.value = localEnd;
+        return;
       }
 
-      // Backend explicitly says this existing user has no premium: clear stale local pending grants too.
+      // Backend says no premium and local is expired/absent.
       if (userExists) {
         await PremiumRecovery.clearPendingPaymentState();
       }

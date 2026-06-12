@@ -45,7 +45,11 @@ adminRouter.post('/import', requireAdmin, async (req, res, next) => {
 });
 
 /** Fast settings save — app update policy only (no full catalog re-import). */
-adminRouter.put('/settings/app-update', requireAdmin, async (req, res, next) => {
+async function handleAppUpdateSettingsSave(
+  req: import('express').Request,
+  res: import('express').Response,
+  next: import('express').NextFunction,
+): Promise<void> {
   try {
     const b = (req.body ?? {}) as Record<string, unknown>;
     await importAppUpdateSettings({
@@ -60,7 +64,10 @@ adminRouter.put('/settings/app-update', requireAdmin, async (req, res, next) => 
   } catch (e) {
     next(e);
   }
-});
+}
+
+adminRouter.put('/settings/app-update', requireAdmin, handleAppUpdateSettingsSave);
+adminRouter.post('/settings/app-update', requireAdmin, handleAppUpdateSettingsSave);
 
 adminRouter.get('/users', requireAdmin, async (_req, res, next) => {
   try {

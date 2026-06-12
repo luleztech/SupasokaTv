@@ -304,7 +304,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
          ON CONFLICT (id) DO UPDATE SET
            profile_username = COALESCE(NULLIF(TRIM(EXCLUDED.profile_username), ''), users.profile_username),
            legacy_user_id = COALESCE(EXCLUDED.legacy_user_id, users.legacy_user_id),
-           premium_until_ms = EXCLUDED.premium_until_ms,
+           premium_until_ms = COALESCE(EXCLUDED.premium_until_ms, users.premium_until_ms),
            note = EXCLUDED.note,
            updated_at = now()`,
         [

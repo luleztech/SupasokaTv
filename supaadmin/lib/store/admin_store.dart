@@ -12,6 +12,7 @@ import '../models/app_config.dart';
 const _prefsKey = 'supaadmin_app_config_v2';
 const _prefsKeyLegacy = 'supaadmin_app_config_v1';
 const _prefsJwt = 'supaadmin_jwt_v1';
+const _prefsKeyAppUpdate = 'supaadmin_app_update_policy_v1';
 
 AppConfig _emptyProductionConfig() {
   return AppConfig(
@@ -35,6 +36,34 @@ bool _looksLikeBundledDemo(AppConfig c) {
     return true;
   }
   return false;
+}
+
+Map<String, dynamic> _appUpdateSnapshot(AppConfig c) => {
+      'forceUpdateEnabled': c.forceUpdateEnabled,
+      'minAndroidBuild': c.minAndroidBuild,
+      'minAndroidVersion': c.minAndroidVersion,
+      'latestAndroidVersion': c.latestAndroidVersion,
+      'latestAndroidBuild': c.latestAndroidBuild,
+      'playStoreUrl': c.playStoreUrl,
+    };
+
+bool _appUpdateIsMeaningful(Map<String, dynamic> m) {
+  if (m['forceUpdateEnabled'] == true) return true;
+  if (((m['minAndroidBuild'] as num?)?.toInt() ?? 0) > 0) return true;
+  if ((m['minAndroidVersion'] as String? ?? '').trim().isNotEmpty) return true;
+  if ((m['latestAndroidVersion'] as String? ?? '').trim().isNotEmpty) return true;
+  if (((m['latestAndroidBuild'] as num?)?.toInt() ?? 0) > 0) return true;
+  return false;
+}
+
+void _applyAppUpdateSnapshot(AppConfig c, Map<String, dynamic> m) {
+  c.forceUpdateEnabled = m['forceUpdateEnabled'] == true;
+  c.minAndroidBuild = (m['minAndroidBuild'] as num?)?.toInt() ?? 0;
+  c.minAndroidVersion = (m['minAndroidVersion'] as String? ?? '').trim();
+  c.latestAndroidVersion = (m['latestAndroidVersion'] as String? ?? '').trim();
+  c.latestAndroidBuild = (m['latestAndroidBuild'] as num?)?.toInt() ?? 0;
+  final url = (m['playStoreUrl'] as String? ?? '').trim();
+  if (url.isNotEmpty) c.playStoreUrl = url;
 }
 
 class AdminStore extends ChangeNotifier {
@@ -118,6 +147,65 @@ class AdminStore extends ChangeNotifier {
     };
   }
 
+  Future<Map<String, dynamic>?> _readAppUpdatePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKeyAppUpdate);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      await prefs.remove(_prefsKeyAppUpdate);
+      return null;
+    }
+  }
+
+  Future<void> _writeAppUpdatePrefs(AppConfig c) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeyAppUpdate, jsonEncode(_appUpdateSnapshot(c)));
+  }
+
+  Future<void> _overlayAppUpdateFromPrefs() async {
+    final saved = await _readAppUpdatePrefs();
+    if (saved != null && _appUpdateIsMeaningful(saved)) {
+      _applyAppUpdateSnapshot(_config, saved);
+    }
+  }
+
+  Future<bool> _pushAppUpdatePolicyToServer() async {
+    if (!hasAdminSession) return false;
+
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/settings/app-update');
+    final headers = _authHeaders(contentType: 'application/json');
+    final body = jsonEncode(_appUpdateSnapshot(_config));
+
+    Future<http.Response> sendPut() =>
+        http.put(uri, headers: headers, body: body).timeout(const Duration(seconds: 20));
+    Future<http.Response> sendPost() =>
+        http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 20));
+
+    for (final send in [sendPut, sendPost]) {
+      try {
+        final res = await send();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          _lastSyncError = null;
+          return true;
+        }
+        if (res.statusCode != 404 && res.statusCode != 405) {
+          _lastSyncError =
+              'Update policy save failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
+          return false;
+        }
+      } catch (e) {
+        _lastSyncError = 'Update policy save failed: $e';
+        return false;
+      }
+    }
+
+    await _pushConfigToServer();
+    return _lastSyncError == null || _lastSyncError!.isEmpty;
+  }
+
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     await p.remove('supaadmin_admin_jwt_v1');
@@ -152,7 +240,10 @@ class AdminStore extends ChangeNotifier {
       _config = _emptyProductionConfig();
     }
 
+    await _overlayAppUpdateFromPrefs();
+
     await p.setString(_prefsKey, _config.toJsonString());
+    await _writeAppUpdatePrefs(_config);
     await p.remove(_prefsKeyLegacy);
 
     _loaded = true;
@@ -284,6 +375,8 @@ class AdminStore extends ChangeNotifier {
       }
       j.remove('ok');
       j.remove('configSyncedAt');
+      final beforePull = _appUpdateSnapshot(_config);
+      final savedPrefs = await _readAppUpdatePrefs();
       try {
         _config = AppConfig.fromJson(j);
       } catch (e, st) {
@@ -295,8 +388,21 @@ class AdminStore extends ChangeNotifier {
         notifyListeners();
         return;
       }
+
+      final fromServer = _appUpdateSnapshot(_config);
+      if (_appUpdateIsMeaningful(fromServer)) {
+        _applyAppUpdateSnapshot(_config, fromServer);
+      } else {
+        final keep = savedPrefs ?? beforePull;
+        if (_appUpdateIsMeaningful(keep)) {
+          _applyAppUpdateSnapshot(_config, keep);
+          unawaited(_pushAppUpdatePolicyToServer());
+        }
+      }
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefsKey, _config.toJsonString());
+      await _writeAppUpdatePrefs(_config);
       _lastSyncError = null;
       notifyListeners();
     } catch (e) {
@@ -584,6 +690,7 @@ class AdminStore extends ChangeNotifier {
     _normalizeConfigForServer();
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsKey, _config.toJsonString());
+    await _writeAppUpdatePrefs(_config);
     notifyListeners();
   }
 
@@ -620,45 +727,17 @@ class AdminStore extends ChangeNotifier {
       _config.playStoreUrl = storeUrl;
     }
 
+    await _writeAppUpdatePrefs(_config);
     await _saveLocalConfigOnly();
 
     if (!hasAdminSession) return;
 
-    final base = resolvedApiBaseUrl;
-    final uri = Uri.parse('$base/api/v1/admin/settings/app-update');
     _savingAppUpdatePolicy = true;
     _lastSyncError = null;
     notifyListeners();
 
     try {
-      final res = await http
-          .put(
-            uri,
-            headers: _authHeaders(contentType: 'application/json'),
-            body: jsonEncode({
-              'forceUpdateEnabled': forceUpdateEnabled,
-              'minAndroidBuild': _config.minAndroidBuild,
-              'minAndroidVersion': _config.minAndroidVersion,
-              'latestAndroidVersion': _config.latestAndroidVersion,
-              'latestAndroidBuild': _config.latestAndroidBuild,
-              'playStoreUrl': _config.playStoreUrl,
-            }),
-          )
-          .timeout(const Duration(seconds: 20));
-
-      if (res.statusCode == 401 || res.statusCode == 403) {
-        _lastSyncError = 'Unauthorized — login again with your admin password.';
-      } else if (res.statusCode >= 200 && res.statusCode < 300) {
-        _lastSyncError = null;
-      } else if (res.statusCode == 404) {
-        // Older backend without fast route — fall back once to full import.
-        await _pushConfigToServer();
-      } else {
-        _lastSyncError =
-            'Update policy save failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
-      }
-    } catch (e) {
-      _lastSyncError = 'Update policy save failed: $e';
+      await _pushAppUpdatePolicyToServer();
     } finally {
       _savingAppUpdatePolicy = false;
       notifyListeners();

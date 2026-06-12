@@ -628,6 +628,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+      } else if (planId != null && planId.isNotEmpty) {
+        // Provider confirmed paid but server activation lagged — grant local premium for selected plan.
+        await SubscriptionStore.activatePlan(planId);
       }
       SubscriptionStore.refreshNotifierFromPrefs();
       if (serverUntilMs != null) {
