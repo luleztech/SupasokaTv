@@ -1,6 +1,12 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
+import {
+  isPaymentRateLimitError,
+  isRecoverablePaymentCreateError,
+  paymentRateLimitUserMessage,
+} from '../lib/paymentProviderErrors';
+import { formatPhoneToIntl255, phoneCandidatesForPaymentApi } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 28_000;
@@ -147,18 +153,12 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
 /** Local 0… for DB; Sonic API often wants 255…. */
 export function formatPhoneForSonicPesaApi(local0: string): string {
   if (env.sonicSendLocalPhone) return local0;
-  let intl = local0;
-  if (local0.startsWith('0')) intl = `255${local0.slice(1)}`;
-  else if (local0.startsWith('+255')) intl = local0.slice(1);
-  if (intl.startsWith('255') && intl.length > 12) intl = intl.slice(0, 12);
-  return intl;
+  return formatPhoneToIntl255(local0);
 }
 
 export function sonicPhoneCandidatesForApi(local0: string): string[] {
-  const api255 = formatPhoneForSonicPesaApi(local0);
-  const isHalotel = local0.startsWith('061') || local0.startsWith('062') || local0.startsWith('063');
-  if (isHalotel) return [...new Set([local0, api255].filter(Boolean))];
-  return [...new Set([api255, local0].filter((p) => p.length > 0))];
+  if (env.sonicSendLocalPhone) return [local0];
+  return phoneCandidatesForPaymentApi(local0);
 }
 
 const SONIC_STK_FAILURE_CODES = new Set([
@@ -225,6 +225,22 @@ export async function tryCreateSonicOrder(args: {
           raw: last.data,
         };
       }
+
+      const errorMessage = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
+      const errorCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+      if (isPaymentRateLimitError(errorMessage, errorCode)) {
+        return {
+          ok: false,
+          orderId: '',
+          message: paymentRateLimitUserMessage(),
+          raw: last.data,
+          errorMessage: paymentRateLimitUserMessage(),
+          errorCode,
+        };
+      }
+      if (!isRecoverablePaymentCreateError(errorMessage, errorCode)) {
+        break;
+      }
     } catch (e) {
       last = {
         response: new Response(null, { status: 502 }),
@@ -235,6 +251,16 @@ export async function tryCreateSonicOrder(args: {
 
   const errorMessage = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
   const errorCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+  if (isPaymentRateLimitError(errorMessage, errorCode)) {
+    return {
+      ok: false,
+      orderId: '',
+      message: paymentRateLimitUserMessage(),
+      raw: last.data,
+      errorMessage: paymentRateLimitUserMessage(),
+      errorCode,
+    };
+  }
   return {
     ok: false,
     orderId: '',

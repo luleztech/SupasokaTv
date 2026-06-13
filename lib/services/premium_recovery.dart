@@ -35,7 +35,7 @@ class PremiumRecovery {
       Uri.parse('$origin/api/v1/public/confirm-premium'),
       Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
     ];
-    for (var attempt = 0; attempt < 5; attempt++) {
+    for (var attempt = 0; attempt < 3; attempt++) {
       final uri = uris[attempt < uris.length ? (attempt % uris.length) : 0];
       try {
         final res = await http
@@ -66,8 +66,8 @@ class PremiumRecovery {
               if (raw is num && raw.toInt() > nowMs) return raw.toInt();
             }
           } catch (_) {}
-        } else if (res.statusCode == 402 && attempt < 4) {
-          await Future<void>.delayed(Duration(milliseconds: 900 + (attempt * 600)));
+        } else if (res.statusCode == 402 && attempt < 2) {
+          await Future<void>.delayed(Duration(milliseconds: 1500 + (attempt * 800)));
           continue;
         }
       } catch (e) {

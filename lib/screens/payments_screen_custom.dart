@@ -309,7 +309,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           return;
         }
         confirmProbeTick++;
-        if (confirmProbeTick % 3 == 0) {
+        if (confirmProbeTick % 10 == 0) {
           try {
             final probe = await _probeConfirmWhilePending(orderId);
             if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
@@ -487,6 +487,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         lower.contains('failed host') ||
         lower.contains('timed out')) {
       return 'Hakuna muunganisho thabiti. Washa data ya simu au Wi-Fi, kisha ujaribu tena.';
+    }
+    if (lower.contains('too many') ||
+        lower.contains('many attempt') ||
+        lower.contains('rate limit') ||
+        lower.contains('try again later')) {
+      return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
     }
     if (lower.contains('401') || lower.contains('403')) {
       return 'Ombi halikuidhinishwa. Fungua tena programu kisha ujaribu.';

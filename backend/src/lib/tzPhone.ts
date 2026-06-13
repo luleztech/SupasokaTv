@@ -67,6 +67,76 @@ export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
   return { local: s };
 }
 
+/** International MSISDN for payment gateways (`2557XXXXXXXX`). */
+export function formatPhoneToIntl255(local0: string): string {
+  let digits = String(local0 ?? '').replace(/\D/g, '');
+  if (digits.startsWith('0')) digits = `255${digits.slice(1)}`;
+  else if (!digits.startsWith('255')) digits = `255${digits}`;
+  if (digits.length > 12) digits = digits.slice(0, 12);
+  return digits;
+}
+
+/**
+ * Phone formats to try with Zeno/Sonic (order matters by network).
+ * Avoids sending duplicate STK when the first attempt already succeeded upstream.
+ */
+export function phoneCandidatesForPaymentApi(local0: string): string[] {
+  const local0fmt = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  if (!/^0[1-9]\d{8}$/.test(local0fmt)) return [local0fmt].filter(Boolean);
+  const intl255 = formatPhoneToIntl255(local0fmt);
+
+  const isHalotel = /^06[123]/.test(local0fmt);
+  const isVodacom = /^07[45679]/.test(local0fmt) && !/^078/.test(local0fmt);
+  const isAirtel = /^06[89]/.test(local0fmt) || /^078/.test(local0fmt);
+
+  let ordered: string[];
+  if (isHalotel) ordered = [local0fmt, intl255];
+  else if (isVodacom) ordered = [intl255, local0fmt];
+  else if (isAirtel) ordered = [local0fmt, intl255];
+  else ordered = [local0fmt, intl255];
+
+  return [...new Set(ordered.filter((p) => p.length > 0))];
+}
+
+/** Wallet providers to try (primary first, then auto-detect). */
+export function zenoWalletProviderCandidates(localPhone0: string): (string | undefined)[] {
+  if (process.env.ZENO_SEND_PROVIDER === '0') return [undefined];
+  const p = String(localPhone0 || '').trim();
+  const out: (string | undefined)[] = [];
+  const add = (v?: string) => {
+    if (v == null) {
+      if (!out.some((x) => x === undefined)) out.push(undefined);
+      return;
+    }
+    const s = v.trim();
+    if (!s || out.includes(s)) return;
+    out.push(s);
+  };
+
+  add(zenoWalletProviderForLocalPhone(p));
+
+  if (/^06[123]/.test(p)) {
+    add('HALOPESA');
+    add('HALOTEL PESA');
+  } else if (/^07[45679]/.test(p) && !/^078/.test(p)) {
+    add('M-PESA');
+    add('MPESA');
+  } else if (/^06[589]/.test(p) || /^078/.test(p)) {
+    add('AIRTEL MONEY');
+    add('AIRTELMONEY');
+  } else if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) {
+    add('TIGOPESA');
+    add('TIGO PESA');
+    add('TIGO');
+  } else {
+    add('TIGOPESA');
+    add('M-PESA');
+    add('AIRTEL MONEY');
+  }
+  add(undefined);
+  return out;
+}
+
 /** ZenoPay wallet provider hint from local `07…` number. */
 export function zenoWalletProviderForLocalPhone(localPhone0: string): string | undefined {
   const p = String(localPhone0 || '');

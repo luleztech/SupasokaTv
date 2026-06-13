@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { createZenoOrder, fetchZenoOrderStatus } from './zenoPay';
+import { fetchZenoOrderStatus, tryCreateZenoOrder } from './zenoPay';
 import {
   fetchSonicOrderStatus,
   isSonicPaymentCompleted,
@@ -23,7 +23,6 @@ import {
 } from './paymentIntents';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
-import { env } from '../config/env';
 import { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
@@ -229,25 +228,29 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   }
 
   const orderId = (input.orderId ?? randomUUID()).trim();
-  const zenoBody: Record<string, unknown> = {
-    order_id: orderId,
-    buyer_email: buyerEmail,
-    buyer_name: buyerName,
+  const metadata = {
+    plan_id: input.planId,
+    external_id: input.publicId,
+    public_id: input.publicId,
     buyer_phone: localPhone,
-    amount: amountTzs,
-    metadata: {
-      plan_id: input.planId,
-      external_id: input.publicId,
-      public_id: input.publicId,
-      buyer_phone: localPhone,
-    },
   };
-  if (env.zenoWebhookUrl.trim()) {
-    zenoBody.webhook_url = env.zenoWebhookUrl.trim();
-  }
 
-  const out = await createZenoOrder(zenoBody);
-  const pollId = String(out.order_id ?? out.orderId ?? orderId).trim() || orderId;
+  const zeno = await tryCreateZenoOrder({
+    orderId,
+    buyerEmail,
+    buyerName,
+    localPhone,
+    amountTzs,
+    metadata,
+  });
+  if (!zeno.ok || !zeno.orderId) {
+    throw new HttpError(
+      400,
+      zeno.errorMessage ?? zeno.message ?? 'Failed to start ZenoPay payment',
+      'ZENO_CREATE_FAILED',
+    );
+  }
+  const pollId = zeno.orderId;
 
   await upsertPendingIntent({
     orderId: pollId,
@@ -256,13 +259,12 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     amountTzs,
     buyerPhone: localPhone,
     provider: PAYMENT_PROVIDERS.ZENO,
-    providerPayload: out,
+    providerPayload: zeno.raw,
   });
 
-  const msg = String(out.message ?? 'Request in progress. You will receive a prompt on your phone.');
   return {
     orderId: pollId,
-    message: msg,
+    message: zeno.message,
     provider: PAYMENT_PROVIDERS.ZENO,
     status: 'pending',
   };

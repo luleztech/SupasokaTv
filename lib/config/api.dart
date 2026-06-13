@@ -97,6 +97,12 @@ class _PaymentsApi {
       String msg = 'Ombi la malipo halijakubaliwa.';
       if (res.statusCode == 426 || j['updateRequired'] == true) {
         msg = 'Update app yako kutoka Play Store ili kukamilisha malipo, kisha jaribu tena.';
+      } else if (res.statusCode == 429 ||
+          (j['error'] is String &&
+              (j['error'] as String).toLowerCase().contains('too many')) ||
+          (j['message']?.toString().toLowerCase().contains('too many') ?? false)) {
+        msg =
+            'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
       } else if (err is Map && err['message'] != null) {
         msg = err['message'].toString();
       } else if (j['error'] is String) {
