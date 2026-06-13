@@ -4,7 +4,10 @@
 class TanzaniaPhone {
   TanzaniaPhone._();
 
-  /// Operational / assigned TZ mobile NDC prefixes (061–079).
+  /// All standard TZ mobile NDC blocks: 061–069 and 070–079.
+  static final RegExp _mobileLocalRe = RegExp(r'^0(6[1-9]|7[0-9])\d{7}$');
+
+  /// Documented operator prefixes (subset of [_mobileLocalRe]).
   static const knownPrefixes = [
     '061', '062', '063',
     '064',
@@ -16,12 +19,17 @@ class TanzaniaPhone {
     '074', '075', '076', '079',
   ];
 
-  /// Returns normalized `07XXXXXXXX` style or `null` if not a valid TZ mobile.
+  static bool _isValidLocal(String local0) => _mobileLocalRe.hasMatch(local0);
+
+  /// Returns normalized `0XXXXXXXXX` or `null` if not a valid TZ mobile.
   static String? normalize(String raw) {
     var s = raw.trim().replaceAll(RegExp(r'\s'), '');
     if (s.isEmpty) return null;
 
     final upper = s.toUpperCase();
+    if (upper.startsWith('+') && !upper.startsWith('+255')) return null;
+    if (upper.startsWith('00') && !upper.startsWith('00255')) return null;
+
     if (upper.startsWith('+255')) {
       s = '0${s.substring(4)}';
     } else if (upper.startsWith('00255')) {
@@ -37,14 +45,9 @@ class TanzaniaPhone {
       s = '0$s';
     }
 
-    // TZ MSISDN: leading 0 + 9 digits; second digit 1–9 (not 00…).
-    if (!RegExp(r'^0[1-9]\d{8}$').hasMatch(s)) {
-      return null;
-    }
+    if (s.length > 10) s = s.substring(0, 10);
 
-    if (!knownPrefixes.any((p) => s.startsWith(p))) {
-      return null;
-    }
+    if (!_isValidLocal(s)) return null;
     return s;
   }
 
@@ -52,5 +55,5 @@ class TanzaniaPhone {
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Mitandao: Halotel (061–063), Yas/Tigo (065,067,070,071,077), Airtel (068–069,078), Vodacom (074–076,079), TTCL (073), na zaidi.';
+      'Nambari zote za Tanzania zinakubalika: 061, 062, 063, 065, 068, 071, 075, 076, 077, 078, 079, na zingine 061–079.';
 }

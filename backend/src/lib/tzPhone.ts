@@ -1,6 +1,6 @@
 /**
  * Tanzania mobile MSISDN (national format `0XXXXXXXXX`, 10 digits).
- * Prefix list aligned with TCRA numbering (061–079 operational / assigned ranges).
+ * Accepts all standard TZ mobile NDC blocks: 061–069 and 070–079.
  */
 export const TZ_MOBILE_PREFIXES = [
   '061', '062', '063', // Halotel / Viettel / Amotel
@@ -13,7 +13,40 @@ export const TZ_MOBILE_PREFIXES = [
   '074', '075', '076', '079', // Vodacom
 ] as const;
 
+/** All assigned TZ mobile local numbers: 061–069 and 070–079 (10 digits). */
+export const TZ_MOBILE_LOCAL_RE = /^0(6[1-9]|7[0-9])\d{7}$/;
+
+export type TzMobileNetwork =
+  | 'halotel'
+  | 'cootel'
+  | 'tigo_yas'
+  | 'smile'
+  | 'airtel'
+  | 'mo_mobile'
+  | 'ttcl'
+  | 'vodacom'
+  | 'unknown';
+
 export type NormalizePhoneResult = { local?: string; error?: string };
+
+export function isValidTzMobileLocal0(local0: string): boolean {
+  const s = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  return TZ_MOBILE_LOCAL_RE.test(s);
+}
+
+export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
+  const p = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  if (/^06[123]/.test(p)) return 'halotel';
+  if (p.startsWith('064')) return 'cootel';
+  if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) return 'tigo_yas';
+  if (p.startsWith('066')) return 'smile';
+  if (/^06[89]/.test(p) || p.startsWith('078')) return 'airtel';
+  if (p.startsWith('072')) return 'mo_mobile';
+  if (p.startsWith('073')) return 'ttcl';
+  if (/^07[45679]/.test(p) && !p.startsWith('078')) return 'vodacom';
+  if (isValidTzMobileLocal0(p)) return 'unknown';
+  return 'unknown';
+}
 
 export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
   let s = String(rawPhone ?? '').trim().replace(/\s+/g, '');
@@ -52,19 +85,18 @@ export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
   if (!/^0[1-9]\d{8}$/.test(s)) {
     return {
       error:
-        'Nambari ya simu lazima iwe nambari 10 za Tanzania: anza kwa 0 kisha tarakimu 9 (mfano 0701234567 au 0712345678).',
+        'Nambari ya simu lazima iwe nambari 10 za Tanzania: anza kwa 0 kisha tarakimu 9 (mfano 0612345678 au 0751234567).',
     };
   }
 
-  const hasValidPrefix = TZ_MOBILE_PREFIXES.some((p) => s.startsWith(p));
-  if (!hasValidPrefix) {
+  if (!isValidTzMobileLocal0(s)) {
     return {
       error:
-        'Nambari hii haionekani kuwa ya mtandao wa simu Tanzania unaotumika kwa malipo. Tumia nambari halali (mfano 061–079).',
+        'Nambari hii si ya simu ya Tanzania. Tumia nambari halali ya ndani (061–069, 071–079), mfano 062, 068, 071, 075, 077, 078.',
     };
   }
 
-  return { local: s };
+  return { local: s.slice(0, 10) };
 }
 
 /** International MSISDN for payment gateways (`2557XXXXXXXX`). */
@@ -82,17 +114,13 @@ export function formatPhoneToIntl255(local0: string): string {
  */
 export function phoneCandidatesForPaymentApi(local0: string): string[] {
   const local0fmt = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
-  if (!/^0[1-9]\d{8}$/.test(local0fmt)) return [local0fmt].filter(Boolean);
+  if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-
-  const isHalotel = /^06[123]/.test(local0fmt);
-  const isVodacom = /^07[45679]/.test(local0fmt) && !/^078/.test(local0fmt);
-  const isAirtel = /^06[89]/.test(local0fmt) || /^078/.test(local0fmt);
+  const network = detectTzMobileNetwork(local0fmt);
 
   let ordered: string[];
-  if (isHalotel) ordered = [local0fmt, intl255];
-  else if (isVodacom) ordered = [intl255, local0fmt];
-  else if (isAirtel) ordered = [local0fmt, intl255];
+  if (network === 'vodacom') ordered = [intl255, local0fmt];
+  else if (network === 'halotel' || network === 'airtel') ordered = [local0fmt, intl255];
   else ordered = [local0fmt, intl255];
 
   return [...new Set(ordered.filter((p) => p.length > 0))];
@@ -101,7 +129,7 @@ export function phoneCandidatesForPaymentApi(local0: string): string[] {
 /** Wallet providers to try (primary first, then auto-detect). */
 export function zenoWalletProviderCandidates(localPhone0: string): (string | undefined)[] {
   if (process.env.ZENO_SEND_PROVIDER === '0') return [undefined];
-  const p = String(localPhone0 || '').trim();
+  const p = String(localPhone0 ?? '').replace(/\D/g, '').slice(0, 10);
   const out: (string | undefined)[] = [];
   const add = (v?: string) => {
     if (v == null) {
@@ -115,58 +143,72 @@ export function zenoWalletProviderCandidates(localPhone0: string): (string | und
 
   add(zenoWalletProviderForLocalPhone(p));
 
-  if (/^06[123]/.test(p)) {
-    add('HALOPESA');
-    add('HALOTEL PESA');
-  } else if (/^07[45679]/.test(p) && !/^078/.test(p)) {
-    add('M-PESA');
-    add('MPESA');
-  } else if (/^06[589]/.test(p) || /^078/.test(p)) {
-    add('AIRTEL MONEY');
-    add('AIRTELMONEY');
-  } else if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) {
-    add('TIGOPESA');
-    add('TIGO PESA');
-    add('TIGO');
-  } else {
-    add('TIGOPESA');
-    add('M-PESA');
-    add('AIRTEL MONEY');
+  switch (detectTzMobileNetwork(p)) {
+    case 'halotel':
+      add('HALOPESA');
+      add('HALOTEL PESA');
+      break;
+    case 'vodacom':
+      add('M-PESA');
+      add('MPESA');
+      add('VODACOM');
+      break;
+    case 'airtel':
+      add('AIRTEL MONEY');
+      add('AIRTELMONEY');
+      add('AIRTEL');
+      break;
+    case 'tigo_yas':
+      add('TIGOPESA');
+      add('TIGO PESA');
+      add('TIGO');
+      add('YAS');
+      break;
+    case 'cootel':
+    case 'smile':
+    case 'mo_mobile':
+    case 'ttcl':
+    case 'unknown':
+      add('TIGOPESA');
+      add('M-PESA');
+      add('AIRTEL MONEY');
+      add('HALOPESA');
+      break;
   }
   add(undefined);
   return out;
 }
 
-/** ZenoPay wallet provider hint from local `07…` number. */
+/** ZenoPay wallet provider hint from local `0…` number. */
 export function zenoWalletProviderForLocalPhone(localPhone0: string): string | undefined {
-  const p = String(localPhone0 || '');
-  if (p.startsWith('061') || p.startsWith('062') || p.startsWith('063')) {
-    const v = process.env.ZENO_HALOTEL_WALLET_PROVIDER;
-    return typeof v === 'string' && v.trim() ? v.trim() : 'HALOPESA';
+  const p = String(localPhone0 ?? '').replace(/\D/g, '').slice(0, 10);
+  switch (detectTzMobileNetwork(p)) {
+    case 'halotel': {
+      const v = process.env.ZENO_HALOTEL_WALLET_PROVIDER;
+      return typeof v === 'string' && v.trim() ? v.trim() : 'HALOPESA';
+    }
+    case 'vodacom': {
+      if (process.env.ZENO_VODACOM_SEND_PROVIDER === '0') return undefined;
+      const v = process.env.ZENO_VODACOM_WALLET_PROVIDER;
+      return typeof v === 'string' && v.trim() ? v.trim() : 'M-PESA';
+    }
+    case 'tigo_yas': {
+      const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
+      return typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
+    }
+    case 'airtel': {
+      const v = process.env.ZENO_AIRTEL_WALLET_PROVIDER;
+      return typeof v === 'string' && v.trim() ? v.trim() : 'AIRTEL MONEY';
+    }
+    case 'cootel':
+    case 'smile':
+    case 'mo_mobile':
+    case 'ttcl':
+    case 'unknown': {
+      const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
+      return typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
+    }
+    default:
+      return undefined;
   }
-  if (p.startsWith('074') || p.startsWith('075') || p.startsWith('076') || p.startsWith('079')) {
-    if (process.env.ZENO_VODACOM_SEND_PROVIDER === '0') return undefined;
-    const v = process.env.ZENO_VODACOM_WALLET_PROVIDER;
-    return typeof v === 'string' && v.trim() ? v.trim() : 'M-PESA';
-  }
-  if (
-    p.startsWith('065') ||
-    p.startsWith('067') ||
-    p.startsWith('070') ||
-    p.startsWith('071') ||
-    p.startsWith('077')
-  ) {
-    const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
-    return typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
-  }
-  if (p.startsWith('068') || p.startsWith('069') || p.startsWith('078')) {
-    const v = process.env.ZENO_AIRTEL_WALLET_PROVIDER;
-    return typeof v === 'string' && v.trim() ? v.trim() : 'AIRTEL MONEY';
-  }
-  // TTCL, Smile, CooTel, MO Mobile — try Tigo rail (common aggregator path in TZ).
-  if (p.startsWith('073') || p.startsWith('066') || p.startsWith('064') || p.startsWith('072')) {
-    const v = process.env.ZENO_TIGO_WALLET_PROVIDER;
-    return typeof v === 'string' && v.trim() ? v.trim() : 'TIGOPESA';
-  }
-  return undefined;
 }
