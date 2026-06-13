@@ -15,6 +15,7 @@ import 'package:supasoka/config/payment_helpers.dart'
         normalizedPaymentStatus,
         paymentStatusFromCheckResponse;
 import 'package:supasoka/services/premium_recovery.dart';
+import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
@@ -535,6 +536,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return _ConfirmProbeOutcome.pending();
     final origin = base.replaceAll(RegExp(r'/$'), '');
+    final versionHeaders = await appVersionHeaders();
     final uris = [
       Uri.parse('$origin/api/v1/public/confirm-premium'),
       Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
@@ -546,10 +548,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         res = await http
         .post(
           uri,
-          headers: const {
+          headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'Cache-Control': 'no-cache',
+            ...versionHeaders,
           },
           body: jsonEncode({
             'orderId': orderId,

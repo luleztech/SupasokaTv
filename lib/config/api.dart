@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:supasoka/config/api_config.dart';
+import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/user_identity.dart';
 class _SettingsApi {
   Future<Map<String, dynamic>> getWhatsAppNumber() async {
@@ -42,6 +43,7 @@ class _PaymentsApi {
     final expectedProvider = await settingsApi.getActivePaymentProvider();
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/payments/start');
+    final versionHeaders = await appVersionHeaders();
     final body = <String, dynamic>{
       'publicId': externalId,
       'planId': bundle,
@@ -63,9 +65,10 @@ class _PaymentsApi {
         res = await http
             .post(
               uri,
-              headers: const {
+              headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
+                ...versionHeaders,
               },
               body: jsonEncode(body),
             )
@@ -92,7 +95,9 @@ class _PaymentsApi {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       final err = j['error'];
       String msg = 'Ombi la malipo halijakubaliwa.';
-      if (err is Map && err['message'] != null) {
+      if (res.statusCode == 426 || j['updateRequired'] == true) {
+        msg = 'Update app yako kutoka Play Store ili kukamilisha malipo, kisha jaribu tena.';
+      } else if (err is Map && err['message'] != null) {
         msg = err['message'].toString();
       } else if (j['error'] is String) {
         msg = j['error'] as String;
@@ -126,9 +131,14 @@ class _PaymentsApi {
 
   Future<Map<String, dynamic>> checkPaymentStatus(String orderId) async {
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    final versionParams = await appVersionQueryParams();
+    final versionHeaders = await appVersionHeaders();
     final uris = <Uri>[
       Uri.parse('$origin/api/v1/public/payments/status').replace(
-        queryParameters: {'orderId': orderId},
+        queryParameters: {
+          'orderId': orderId,
+          ...versionParams,
+        },
       ),
     ];
 
@@ -136,7 +146,10 @@ class _PaymentsApi {
     for (final uri in uris) {
       try {
         res = await http
-            .get(uri, headers: const {'Accept': 'application/json'})
+            .get(uri, headers: {
+              'Accept': 'application/json',
+              ...versionHeaders,
+            })
             .timeout(const Duration(seconds: 22));
         if (res.statusCode != 404) break;
       } catch (_) {

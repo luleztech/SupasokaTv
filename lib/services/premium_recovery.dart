@@ -7,6 +7,7 @@ import 'package:supasoka/config/api.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/config/payment_helpers.dart'
     show isPaymentCompleted, isPaymentTerminalFailure, paymentStatusFromCheckResponse;
+import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 
@@ -29,6 +30,7 @@ class PremiumRecovery {
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return null;
     final origin = base.replaceAll(RegExp(r'/$'), '');
+    final versionHeaders = await appVersionHeaders();
     final uris = [
       Uri.parse('$origin/api/v1/public/confirm-premium'),
       Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
@@ -39,10 +41,11 @@ class PremiumRecovery {
         final res = await http
             .post(
               uri,
-              headers: const {
+              headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
                 'Cache-Control': 'no-cache',
+                ...versionHeaders,
               },
               body: jsonEncode({
                 'orderId': orderId,

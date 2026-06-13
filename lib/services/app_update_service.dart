@@ -143,3 +143,14 @@ Future<Map<String, String>> appVersionQueryParams() async {
     'appVersion': info.version,
   };
 }
+
+/// Headers sent with protected API calls (playback, payments, config).
+Future<Map<String, String>> appVersionHeaders() async {
+  final params = await appVersionQueryParams();
+  return {
+    'X-App-Build': params['appBuild'] ?? '',
+    'X-App-Version': params['appVersion'] ?? '',
+    'X-Supasoka-Build': params['appBuild'] ?? '',
+    'X-Supasoka-Version': params['appVersion'] ?? '',
+  };
+}

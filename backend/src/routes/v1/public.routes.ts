@@ -258,12 +258,6 @@ publicRouter.get('/settings/payment-provider', async (_req, res, next) => {
 
 async function handleConfirmPremium(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) {
   try {
-    const gate = await assertSupportedAppClient(req);
-    if (gate.updateRequired) {
-      sendUpdateRequired(res, gate.appUpdate);
-      return;
-    }
-
     const b = (req.body ?? {}) as Record<string, unknown>;
     const orderId = String(b.orderId ?? '').trim();
     const publicId = String(b.publicId ?? '').trim();
@@ -303,12 +297,6 @@ async function handleUnifiedPaymentStart(
   next: import('express').NextFunction,
 ): Promise<void> {
   try {
-    const gate = await assertSupportedAppClient(req);
-    if (gate.updateRequired) {
-      sendUpdateRequired(res, gate.appUpdate);
-      return;
-    }
-
     const body = (req.body ?? {}) as Record<string, unknown>;
     const parsed = parseStartPaymentFromLegacyBody(body);
     if (!parsed) {
