@@ -7,6 +7,8 @@ import 'package:supasoka/screens/player_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
 import 'package:supasoka/services/playback_service.dart';
+import 'package:supasoka/services/premium_recovery.dart';
+import 'package:supasoka/services/subscription_store.dart';
 
 String nativeDrmTypeFor(Channel channel) {
   final drm = channel.drm.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
@@ -83,6 +85,20 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
       await _applyUpdatePayload(context, resolved.updatePayload);
       return;
     case PlaybackResolveCode.premiumRequired:
+      final localPremium =
+          SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+      final hasPending = await PremiumRecovery.hasRecentPendingPayment();
+      if (localPremium || hasPending) {
+        final unlocked = await PremiumRecovery.ensurePremiumUnlocked();
+        if (unlocked) {
+          final retry = await resolveChannelPlayback(channel.id);
+          if (!context.mounted) return;
+          if (retry.code == PlaybackResolveCode.ok) {
+            await _openResolvedPlayback(context, retry.session!);
+            return;
+          }
+        }
+      }
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(builder: (_) => const PaymentScreen()),
       );

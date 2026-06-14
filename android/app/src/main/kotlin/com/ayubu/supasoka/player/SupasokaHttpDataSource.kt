@@ -88,6 +88,8 @@ object SupasokaHttpDataSource {
             .build()
     }
 
+    fun gatewayFastClient(): OkHttpClient = gatewayFetchClient
+
     @Suppress("UNUSED_PARAMETER")
     fun factory(
         headers: Map<String, String>,

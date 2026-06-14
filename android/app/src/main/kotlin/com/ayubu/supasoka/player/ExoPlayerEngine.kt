@@ -102,23 +102,27 @@ class ExoPlayerEngine(
 ) {
     private var exoPlayer: ExoPlayer? = null
     private val trackSelector = DefaultTrackSelector(context)
+    /** Kotlin-owned quality; default ~360p (“Okoa bando”) until user picks Auto or higher. */
+    private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
     private var currentSession: StreamSession? = null
     private var currentFormat: StreamFormat? = null
     private var malformedManifestRecovered = false
     private var blockedHeadersRecovered = false
     private var networkFallbackRecovered = false
+    private var webViewLicenseBridge: WebViewLicenseBridge? = null
 
     companion object {
         private const val TAG = "ExoPlayerEngine"
         
-        // Buffer configuration tuned for live IPTV — start playback sooner (matches EaMax).
-        private const val MIN_BUFFER_MS = 10000
-        private const val MAX_BUFFER_MS = 30000
-        private const val BUFFER_FOR_PLAYBACK_MS = 1000
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1500
+        // Buffer configuration tuned for fast live IPTV start on mobile networks.
+        private const val MIN_BUFFER_MS = 8000
+        private const val MAX_BUFFER_MS = 25000
+        private const val BUFFER_FOR_PLAYBACK_MS = 750
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1250
 
-        private const val CONNECT_TIMEOUT_MS = 10000
-        private const val READ_TIMEOUT_MS = 20000
+        // Timeouts: fail fast → surface error → retry rather than hanging silently.
+        private const val CONNECT_TIMEOUT_MS = 10000  // 10s connect (was 30s)
+        private const val READ_TIMEOUT_MS = 20000     // 20s read (was 30s)
     }
 
     /**
@@ -128,8 +132,10 @@ class ExoPlayerEngine(
         streamSession: StreamSession,
         forcedStreamFormat: StreamFormat? = null,
         resetRecoveryFlags: Boolean = true,
+        webViewLicenseBridge: WebViewLicenseBridge? = null,
     ) {
         currentSession = streamSession
+        this.webViewLicenseBridge = webViewLicenseBridge
         if (resetRecoveryFlags) {
             malformedManifestRecovered = false
             blockedHeadersRecovered = false
@@ -269,21 +275,28 @@ class ExoPlayerEngine(
         }
     }
 
+    /** Headers for Widevine license POST — separate from manifest/CDN headers. */
+    private fun buildLicenseHeaders(streamSession: StreamSession): Map<String, String> {
+        val headers = LinkedHashMap<String, String>()
+        streamSession.drmData.headers?.forEach { (k, v) -> if (v.isNotBlank()) headers[k] = v }
+        headers.putIfAbsent("Content-Type", "application/octet-stream")
+        headers.putIfAbsent("Accept", "*/*")
+        if (!headers.keys.any { it.equals("User-Agent", ignoreCase = true) }) {
+            headers["User-Agent"] = PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT
+        }
+        Log.d(TAG, "🔑 License POST headers: ${headers.keys.joinToString()}")
+        return headers
+    }
+
     /**
      * Builds complete headers including auth, DRM, and custom headers
      */
     private fun buildHeaders(streamSession: StreamSession): Map<String, String> {
         val headers = HashMap<String, String>().apply {
-            // Priority 1: Add DRM-specific headers first (highest priority)
-            streamSession.drmData.headers?.let { drmHeaders ->
-                putAll(drmHeaders)
-                Log.d(TAG, "  Added ${drmHeaders.size} DRM headers")
-            }
-            
-            // Priority 2: Add session-level headers (may override defaults)
-            streamSession.headers?.let { sessionHeaders ->
-                putAll(sessionHeaders)
-                Log.d(TAG, "  Added ${sessionHeaders.size} session headers")
+            // Session-level headers for manifest/segments (license headers are separate).
+            streamSession.headers.forEach { (k, v) -> if (v.isNotBlank()) put(k, v) }
+            if (streamSession.headers.isNotEmpty()) {
+                Log.d(TAG, "  Added ${streamSession.headers.size} session headers")
             }
             
             // Priority 3: Add standard browser-like headers (lowest priority, won't override)
@@ -297,11 +310,7 @@ class ExoPlayerEngine(
                 val manifestLikely = ul.contains(".mpd") || ul.contains(".m3u8")
                 put(
                     "User-Agent",
-                    if (StreamUrlClassifier.isYcnRedirectHost(streamSession.mpdUrl) || manifestLikely) {
-                        PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT
-                    } else {
-                        "ExoPlayerLib/2.18.0 (Linux;Android 11) ReactNativeVideo/3.0"
-                    },
+                    PhpWebViewSupport.BROWSER_PLAYBACK_USER_AGENT
                 )
             }
             
@@ -321,35 +330,34 @@ class ExoPlayerEngine(
             // Priority 6: Referer + Origin — gateways, DRM, auth, and typical .mpd/.m3u8 hosts that 403 bare clients.
             try {
                 val raw = streamSession.mpdUrl.trim()
-                val rl = raw.lowercase()
-                val manifestLikely =
-                    rl.contains(".mpd") ||
-                    rl.contains(".m3u8") ||
-                    rl.contains(".m3u")
                 val shouldAttachReferrerOrigin =
-                    streamSession.drmType != DrmType.NONE ||
-                    StreamUrlClassifier.isLikelyGatewayUrl(raw) ||
-                    StreamUrlClassifier.isPhpLikeUrl(raw) ||
-                    StreamUrlClassifier.isYcnRedirectHost(raw) ||
-                    containsKey("Authorization") ||
-                    manifestLikely
+                    raw.startsWith("http://", ignoreCase = true) ||
+                    raw.startsWith("https://", ignoreCase = true)
                 if (raw.isNotEmpty() && shouldAttachReferrerOrigin) {
-                    val u = Uri.parse(raw)
-                    if (u.scheme != null && u.host != null) {
-                        if (!keys.any { it.equals("Referer", true) || it.equals("referer", true) }) {
-                            val portPart = when {
-                                u.port <= 0 || u.port == 80 || u.port == 443 -> ""
-                                else -> ":${u.port}"
-                            }
-                            val ref = "${u.scheme}://${u.host}$portPart/"
-                            put("Referer", ref)
+                    val referer = entries.firstOrNull { (k, _) ->
+                        k.equals("Referer", ignoreCase = true) || k.equals("referer", ignoreCase = true)
+                    }?.value?.trim().orEmpty()
+                    if (referer.startsWith("http", ignoreCase = true)) {
+                        if (!keys.any { it.equals("Origin", ignoreCase = true) }) {
+                            GatewayHttpHeaders.originFromUrl(referer)?.let { put("Origin", it) }
                         }
-                        if (!keys.any { it.equals("Origin", true) }) {
-                            val portPart = when {
-                                u.port <= 0 || u.port == 80 || u.port == 443 -> ""
-                                else -> ":${u.port}"
+                    } else {
+                        val u = Uri.parse(raw)
+                        if (u.scheme != null && u.host != null) {
+                            if (!keys.any { it.equals("Referer", true) || it.equals("referer", true) }) {
+                                val portPart = when {
+                                    u.port <= 0 || u.port == 80 || u.port == 443 -> ""
+                                    else -> ":${u.port}"
+                                }
+                                put("Referer", "${u.scheme}://${u.host}$portPart/")
                             }
-                            put("Origin", "${u.scheme}://${u.host}$portPart")
+                            if (!keys.any { it.equals("Origin", true) }) {
+                                val portPart = when {
+                                    u.port <= 0 || u.port == 80 || u.port == 443 -> ""
+                                    else -> ":${u.port}"
+                                }
+                                put("Origin", "${u.scheme}://${u.host}$portPart")
+                            }
                         }
                     }
                 }
@@ -456,7 +464,8 @@ class ExoPlayerEngine(
             ) {
                 Log.w(TAG, "⚠️ Skipping DRM (missing license URL) for ${streamSession.drmType}")
             } else {
-                val drmConfig = buildDrmConfiguration(streamSession, headers)
+                val licenseHeaders = buildLicenseHeaders(streamSession)
+                val drmConfig = buildDrmConfiguration(streamSession, licenseHeaders)
                 mediaItemBuilder.setDrmConfiguration(drmConfig)
                 Log.d(TAG, "🔐 DRM configuration added: ${streamSession.drmType}")
             }
@@ -673,17 +682,31 @@ class ExoPlayerEngine(
     private fun createDrmSessionManager(
         streamSession: StreamSession,
         dataSourceFactory: HttpDataSource.Factory,
-        headers: Map<String, String>
+        @Suppress("UNUSED_PARAMETER") manifestHeaders: Map<String, String>,
     ): DefaultDrmSessionManager {
+        val licenseHeaders = buildLicenseHeaders(streamSession)
         return when (streamSession.drmType) {
             DrmType.WIDEVINE, DrmType.WIDEVINE_L1, DrmType.WIDEVINE_L3 -> {
                 Log.d(TAG, "🔑 Creating Widevine DRM session manager")
                 Log.d(TAG, "  License URL: ${streamSession.licenseUrl}")
                 
-                val drmCallback = HttpMediaDrmCallback(
+                val nativeCallback = HttpMediaDrmCallback(
                     streamSession.licenseUrl,
-                    SupasokaHttpDataSource.factory(headers, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS),
+                    SupasokaHttpDataSource.factory(licenseHeaders, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS),
                 )
+                val drmCallback: androidx.media3.exoplayer.drm.MediaDrmCallback =
+                    if (webViewLicenseBridge != null &&
+                        StreamUrlClassifier.isNagraLicense(streamSession.licenseUrl)
+                    ) {
+                        GatewayMediaDrmCallback(
+                            licenseUrl = streamSession.licenseUrl,
+                            licenseHeaders = licenseHeaders,
+                            nativeCallback = nativeCallback,
+                            webViewBridge = webViewLicenseBridge,
+                        )
+                    } else {
+                        nativeCallback
+                    }
                 
                 DefaultDrmSessionManager.Builder()
                     .setUuidAndExoMediaDrmProvider(
@@ -699,7 +722,7 @@ class ExoPlayerEngine(
                 
                 val drmCallback = HttpMediaDrmCallback(
                     streamSession.licenseUrl,
-                    SupasokaHttpDataSource.factory(headers, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS),
+                    SupasokaHttpDataSource.factory(licenseHeaders, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS),
                 )
                 
                 DefaultDrmSessionManager.Builder()
@@ -814,19 +837,73 @@ class ExoPlayerEngine(
     }
 
     fun setQuality(quality: StreamQuality) {
-        val parameters = if (quality == StreamQuality.AUTO) {
-            trackSelector.buildUponParameters()
-                .clearVideoSizeConstraints()
-                .setForceHighestSupportedBitrate(false)
-                .build()
-        } else {
-            trackSelector.buildUponParameters()
-                .setMaxVideoSize(Int.MAX_VALUE, quality.height)
-                .setForceHighestSupportedBitrate(false)
-                .build()
-        }
-        trackSelector.setParameters(parameters)
+        selectedQuality = quality
+        applySelectedQuality()
         Log.d(TAG, "🎨 Quality set to: $quality")
+    }
+
+    /** Applies [selectedQuality] using track overrides when manifest tracks are available. */
+    private fun applySelectedQuality() {
+        val player = exoPlayer ?: return
+        val quality = selectedQuality
+
+        if (quality == StreamQuality.AUTO) {
+            val params = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .clearVideoSizeConstraints()
+                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setForceHighestSupportedBitrate(false)
+                .build()
+            player.trackSelectionParameters = params
+            trackSelector.setParameters(params)
+            return
+        }
+
+        var bestGroup: Tracks.Group? = null
+        var bestIndex = -1
+        var bestHeight = -1
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_VIDEO) continue
+            for (i in 0 until group.length) {
+                if (!group.isTrackSupported(i)) continue
+                val h = group.getTrackFormat(i).height
+                if (h <= 0) continue
+                if (h <= quality.height && h > bestHeight) {
+                    bestHeight = h
+                    bestGroup = group
+                    bestIndex = i
+                }
+            }
+        }
+
+        val maxBitrate = maxBitrateForQuality(quality)
+        val builder = player.trackSelectionParameters
+            .buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            .setMaxVideoSize(Int.MAX_VALUE, quality.height)
+            .setMaxVideoBitrate(maxBitrate)
+            .setForceHighestSupportedBitrate(false)
+
+        if (bestGroup != null && bestIndex >= 0) {
+            builder.addOverride(TrackSelectionOverride(bestGroup.mediaTrackGroup, bestIndex))
+            Log.d(TAG, "🎨 Selected video track ${quality.height}p (actual=${bestHeight}p, idx=$bestIndex)")
+        } else {
+            Log.d(TAG, "🎨 Capped video to ${quality.height}p via max size/bitrate (no override yet)")
+        }
+
+        val params = builder.build()
+        player.trackSelectionParameters = params
+        trackSelector.setParameters(params)
+    }
+
+    private fun maxBitrateForQuality(quality: StreamQuality): Int = when (quality) {
+        StreamQuality.QUALITY_240P -> 400_000
+        StreamQuality.QUALITY_360P -> 800_000
+        StreamQuality.QUALITY_480P -> 1_400_000
+        StreamQuality.QUALITY_720P -> 2_500_000
+        StreamQuality.QUALITY_1080P -> 4_000_000
+        else -> Int.MAX_VALUE
     }
 
     fun setAudioLanguage(language: String) {
@@ -920,6 +997,10 @@ class ExoPlayerEngine(
                     else -> "Other"
                 }
                 Log.v(TAG, "  Group $index: type=$trackType, tracks=${group.length}, selected=${group.isSelected}")
+            }
+
+            if (selectedQuality != StreamQuality.AUTO) {
+                applySelectedQuality()
             }
             
             onTracksChangedCallback(tracks)
@@ -1074,6 +1155,9 @@ class ExoPlayerEngine(
         if (blockedHeadersRecovered) return false
         val session = currentSession ?: return false
         if (session.drmType != DrmType.NONE) return false
+        // Tokenized / gateway CDNs need Referer+Origin; stripping them causes 403 on Azam-style hosts.
+        if (StreamUrlClassifier.likelyRequiresWidevine(session.mpdUrl)) return false
+        if (session.headers.keys.any { it.equals("Referer", ignoreCase = true) }) return false
 
         var t: Throwable? = error
         var blockedHttp = false

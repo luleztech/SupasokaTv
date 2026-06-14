@@ -14,6 +14,8 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
@@ -30,6 +32,7 @@ import com.ayubu.supasoka.domain.model.PlaybackState
 import com.ayubu.supasoka.domain.model.StreamQuality
 import com.ayubu.supasoka.player.PlayerManager
 import com.ayubu.supasoka.player.StreamSessionBuilder
+import com.ayubu.supasoka.player.SupasokaPlayerOverlay
 
 /** Full-screen playback using the native PlayerManager stack (see repo `player/` sources). */
 class SupasokaNativePlayerActivity : AppCompatActivity() {
@@ -41,6 +44,10 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     private lateinit var playerManager: PlayerManager
     private var exoBoundToView = false
     private var selectedOkoaQuality: StreamQuality = StreamQuality.QUALITY_360P
+    private lateinit var playerOverlay: SupasokaPlayerOverlay
+    private lateinit var loadingOverlay: View
+    private lateinit var bufferingBar: ProgressBar
+    private lateinit var liveBadge: TextView
 
     private lateinit var rotateHintOverlay: FrameLayout
     private lateinit var rotateHintPhone: ImageView
@@ -109,6 +116,16 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             )
         }
         val webContainer = findViewById<FrameLayout>(R.id.webview_container)
+        loadingOverlay = findViewById(R.id.loading_overlay)
+        bufferingBar = findViewById(R.id.buffering_bar)
+        liveBadge = findViewById(R.id.live_badge)
+        playerOverlay = SupasokaPlayerOverlay(
+            playerView = playerView,
+            loadingOverlay = loadingOverlay,
+            bufferingBar = bufferingBar,
+            liveBadge = liveBadge,
+        )
+        playerOverlay.resetForNewStream()
 
         // Widevine L1 on Huawei requires a secure SurfaceView (TextureView → decoder start fails).
         if (session.drmType != DrmType.NONE) {
@@ -119,17 +136,44 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         playerManager = PlayerManager(
             context = this,
             onStateChanged = { state ->
+                runOnUiThread {
+                    playerOverlay.onEngineStateChanged(state)
+                    if (playerManager.isWebViewPlayback()) {
+                        when (state) {
+                            PlaybackState.PLAYING -> {
+                                val webContainer = findViewById<FrameLayout>(R.id.webview_container)
+                                attachWebViewIfNeeded(webContainer, playerView)
+                                playerManager.getWebView()?.alpha = 1f
+                            }
+                            PlaybackState.ENDED -> showChannelUnavailableAndFinish()
+                            else -> { }
+                        }
+                        return@runOnUiThread
+                    }
+                }
                 if (exoBoundToView || playerManager.isWebViewPlayback()) return@PlayerManager
                 val attach = state == PlaybackState.BUFFERING ||
                     state == PlaybackState.READY ||
                     state == PlaybackState.PLAYING
                 if (!attach) return@PlayerManager
-                runOnUiThread { bindExoToPlayerViewIfNeeded(playerView, strictNull = false) }
+                runOnUiThread {
+                    val webContainer = findViewById<FrameLayout>(R.id.webview_container)
+                    webContainer.visibility = View.GONE
+                    playerView.visibility = View.VISIBLE
+                    bindExoToPlayerViewIfNeeded(playerView, strictNull = false)
+                }
             },
             onError = { msg ->
                 runOnUiThread {
                     if (isFinishing) return@runOnUiThread
                     Log.w(TAG, "Playback error: $msg")
+                    val webContainer = findViewById<FrameLayout>(R.id.webview_container)
+                    if (playerManager.tryRevertToWebViewPlayback()) {
+                        Log.i(TAG, "Reverted to WebView — suppressing unavailable dialog")
+                        playerOverlay.attachWebViewMode()
+                        attachWebViewIfNeeded(webContainer, playerView)
+                        return@runOnUiThread
+                    }
                     showChannelUnavailableAndFinish()
                 }
             },
@@ -141,27 +185,22 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     try {
                         val okoaBtn = findViewById<Button>(R.id.btn_okoa_bundle)
                         if (playerManager.isWebViewPlayback()) {
+                            playerOverlay.attachWebViewMode()
                             playerView.player = null
                             okoaBtn.visibility = View.VISIBLE
                             playerView.visibility = View.GONE
-                            webContainer.visibility = View.VISIBLE
-                            webContainer.removeAllViews()
-                            playerManager.getWebView()?.let { w ->
-                                webContainer.addView(
-                                    w,
-                                    FrameLayout.LayoutParams(
-                                        FrameLayout.LayoutParams.MATCH_PARENT,
-                                        FrameLayout.LayoutParams.MATCH_PARENT,
-                                    ),
-                                )
-                            } ?: run {
-                                showChannelUnavailableAndFinish()
-                            }
-                            playerManager.setQuality(selectedOkoaQuality)
+                            attachWebViewIfNeeded(webContainer, playerView)
+                            playerManager.getWebView()?.alpha = 1f
+                            playerManager.setQuality(selectedOkoaQuality, fromUser = false)
                         } else {
+                            exoBoundToView = false
+                            webContainer.visibility = View.GONE
+                            webContainer.removeAllViews()
+                            playerView.visibility = View.VISIBLE
                             okoaBtn.visibility = View.VISIBLE
-                            playerManager.setQuality(selectedOkoaQuality)
+                            playerManager.setQuality(selectedOkoaQuality, fromUser = false)
                             bindExoToPlayerViewIfNeeded(playerView, strictNull = true)
+                            playerManager.getExoPlayer()?.let { playerOverlay.attachExoPlayer(it) }
                         }
                         maybeShowRotateHint()
                     } catch (e: Exception) {
@@ -311,6 +350,26 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun attachWebViewIfNeeded(webContainer: FrameLayout, playerView: PlayerView) {
+        val w = playerManager.getWebViewForReattach() ?: run {
+            showChannelUnavailableAndFinish()
+            return
+        }
+        webContainer.visibility = View.VISIBLE
+        playerView.visibility = View.GONE
+        if (w.parent !== webContainer) {
+            (w.parent as? android.view.ViewGroup)?.removeView(w)
+            webContainer.removeAllViews()
+            webContainer.addView(
+                w,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+    }
+
     private fun bindExoToPlayerViewIfNeeded(playerView: PlayerView, strictNull: Boolean) {
         if (exoBoundToView || playerManager.isWebViewPlayback()) return
         val p = playerManager.getExoPlayer()
@@ -338,6 +397,9 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         phoneHintAnimator?.cancel()
+        if (::playerOverlay.isInitialized) {
+            playerOverlay.detach()
+        }
         if (::playerManager.isInitialized) {
             playerManager.release()
         }

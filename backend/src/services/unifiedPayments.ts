@@ -16,11 +16,13 @@ import {
   type PaymentProviderId,
 } from './paymentProviderSettings';
 import {
+  ensurePaymentIntentsTable,
   getIntent,
   markIntentActivated,
   upsertPendingIntent,
   updateIntentStatus,
 } from './paymentIntents';
+import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
 import { normalizePhoneToLocal0 } from '../lib/tzPhone';
@@ -291,6 +293,56 @@ type ActivateOverrides = {
   phone?: string;
 };
 
+function intentOverrides(
+  intent: Awaited<ReturnType<typeof getIntent>> | null | undefined,
+): ActivateOverrides | undefined {
+  if (!intent) return undefined;
+  return {
+    publicId: intent.public_id ?? undefined,
+    planId: intent.plan_id ?? undefined,
+    phone: intent.buyer_phone ?? undefined,
+  };
+}
+
+/**
+ * Paid order exists but users.premium_until_ms was never set — reconcile on playback/poll.
+ */
+export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
+  const trimmed = String(publicId ?? '').trim();
+  if (!trimmed) return null;
+
+  const { getUserPremiumStatus } = await import('./userDirectory');
+  const existing = await getUserPremiumStatus(trimmed);
+  if (isPremiumUntilActive(existing)) return existing;
+
+  const pool = getPool();
+  if (!pool) return null;
+  await ensurePaymentIntentsTable();
+
+  const res = await pool.query<{ order_id: string }>(
+    `SELECT order_id
+     FROM payment_intents
+     WHERE public_id = $1
+       AND updated_at > now() - interval '72 hours'
+       AND (
+         status = 'COMPLETED'
+         OR provider_status IN ('COMPLETED', 'PAID', 'SUCCESS', 'SUCCESSFUL', 'APPROVED')
+         OR activated_at_ms IS NOT NULL
+       )
+     ORDER BY updated_at DESC
+     LIMIT 5`,
+    [trimmed],
+  );
+
+  for (const row of res.rows) {
+    const act = await ensurePremiumActivatedForPaidOrder(row.order_id, { publicId: trimmed });
+    if (act.activated && isPremiumUntilActive(act.premiumUntilMs)) {
+      return act.premiumUntilMs!;
+    }
+  }
+  return null;
+}
+
 function isPremiumUntilActive(until: number | null | undefined): until is number {
   return until != null && Number.isFinite(until) && until > Date.now();
 }
@@ -449,7 +501,8 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       });
     }
     if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
-      const act = await ensurePremiumActivatedForPaidOrder(trimmed);
+      const intentAfter = (await getIntent(trimmed)) ?? local;
+      const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter));
       return {
         status: 'COMPLETED',
         resultcode: '000',
@@ -471,7 +524,8 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     });
   }
   if (isPaymentCompletedStatus(ps)) {
-    const act = await ensurePremiumActivatedForPaidOrder(trimmed);
+    const intentAfter = (await getIntent(trimmed)) ?? local;
+    const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter));
     return {
       status: 'COMPLETED',
       resultcode: '000',

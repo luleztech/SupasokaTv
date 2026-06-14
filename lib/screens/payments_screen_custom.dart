@@ -616,21 +616,25 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
       if (phone != null && phone.isNotEmpty) {
         await UserIdentity.savePhoneNumber(phone);
-        await UserIdentity.registerWithBackend(phone: phone);
       }
+      await UserIdentity.registerWithBackend(phone: phone);
 
       int? serverUntilMs = serverPremiumUntilMs;
       if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
-        try {
-          serverUntilMs = await PremiumRecovery.confirmPremiumOnBackend(
-            orderId: orderId,
-            publicId: publicId,
-            planId: planId,
-            phone: phone ?? '',
-          );
-        } catch (e) {
-          if (kDebugMode) {
-            debugPrint('confirm-premium request failed: $e');
+        serverUntilMs = await PremiumRecovery.confirmPremiumOnBackend(
+          orderId: orderId,
+          publicId: publicId,
+          planId: planId,
+          phone: phone ?? '',
+        );
+      }
+
+      if (serverUntilMs == null && orderId.isNotEmpty) {
+        final rec = await PremiumRecovery.fetchUserPremiumRecord(publicId);
+        if (rec.premiumUntilMs != null) {
+          final end = DateTime.fromMillisecondsSinceEpoch(rec.premiumUntilMs!);
+          if (end.isAfter(DateTime.now())) {
+            serverUntilMs = rec.premiumUntilMs;
           }
         }
       }
@@ -641,7 +645,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         // Provider confirmed paid but server activation lagged — grant local premium for selected plan.
         await SubscriptionStore.activatePlan(planId);
       }
-      SubscriptionStore.refreshNotifierFromPrefs();
+      await SubscriptionStore.syncPremiumFromBackend();
+      await SubscriptionStore.refreshNotifierFromPrefs();
       if (serverUntilMs != null) {
         await _clearPendingOrderPrefs();
       }

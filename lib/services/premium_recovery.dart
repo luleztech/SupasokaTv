@@ -35,8 +35,8 @@ class PremiumRecovery {
       Uri.parse('$origin/api/v1/public/confirm-premium'),
       Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
     ];
-    for (var attempt = 0; attempt < 3; attempt++) {
-      final uri = uris[attempt < uris.length ? (attempt % uris.length) : 0];
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final uri = uris[attempt % uris.length];
       try {
         final res = await http
             .post(
@@ -66,18 +66,65 @@ class PremiumRecovery {
               if (raw is num && raw.toInt() > nowMs) return raw.toInt();
             }
           } catch (_) {}
-        } else if (res.statusCode == 402 && attempt < 2) {
-          await Future<void>.delayed(Duration(milliseconds: 1500 + (attempt * 800)));
+        } else if ((res.statusCode == 402 || res.statusCode == 500) && attempt < 4) {
+          await Future<void>.delayed(Duration(milliseconds: 1200 + (attempt * 900)));
           continue;
         }
       } catch (e) {
         if (kDebugMode) {
           debugPrint('PremiumRecovery.confirm failed: $e');
         }
+        if (attempt < 4) {
+          await Future<void>.delayed(Duration(milliseconds: 1000 + (attempt * 700)));
+          continue;
+        }
       }
-      break;
     }
     return null;
+  }
+
+  /// After payment or when playback says premium required — sync server + local state.
+  static Future<bool> ensurePremiumUnlocked() async {
+    await UserIdentity.registerWithBackend(
+      phone: (await UserIdentity.getSavedPhoneNumber()) ?? '',
+    );
+    final recovered = await recoverPendingPaymentIfAny();
+    await SubscriptionStore.syncPremiumFromBackend();
+    final active =
+        SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    if (active) return true;
+    if (recovered) return true;
+
+    final prefs = await SharedPreferences.getInstance();
+    final orderId = prefs.getString(_pendingOrderKey)?.trim() ?? '';
+    final planId = prefs.getString(_pendingPlanKey)?.trim() ?? '';
+    final phone = prefs.getString(_pendingPhoneKey)?.trim() ?? '';
+    if (orderId.isEmpty || planId.isEmpty) return false;
+
+    final publicId = await UserIdentity.getOrCreatePublicId();
+    final serverUntil = await confirmPremiumOnBackend(
+      orderId: orderId,
+      publicId: publicId,
+      planId: planId,
+      phone: phone,
+    );
+    if (serverUntil != null) {
+      await SubscriptionStore.setPremiumUntilMs(serverUntil);
+      await _clearPendingOrderPrefs();
+      await SubscriptionStore.refreshNotifierFromPrefs();
+      return true;
+    }
+
+    final rec = await fetchUserPremiumRecord(publicId);
+    if (rec.premiumUntilMs != null) {
+      final end = DateTime.fromMillisecondsSinceEpoch(rec.premiumUntilMs!);
+      if (end.isAfter(DateTime.now())) {
+        await SubscriptionStore.setPremiumUntilMs(rec.premiumUntilMs!);
+        await _clearPendingOrderPrefs();
+        return true;
+      }
+    }
+    return false;
   }
 
   static Future<void> _clearPendingOrderPrefs() async {

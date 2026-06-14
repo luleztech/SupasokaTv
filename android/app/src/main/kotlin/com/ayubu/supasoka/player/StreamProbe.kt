@@ -42,6 +42,7 @@ object StreamProbe {
         val drmType: DrmType? = null,
         val authToken: String = "",
         val clearKeys: List<ClearKey> = emptyList(),
+        val licenseHeaders: Map<String, String> = emptyMap(),
     )
 
     fun resolveForSession(session: StreamSession): Result {
@@ -187,6 +188,7 @@ object StreamProbe {
         drmType = extracted.drmType(),
         authToken = extracted.authToken,
         clearKeys = extracted.clearKeys,
+        licenseHeaders = extracted.licenseHeaders,
     )
 
     private fun refererOverlay(original: String, existing: Map<String, String>): Map<String, String> {

@@ -6,6 +6,7 @@ import {
   readClientAppIdentity,
 } from './appUpdatePolicy';
 import { getUserPremiumRecord } from './userDirectory';
+import { reconcilePremiumForUser } from './unifiedPayments';
 
 export type PlaybackSessionPayload = {
   streamUrl: string;
@@ -79,7 +80,10 @@ export async function resolvePlaybackForChannel(
     }
     const premium = await getUserPremiumRecord(trimmedUser);
     if (!isPremiumActive(premium.premiumUntilMs)) {
-      return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
+      const reconciled = await reconcilePremiumForUser(trimmedUser);
+      if (!isPremiumActive(reconciled)) {
+        return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
+      }
     }
   }
 

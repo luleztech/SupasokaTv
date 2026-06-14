@@ -8,4 +8,7 @@
     <string name="rotate_hint_never_again">Usioneshe tena</string>
     <string name="channel_unavailable_message">Mafundi wetu wanahangaikia channel hii, itarejea hivi punde, asante kwa kuwa nasi.</string>
     <string name="ok_understood">Sawa</string>
+    <string name="player_live">LIVE</string>
+    <string name="player_play_pause">Play or pause</string>
+    <string name="player_buffering">Inapakia…</string>
 </resources>
