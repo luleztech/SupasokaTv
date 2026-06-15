@@ -60,11 +60,15 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
       ),
       tagQuery('live_matches', () =>
         pool.query(
-          `SELECT id, title, sport, sport_icon AS "sportIcon", img,
-                  channel_id AS "channelId", live_badge AS "liveBadge",
-                  match_time AS "matchTime",
-                  sort_order AS "sortOrder"
-           FROM live_matches ORDER BY sort_order, id`,
+          `SELECT lm.id, lm.title, lm.sport, lm.sport_icon AS "sportIcon", lm.img,
+                  lm.channel_id AS "channelId", lm.live_badge AS "liveBadge",
+                  lm.match_time AS "matchTime",
+                  lm.sort_order AS "sortOrder"
+           FROM live_matches lm
+           INNER JOIN channels c ON c.id = lm.channel_id
+           WHERE c.enabled = TRUE
+             AND NULLIF(TRIM(c.stream_url), '') IS NOT NULL
+           ORDER BY lm.sort_order, lm.id`,
         ),
       ),
       tagQuery('premium_packages', () =>

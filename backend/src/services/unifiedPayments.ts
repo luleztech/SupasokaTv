@@ -306,6 +306,7 @@ function intentOverrides(
 
 /**
  * Paid order exists but users.premium_until_ms was never set — reconcile on playback/poll.
+ * Includes PENDING intents (provider may have completed before status was persisted).
  */
 export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
   const trimmed = String(publicId ?? '').trim();
@@ -323,14 +324,12 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
     `SELECT order_id
      FROM payment_intents
      WHERE public_id = $1
-       AND updated_at > now() - interval '72 hours'
-       AND (
-         status = 'COMPLETED'
-         OR provider_status IN ('COMPLETED', 'PAID', 'SUCCESS', 'SUCCESSFUL', 'APPROVED')
-         OR activated_at_ms IS NOT NULL
-       )
-     ORDER BY updated_at DESC
-     LIMIT 5`,
+       AND updated_at > now() - interval '30 days'
+       AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
+     ORDER BY
+       CASE WHEN status = 'COMPLETED' OR activated_at_ms IS NOT NULL THEN 0 ELSE 1 END,
+       updated_at DESC
+     LIMIT 10`,
     [trimmed],
   );
 

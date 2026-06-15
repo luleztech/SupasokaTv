@@ -23,6 +23,7 @@ import {
   parseStartPaymentFromLegacyBody,
   pollUnifiedPaymentStatus,
   providerHealthSnapshot,
+  reconcilePremiumForUser,
   startPaymentSuccessJson,
   startUnifiedPayment,
 } from '../../services/unifiedPayments';
@@ -238,7 +239,11 @@ publicRouter.post('/register-user', async (req, res, next) => {
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
     const userId = String(req.params.userId ?? '').trim();
+    await reconcilePremiumForUser(userId);
     const out = await getUserPremiumRecord(userId);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json({ ok: true, premiumUntilMs: out.premiumUntilMs, userExists: out.userExists });
   } catch (e) {
     next(e);
