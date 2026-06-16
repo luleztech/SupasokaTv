@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/theme/app_theme.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/theme/app_typography.dart';
 
 IconData pillIcon(String name) {
@@ -61,19 +62,19 @@ class CatPillStrip extends StatelessWidget {
     return Container(
       height: 56,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: t.card.withValues(alpha: 0.35),
-        border: Border.all(color: t.border.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(20),
+        color: t.surface.withValues(alpha: 0.55),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(20),
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -133,39 +134,32 @@ class CatPill extends StatelessWidget {
         splashColor: tint.withValues(alpha: 0.2),
         highlightColor: tint.withValues(alpha: 0.1),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 280),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutCubic,
           padding: EdgeInsets.fromLTRB(active ? 10 : 8, 6, active ? 14 : 12, 6),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
             gradient: active
-                ? LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      tint,
-                      Color.lerp(tint, t.accent2, 0.55)!,
-                    ],
-                  )
+                ? premiumActivePillGradient
                 : LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      t.bg2.withValues(alpha: 0.72),
-                      t.card.withValues(alpha: 0.45),
+                      t.card.withValues(alpha: 0.85),
+                      t.surface.withValues(alpha: 0.65),
                     ],
                   ),
             border: Border.all(
-              color: active ? Colors.white.withValues(alpha: 0.28) : tint.withValues(alpha: 0.28),
+              color: active ? Colors.white.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.08),
               width: active ? 1.2 : 1,
             ),
             boxShadow: active
                 ? [
                     BoxShadow(
-                      color: tint.withValues(alpha: 0.42),
-                      blurRadius: 14,
+                      color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
+                      blurRadius: 16,
                       spreadRadius: -3,
-                      offset: const Offset(0, 5),
+                      offset: const Offset(0, 6),
                     ),
                   ]
                 : null,

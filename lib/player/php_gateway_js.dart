@@ -33,6 +33,11 @@ const String kPhpGatewayRecoveryJs = '''
     video.addEventListener('playing', function () {
       lastProgressAt = Date.now();
       waitingSince = 0;
+      try {
+        if (window.SupasokaPlayback && SupasokaPlayback.postMessage) {
+          SupasokaPlayback.postMessage('playing');
+        }
+      } catch (e) {}
     });
 
     video.addEventListener('waiting', function () {

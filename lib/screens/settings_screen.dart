@@ -164,8 +164,12 @@ class SettingsScreen extends StatelessWidget {
       _Dot(ThemeKey.crimson, [Color(0xFFe8002d), Color(0xFFff6b6b)]),
     ];
     return Container(
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: t.border)),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: t.surface.withValues(alpha: 0.65),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Row(
         children: [
           Container(
@@ -213,7 +217,18 @@ class SettingsScreen extends StatelessWidget {
 
   Widget _group(AppThemeColors t, List<Widget> children) {
     return Container(
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: t.border)),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: t.card.withValues(alpha: 0.85),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(children: _joinDividers(t, children)),
     );

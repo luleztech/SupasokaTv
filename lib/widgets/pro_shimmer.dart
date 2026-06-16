@@ -40,9 +40,9 @@ class _ProShimmerState extends State<ProShimmer>
               begin: Alignment(-1.2 + t * 2.4, -0.15),
               end: Alignment(-0.2 + t * 2.4, 0.15),
               colors: const [
-                Color(0xFF1f2937),
-                Color(0xFF374151),
-                Color(0xFF1f2937),
+                Color(0xFF111111),
+                Color(0xFF171717),
+                Color(0xFF111111),
               ],
               stops: const [0.25, 0.5, 0.75],
             ).createShader(rect);
@@ -61,7 +61,7 @@ class ShimmerBox extends StatelessWidget {
     this.width,
     this.height,
     this.radius = 12,
-    this.baseColor = const Color(0xFF23252c),
+    this.baseColor = const Color(0xFF111111),
   });
 
   final double? width;

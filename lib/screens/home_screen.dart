@@ -6,15 +6,14 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/player/channel_playback.dart';
-import 'package:supasoka/screens/settings_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
-import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/unlock_all_promo.dart';
 import 'package:supasoka/widgets/cat_pill.dart';
 import 'package:supasoka/widgets/channel_card.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 import 'package:supasoka/widgets/whatsapp_fab.dart';
@@ -115,30 +114,37 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _cat = 'all';
-  String _query = '';
-  final _searchFocus = FocusNode();
   final _carousel = PageController();
   int _carouselIndex = 0;
   Timer? _carouselTimer;
 
-  bool _channelMatchesSearch(Channel c, String needle) {
-    if (needle.isEmpty) return true;
-    final label = kCatLabel[c.cat] ?? c.cat;
-    final haystack = '${c.name} $label ${c.cat} ${c.viewers}'.toLowerCase();
-    final tokens = needle.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-    if (tokens.isEmpty) return true;
-    for (final token in tokens) {
-      if (!haystack.contains(token)) return false;
-    }
-    return true;
+  static const _carouselAutoInterval = Duration(seconds: 4);
+  static const _carouselAnimDuration = Duration(milliseconds: 700);
+
+  void _restartCarouselAutoPlay() {
+    _carouselTimer?.cancel();
+    _carouselTimer = Timer.periodic(_carouselAutoInterval, (_) => _advanceCarousel());
   }
 
-  /// Category pills apply only when the search box is empty; typing searches all channels.
+  void _advanceCarousel() {
+    if (!mounted) return;
+    final slides = context.read<ContentStore>().carouselSlides;
+    if (slides.length < 2 || !_carousel.hasClients) return;
+    final current = _carousel.page?.round() ?? _carouselIndex;
+    final next = (current + 1) % slides.length;
+    _carousel.animateToPage(
+      next,
+      duration: _carouselAnimDuration,
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _onCarouselPageChanged(int index) {
+    setState(() => _carouselIndex = index);
+    _restartCarouselAutoPlay();
+  }
+
   List<Channel> _filteredChannels(List<Channel> channels, String catKey) {
-    final needle = _query.trim().toLowerCase();
-    if (needle.isNotEmpty) {
-      return channels.where((c) => _channelMatchesSearch(c, needle)).toList();
-    }
     if (catKey == 'all') return channels;
     return channels.where((c) => c.cat == catKey).toList();
   }
@@ -146,21 +152,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _carouselTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!mounted) return;
-      final slides = context.read<ContentStore>().carouselSlides;
-      if (slides.isEmpty) return;
-      final next = (_carouselIndex + 1) % slides.length;
-      setState(() => _carouselIndex = next);
-      _carousel.animateToPage(next, duration: const Duration(milliseconds: 450), curve: Curves.easeOut);
-    });
+    _restartCarouselAutoPlay();
   }
 
   @override
   void dispose() {
     _carouselTimer?.cancel();
     _carousel.dispose();
-    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -210,37 +208,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           );
-        } else if (_query.trim().isNotEmpty) {
-          if (filtered.isEmpty) {
-            browseSlivers.add(
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Ionicons.search_outline, size: 40, color: t.border),
-                      const SizedBox(height: 12),
-                      Text('No channels found', style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text2)),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          } else {
-            browseSlivers.add(
-              SliverToBoxAdapter(
-                child: _ChannelRail(
-                  title: '🔎 SEARCH RESULTS',
-                  tileWidth: _kRailTileWidth,
-                  railHeight: _kRailHeight,
-                  channels: filtered,
-                  lockedFor: (ch) => !ch.free && !isPremium,
-                  onChannel: (ch) => _openChannel(context, ch.id),
-                ),
-              ),
-            );
-          }
         } else if (filtered.isEmpty) {
           browseSlivers.add(
             SliverFillRemaining(
@@ -290,8 +257,11 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!isPremium) {
             browseSlivers.add(
               SliverToBoxAdapter(
-                child: UnlockAllPromoCard(
-                  onPressed: () => context.read<AppNav>().setTab(3),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                  child: UnlockAllPromoCard(
+                    onPressed: () => context.read<AppNav>().setTab(3),
+                  ),
                 ),
               ),
             );
@@ -366,204 +336,60 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Stack(
       children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                t.bg2.withValues(alpha: 0.96),
-                t.bg1,
-                t.bg1,
-              ],
-            ),
-          ),
-          child: RefreshIndicator(
-            color: t.accent,
-            onRefresh: () => context.read<ContentStore>().refresh(),
-            child: CustomScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              slivers: [
-                if (store.loadError != null && !store.connectionBlocked)
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                      child: Material(
-                        color: t.card,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: t.border),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Row(
-                            children: [
-                              Icon(Icons.wifi_tethering_error_rounded, color: t.accent, size: 20),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  store.loadError!,
-                                  style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2),
-                                ),
-                              ),
-                              TextButton(
-                                onPressed: () => store.refresh(),
-                                child: Text('Retry', style: TextStyle(color: t.accent)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                SliverToBoxAdapter(
-                  child: AppHeader(
-                    title: 'Supasoka',
-                    subtitle: 'Mpira na Tamthilia',
-                    onSettings: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen())),
-                  ),
-                ),
+        _HomeAmbientBackground(colors: t),
+        RefreshIndicator(
+          color: t.accent,
+          backgroundColor: t.card,
+          onRefresh: () => context.read<ContentStore>().refresh(),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              if (store.loadError != null && !store.connectionBlocked)
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: Container(
-                      height: 44,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xCC18181b),
-                        borderRadius: BorderRadius.circular(99),
-                        border: Border.all(color: t.border),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Ionicons.search_outline, size: 16, color: const Color(0xFFa1a1aa)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              spellCheckConfiguration: SpellCheckConfiguration.disabled(),
-                              focusNode: _searchFocus,
-                              onChanged: (v) => setState(() => _query = v),
-                              style: rajdhani(14, weight: FontWeight.w600).copyWith(color: t.text),
-                              decoration: InputDecoration(
-                                isDense: true,
-                                border: InputBorder.none,
-                                hintText: 'Tafuta channel…',
-                                hintStyle: TextStyle(color: t.text2.withValues(alpha: 0.53)),
-                              ),
-                            ),
-                          ),
-                          if (_query.isNotEmpty)
-                            IconButton(
-                              onPressed: () => setState(() => _query = ''),
-                              icon: Icon(Ionicons.close_circle, size: 18, color: t.text2),
-                            ),
-                        ],
-                      ),
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                    child: _HomeErrorBanner(
+                      message: store.loadError!,
+                      onRetry: () => store.refresh(),
                     ),
                   ),
                 ),
-                if (carouselSlides.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: t.border.withValues(alpha: 0.6)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: t.accent.withValues(alpha: 0.14),
-                              blurRadius: 24,
-                              spreadRadius: -6,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(20),
-                          child: SizedBox(
-                            height: 380,
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                PageView.builder(
-                                  controller: _carousel,
-                                  itemCount: carouselSlides.length,
-                                  onPageChanged: (i) => setState(() => _carouselIndex = i),
-                                  itemBuilder: (context, i) {
-                                    return _CarouselSlide(item: carouselSlides[i], colors: t);
-                                  },
-                                ),
-                                Positioned(
-                                  left: 18,
-                                  right: 18,
-                                  bottom: 14,
-                                  child: Row(
-                                    children: List.generate(carouselSlides.length, (i) {
-                                      final active = i == _carouselIndex;
-                                      return GestureDetector(
-                                        onTap: () {
-                                          setState(() => _carouselIndex = i);
-                                          _carousel.animateToPage(i, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-                                        },
-                                        child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 300),
-                                          margin: const EdgeInsets.only(right: 6),
-                                          height: 3,
-                                          width: active ? 32 : 14,
-                                          decoration: BoxDecoration(
-                                            color: active ? t.accent : const Color(0xFF52525b),
-                                            borderRadius: BorderRadius.circular(99),
-                                          ),
-                                        ),
-                                      );
-                                    }),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+              SliverToBoxAdapter(
+                child: SizedBox(height: MediaQuery.paddingOf(context).top + 8),
+              ),
+              if (carouselSlides.isNotEmpty)
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
-                    child: CatPillStrip(
-                      children: [
-                        for (final cat in cats)
-                          CatPill(
-                            label: cat.label,
-                            icon: cat.icon,
-                            categoryKey: cat.key,
-                            active: fk == cat.key,
-                            onPress: () => setState(() => _cat = cat.key),
-                          ),
-                      ],
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                    child: _HomeHeroCarousel(
+                      controller: _carousel,
+                      slides: carouselSlides,
+                      activeIndex: _carouselIndex,
+                      onPageChanged: _onCarouselPageChanged,
+                      onDotTap: (i) {
+                        _onCarouselPageChanged(i);
+                        _carousel.animateToPage(
+                          i,
+                          duration: const Duration(milliseconds: 320),
+                          curve: Curves.easeOutCubic,
+                        );
+                      },
                     ),
                   ),
                 ),
-                if (_query.trim().isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                      child: Text.rich(
-                        TextSpan(
-                          style: rajdhani(12).copyWith(color: t.text2),
-                          children: [
-                            TextSpan(text: '${filtered.length} result${filtered.length == 1 ? '' : 's'} for '),
-                            TextSpan(text: '"$_query"', style: TextStyle(color: t.accent)),
-                          ],
-                        ),
-                      ),
-                    ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: _HomeCategoryBlock(
+                    cats: cats,
+                    activeKey: fk,
+                    onSelect: (key) => setState(() => _cat = key),
                   ),
-                ...browseSlivers,
-                const SliverToBoxAdapter(child: SizedBox(height: 100)),
-              ],
-            ),
+                ),
+              ),
+              ...browseSlivers,
+              const SliverToBoxAdapter(child: SizedBox(height: 108)),
+            ],
           ),
         ),
         const WhatsAppFab(),
@@ -574,67 +400,323 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _CarouselSlide extends StatelessWidget {
-  const _CarouselSlide({required this.item, required this.colors});
+// ─── Home-only visual system (logic unchanged elsewhere) ───────────────────
 
-  final CarouselSlide item;
+class _HomeAmbientBackground extends StatelessWidget {
+  const _HomeAmbientBackground({required this.colors});
+
   final AppThemeColors colors;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        SafeNetworkImage(imageUrl: item.img, fit: BoxFit.cover, placeholderColor: colors.card),
-        Positioned(
-          left: 20,
-          right: 24,
-          bottom: 36,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    return const Positioned.fill(
+      child: PremiumAmbientBackground(),
+    );
+  }
+}
+
+class _HomeHeroCarousel extends StatelessWidget {
+  const _HomeHeroCarousel({
+    required this.controller,
+    required this.slides,
+    required this.activeIndex,
+    required this.onPageChanged,
+    required this.onDotTap,
+  });
+
+  final PageController controller;
+  final List<CarouselSlide> slides;
+  final int activeIndex;
+  final ValueChanged<int> onPageChanged;
+  final ValueChanged<int> onDotTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.watch<ThemeController>().colors;
+
+    return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            boxShadow: [
+              BoxShadow(color: t.accent.withValues(alpha: 0.18), blurRadius: 36, spreadRadius: -10, offset: const Offset(0, 16)),
+              BoxShadow(color: Colors.black.withValues(alpha: 0.55), blurRadius: 28, offset: const Offset(0, 14)),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: SizedBox(
+              height: 440,
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: colors.red, borderRadius: BorderRadius.circular(4)),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 4,
-                          height: 4,
-                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                  PageView.builder(
+                    controller: controller,
+                    itemCount: slides.length,
+                    onPageChanged: onPageChanged,
+                    physics: const BouncingScrollPhysics(),
+                    itemBuilder: (context, i) {
+                      return _CarouselSlide(item: slides[i], colors: t, isActive: i == activeIndex);
+                    },
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: 120,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.88)],
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          item.badge.toUpperCase(),
-                          style: orbitron(8, weight: FontWeight.w900).copyWith(color: Colors.white, letterSpacing: 1.5),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 14,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Row(
+                            children: List.generate(slides.length, (i) {
+                              final active = i == activeIndex;
+                              return GestureDetector(
+                                onTap: () => onDotTap(i),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 280),
+                                  curve: Curves.easeOutCubic,
+                                  margin: const EdgeInsets.only(right: 6),
+                                  height: 5,
+                                  width: active ? 24 : 6,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(active ? 99 : 99),
+                                    color: active ? t.accent : Colors.white.withValues(alpha: 0.25),
+                                    boxShadow: active
+                                        ? [BoxShadow(color: t.accent.withValues(alpha: 0.55), blurRadius: 10)]
+                                        : null,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: Text(
+                            '${activeIndex + 1}/${slides.length}',
+                            style: rajdhani(11, weight: FontWeight.w700).copyWith(color: Colors.white70),
+                          ),
                         ),
                       ],
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                item.title.toUpperCase(),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: inter(18, weight: FontWeight.w900).copyWith(
-                  color: Colors.white,
-                  height: 1.15,
-                  fontStyle: FontStyle.italic,
-                  letterSpacing: -0.5,
-                  shadows: const [
-                    Shadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 2)),
-                  ],
+            ),
+          ),
+    );
+  }
+}
+
+class _HomeCategoryBlock extends StatelessWidget {
+  const _HomeCategoryBlock({
+    required this.cats,
+    required this.activeKey,
+    required this.onSelect,
+  });
+
+  final List<CategoryItem> cats;
+  final String activeKey;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.watch<ThemeController>().colors;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 10),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: t.accent.withValues(alpha: 0.12),
+                  border: Border.all(color: t.accent.withValues(alpha: 0.25)),
                 ),
+                child: Icon(Ionicons.grid_outline, size: 14, color: t.accent),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Makundi',
+                style: rajdhani(13, weight: FontWeight.w800).copyWith(
+                  color: t.text,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                'Chuja maudhui',
+                style: rajdhani(11, weight: FontWeight.w600).copyWith(color: t.text2),
               ),
             ],
           ),
         ),
+        CatPillStrip(
+          children: [
+            for (final cat in cats)
+              CatPill(
+                label: cat.label,
+                icon: cat.icon,
+                categoryKey: cat.key,
+                active: activeKey == cat.key,
+                onPress: () => onSelect(cat.key),
+              ),
+          ],
+        ),
       ],
+    );
+  }
+}
+
+class _HomeErrorBanner extends StatelessWidget {
+  const _HomeErrorBanner({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.watch<ThemeController>().colors;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          colors: [t.accent.withValues(alpha: 0.14), t.card.withValues(alpha: 0.9)],
+        ),
+        border: Border.all(color: t.accent.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.wifi_tethering_error_rounded, color: t.accent, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(message, style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2)),
+          ),
+          TextButton(onPressed: onRetry, child: Text('Jaribu', style: TextStyle(color: t.accent))),
+        ],
+      ),
+    );
+  }
+}
+
+String _sectionEmojiForTitle(String title) {
+  final lower = title.toLowerCase();
+  if (lower.contains('mpira') || lower.contains('sport')) return _catEmoji('mpira');
+  if (lower.contains('tamthilia') || lower.contains('movie')) return _catEmoji('tamthilia');
+  if (lower.contains('habari') || lower.contains('news')) return _catEmoji('habari');
+  if (lower.contains('bure') || lower.contains('free')) return '🆓';
+  if (lower.contains('search')) return '🔎';
+  return '📺';
+}
+
+class _CarouselSlide extends StatelessWidget {
+  const _CarouselSlide({
+    required this.item,
+    required this.colors,
+    this.isActive = true,
+  });
+
+  final CarouselSlide item;
+  final AppThemeColors colors;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: colors.card),
+        SafeNetworkImage(
+          imageUrl: item.img,
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+          placeholderColor: colors.card,
+        ),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0.08),
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.75),
+                ],
+                stops: const [0.0, 0.55, 1.0],
+              ),
+            ),
+          ),
+        ),
+          Positioned(
+            top: 14,
+            left: 14,
+            child: PremiumLiveBadge(label: item.badge.isNotEmpty ? item.badge : 'LIVE'),
+          ),
+          Positioned(
+            top: 14,
+            right: 14,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+              ),
+              child: Text(
+                'MAUDHUI',
+                style: orbitron(7, weight: FontWeight.w800).copyWith(color: colors.premium, letterSpacing: 1),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 18,
+            right: 18,
+            bottom: 52,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.title.toUpperCase(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: inter(22, weight: FontWeight.w900).copyWith(
+                    color: Colors.white,
+                    height: 1.1,
+                    letterSpacing: -0.5,
+                    shadows: const [Shadow(color: Colors.black87, blurRadius: 20, offset: Offset(0, 4))],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const PremiumWatchChip(),
+              ],
+            ),
+          ),
+        ],
     );
   }
 }
@@ -648,58 +730,58 @@ class _HomeChannelSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
+    final emoji = _sectionEmojiForTitle(title);
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Container(
-          width: 4,
-          height: 22,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(14),
             gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                t.accent,
-                t.accent.withValues(alpha: 0.4),
-              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [t.accent.withValues(alpha: 0.22), t.card.withValues(alpha: 0.85)],
             ),
-            boxShadow: [
-              BoxShadow(
-                color: t.accent.withValues(alpha: 0.28),
-                blurRadius: 10,
-                spreadRadius: -1,
-                offset: const Offset(0, 3),
+            border: Border.all(color: t.border.withValues(alpha: 0.45)),
+          ),
+          alignment: Alignment.center,
+          child: Text(emoji, style: const TextStyle(fontSize: 18)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title.toUpperCase(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: rajdhani(14, weight: FontWeight.w800).copyWith(
+                  color: t.text,
+                  letterSpacing: 0.9,
+                  height: 1.05,
+                ),
+              ),
+              Text(
+                '$count channel${count == 1 ? '' : 's'}',
+                style: rajdhani(11, weight: FontWeight.w600).copyWith(color: t.text2),
               ),
             ],
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: rajdhani(12.5, weight: FontWeight.w800).copyWith(
-              color: t.text.withValues(alpha: 0.92),
-              letterSpacing: 1.05,
-              height: 1.05,
-            ),
-          ),
-        ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(999),
-            color: t.card.withValues(alpha: 0.55),
-            border: Border.all(color: t.border.withValues(alpha: 0.35)),
+            gradient: LinearGradient(colors: [t.accent.withValues(alpha: 0.2), t.card.withValues(alpha: 0.6)]),
+            border: Border.all(color: t.accent.withValues(alpha: 0.35)),
           ),
           child: Text(
             '$count',
-            style: rajdhani(10.5, weight: FontWeight.w700).copyWith(
-              color: t.text2.withValues(alpha: 0.95),
-              letterSpacing: 0.4,
-            ),
+            style: rajdhani(11, weight: FontWeight.w800).copyWith(color: t.accent),
           ),
         ),
       ],
@@ -732,12 +814,12 @@ class _ChannelGridSection extends StatelessWidget {
     final tileH = channelGridCellHeight(cellW).clamp(56.0, double.infinity);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.only(bottom: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(hPad, 2, hPad, 10),
+            padding: const EdgeInsets.fromLTRB(hPad, 4, hPad, 12),
             child: _HomeChannelSectionHeader(title: title, count: channels.length),
           ),
           Padding(
@@ -844,12 +926,12 @@ class _ChannelRailState extends State<_ChannelRail> {
     if (widget.channels.isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.only(bottom: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 2, 18, 10),
+            padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
             child: _HomeChannelSectionHeader(title: widget.title, count: widget.channels.length),
           ),
           SizedBox(
@@ -863,7 +945,7 @@ class _ChannelRailState extends State<_ChannelRail> {
                   scrollDirection: Axis.horizontal,
                   clipBehavior: Clip.none,
                   itemCount: widget.channels.length,
-                  separatorBuilder: (context, index) => const SizedBox(width: 12),
+                  separatorBuilder: (context, index) => const SizedBox(width: 14),
                   itemBuilder: (context, i) {
                     final ch = widget.channels[i];
                     return ChannelCard(
@@ -874,6 +956,40 @@ class _ChannelRailState extends State<_ChannelRail> {
                       onPress: () => widget.onChannel(ch),
                     );
                   },
+                ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 22,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [t.bg1.withValues(alpha: 0.92), Colors.transparent],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 36,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerRight,
+                          end: Alignment.centerLeft,
+                          colors: [t.bg1.withValues(alpha: 0.95), Colors.transparent],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
                 Positioned(
                   right: 18,

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 
 /// Portrait thumb (3:4) + centered title — must match [AspectRatio] below.
@@ -140,12 +141,28 @@ class _ChannelPoster extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(22),
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ColoredBox(color: t.card),
+          ColoredBox(color: t.surface),
           SafeNetworkImage(imageUrl: ch.img, fit: BoxFit.cover, placeholderColor: t.card),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.08),
+                    Colors.black.withValues(alpha: 0.35),
+                  ],
+                  stops: const [0.0, 0.55, 1.0],
+                ),
+              ),
+            ),
+          ),
           if (titleOverlay)
             Positioned(
               left: 0,
@@ -159,9 +176,9 @@ class _ChannelPoster extends StatelessWidget {
               ),
             ),
           Positioned(
-            top: 6,
-            left: 6,
-            child: _LivePill(colors: t),
+            top: 8,
+            left: 8,
+            child: PremiumLiveBadge(compact: titleOverlayCompact),
           ),
           Positioned(
             top: 6,
@@ -171,8 +188,8 @@ class _ChannelPoster extends StatelessWidget {
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0x8027272a)),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
             ),
           ),
@@ -251,14 +268,31 @@ class _ChannelCardState extends State<ChannelCard> {
     final padH = rail ? 6.0 : 8.0;
 
     final core = GestureDetector(
-      onTapDown: (_) => setState(() => _scale = 0.98),
+      onTapDown: (_) => setState(() => _scale = 0.96),
       onTapUp: (_) => setState(() => _scale = 1),
       onTapCancel: () => setState(() => _scale = 1),
       onTap: widget.onPress,
       child: AnimatedScale(
         scale: _scale,
-        duration: const Duration(milliseconds: 120),
-        child: Column(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.5),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+              BoxShadow(
+                color: t.accent.withValues(alpha: 0.06),
+                blurRadius: 24,
+                spreadRadius: -8,
+              ),
+            ],
+          ),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -333,6 +367,7 @@ class _ChannelCardState extends State<ChannelCard> {
             ],
           ],
         ),
+        ),
       ),
     );
 
@@ -369,9 +404,9 @@ class _AccessBadge extends StatelessWidget {
           border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
         ),
         child: Text(
-          'Bure',
+          'BURE',
           style: orbitron(7, weight: FontWeight.w900).copyWith(
-            color: const Color(0xFFa1a1aa),
+            color: t.free,
             letterSpacing: 0.8,
           ),
         ),
@@ -418,45 +453,6 @@ class _AccessBadge extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: rajdhani(8, weight: FontWeight.w700).copyWith(color: const Color(0xFFbbf7d0), height: 1.05),
-      ),
-    );
-  }
-}
-
-class _LivePill extends StatelessWidget {
-  const _LivePill({required this.colors});
-
-  final AppThemeColors colors;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(
-        color: colors.red,
-        borderRadius: BorderRadius.circular(4),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 5,
-            height: 5,
-            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            'LIVE',
-            style: orbitron(7, weight: FontWeight.w900).copyWith(color: Colors.white, letterSpacing: 1),
-          ),
-        ],
       ),
     );
   }

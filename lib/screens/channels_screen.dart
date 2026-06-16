@@ -10,6 +10,7 @@ import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/channel_card.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/widgets/pro_shimmer.dart';
 
 class ChannelsScreen extends StatefulWidget {
@@ -108,8 +109,11 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
       builder: (context, value, child) {
         final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
 
-        return ColoredBox(
-      color: t.bg1,
+        return Stack(
+          children: [
+            const PremiumAmbientBackground(),
+            ColoredBox(
+      color: Colors.transparent,
       child: RefreshIndicator(
         color: t.accent,
         onRefresh: () => context.read<ContentStore>().refresh(),
@@ -274,7 +278,9 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
           ],
         ),
       ),
-    );
+        ),
+          ],
+        );
       },
     );
   }

@@ -170,8 +170,9 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     val webContainer = findViewById<FrameLayout>(R.id.webview_container)
                     if (playerManager.tryRevertToWebViewPlayback()) {
                         Log.i(TAG, "Reverted to WebView — suppressing unavailable dialog")
-                        playerOverlay.attachWebViewMode()
+                        playerOverlay.attachWebViewMode(alreadyPlaying = true)
                         attachWebViewIfNeeded(webContainer, playerView)
+                        playerManager.getWebView()?.alpha = 1f
                         return@runOnUiThread
                     }
                     showChannelUnavailableAndFinish()
@@ -185,7 +186,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     try {
                         val okoaBtn = findViewById<Button>(R.id.btn_okoa_bundle)
                         if (playerManager.isWebViewPlayback()) {
-                            playerOverlay.attachWebViewMode()
+                            val webAlreadyPlaying = playerManager.isPlaying()
+                            playerOverlay.attachWebViewMode(alreadyPlaying = webAlreadyPlaying)
                             playerView.player = null
                             okoaBtn.visibility = View.VISIBLE
                             playerView.visibility = View.GONE
@@ -193,6 +195,9 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                             playerManager.getWebView()?.alpha = 1f
                             playerManager.setQuality(selectedOkoaQuality, fromUser = false)
                         } else {
+                            if (playbackReady) {
+                                playerOverlay.markStreamHandoff()
+                            }
                             exoBoundToView = false
                             webContainer.visibility = View.GONE
                             webContainer.removeAllViews()

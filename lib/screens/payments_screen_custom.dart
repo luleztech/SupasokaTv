@@ -98,6 +98,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   bool _paymentPollArmed = false;
   /// Prevents countdown timeout from racing past a successful poll / [confirm] round-trip.
   bool _paymentCompletionInProgress = false;
+  String _submitStatus = '';
+  Timer? _submitStageTimer;
 
   AnimationController get _entryCtrlSafe {
     final existing = _entryCtrl;
@@ -196,6 +198,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   @override
   void dispose() {
+    _submitStageTimer?.cancel();
     _stopPaymentTimersOnly(notify: false);
     _phoneCtrl.dispose();
     _entryCtrl?.dispose();
@@ -671,6 +674,37 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
   }
 
+  void _beginSubmitProgress() {
+    _submitStageTimer?.cancel();
+    setState(() {
+      _submitting = true;
+      _submitStatus = 'Inathibitisha taarifa zako…';
+    });
+    var step = 0;
+    _submitStageTimer = Timer.periodic(const Duration(milliseconds: 850), (_) {
+      if (!mounted || !_submitting) return;
+      step++;
+      setState(() {
+        _submitStatus = switch (step % 3) {
+          0 => 'Inathibitisha taarifa zako…',
+          1 => 'Inaunganisha na M-PESA…',
+          _ => 'Inatumia ombi la malipo…',
+        };
+      });
+    });
+  }
+
+  void _endSubmitProgress() {
+    _submitStageTimer?.cancel();
+    _submitStageTimer = null;
+    if (mounted) {
+      setState(() {
+        _submitting = false;
+        _submitStatus = '';
+      });
+    }
+  }
+
   Future<void> _send() async {
     final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
     if (bundles.isEmpty) {
@@ -694,14 +728,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       );
       return;
     }
-    if (_userId == null) {
-      _showStatus(
-        'Tatizo la akaunti',
-        'Hatukuweza kutambua akaunti yako. Fungua tena sehemu ya wasifu (Profile) kisha ujaribu tena.',
-        _PayDialogTone.error,
-      );
-      return;
-    }
 
     _Bundle? bundle;
     for (final b in bundles) {
@@ -720,8 +746,22 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
     final plan = bundle;
 
-    setState(() => _submitting = true);
+    _beginSubmitProgress();
     try {
+      if (_userId == null || _userId!.isEmpty) {
+        setState(() => _submitStatus = 'Inaandaa akaunti yako…');
+        _userId = await getOrCreateUserId();
+        if (_userId == null || _userId!.isEmpty) {
+          _showStatus(
+            'Tatizo la akaunti',
+            'Hatukuweza kutambua akaunti yako. Fungua tena sehemu ya wasifu (Profile) kisha ujaribu tena.',
+            _PayDialogTone.error,
+          );
+          return;
+        }
+      }
+
+      setState(() => _submitStatus = 'Inatumia ombi la malipo…');
       final result = await paymentsApi.startPayment(
         externalId: _userId!,
         bundle: plan.id,
@@ -744,12 +784,21 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           await prefs.setString('pendingPaymentProvider', provider);
         }
         if (!mounted) return;
+        _submitStageTimer?.cancel();
+        setState(() {
+          _submitStatus = 'Ombi limetumwa! Angalia simu yako…';
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        if (!mounted) return;
         setState(() {
           _pollingOrderId = orderId;
           _notFoundStreak = 0;
-          _paymentUiPhase = _PaymentUiPhase.instruction;
           _pendingBundleLabel = plan.name;
+          _paymentUiPhase = _PaymentUiPhase.waiting;
+          _submitting = false;
+          _submitStatus = '';
         });
+        WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
       } else {
         final msg = serverMsg.isNotEmpty
             ? serverMsg
@@ -759,7 +808,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     } catch (e) {
       _showStatus('Malipo hayajatumika', _mapPaymentError(e), _PayDialogTone.error);
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (_submitting) _endSubmitProgress();
     }
   }
 
@@ -776,7 +825,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         setState(() => _selectedBundle = null);
       });
     }
-    final canPay = _phoneOk && _selectedBundle != null && !_submitting;
+    final showPayCta = _phoneOk && _selectedBundle != null;
+    final payEnabled = showPayCta && !_submitting;
 
     return Material(
       color: _scaffold,
@@ -942,7 +992,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                       opacity: animation,
                       child: SizeTransition(sizeFactor: animation, child: child),
                     ),
-                    child: canPay
+                    child: showPayCta
                         ? Padding(
                             key: const ValueKey('pay-button'),
                             padding: const EdgeInsets.only(top: 16),
@@ -954,7 +1004,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                   Transform.scale(scale: scale, child: child),
                               child: _PremiumPayCta(
                                 submitting: _submitting,
-                                onPressed: _send,
+                                onPressed: payEnabled ? _send : null,
                               ),
                             ),
                           )
@@ -965,6 +1015,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             ),
             ),
           ),
+          if (_submitting && _submitStatus.isNotEmpty)
+            Positioned.fill(
+              child: _PaymentProcessingOverlay(status: _submitStatus),
+            ),
           if (_paymentUiPhase == _PaymentUiPhase.instruction && _pollingOrderId != null)
             Positioned.fill(
               child: _PaymentInstructionModal(
@@ -1043,12 +1097,100 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 }
 
+/// Full-screen feedback while the payment request is being created (no silent gap).
+class _PaymentProcessingOverlay extends StatelessWidget {
+  const _PaymentProcessingOverlay({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.78),
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 380),
+              padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF151B2E), Color(0xFF0A0F18)],
+                ),
+                border: Border.all(color: const Color(0x28FFFFFF)),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF22C55E).withValues(alpha: 0.12),
+                    blurRadius: 32,
+                    spreadRadius: -8,
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 52,
+                    height: 52,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3.2,
+                      color: Color(0xFF4ADE80),
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 280),
+                    child: Text(
+                      status,
+                      key: ValueKey<String>(status),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: const LinearProgressIndicator(
+                      minHeight: 4,
+                      backgroundColor: Color(0x18FFFFFF),
+                      color: Color(0xFF22C55E),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Usifunge programu — hatua hii inachukua sekunde chache',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.4,
+                      color: Colors.white.withValues(alpha: 0.62),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Full-width premium CTA — gradient, glow, clear hierarchy (Fungua zote tab only; no WhatsApp FAB here).
 class _PremiumPayCta extends StatelessWidget {
   const _PremiumPayCta({required this.submitting, required this.onPressed});
 
   final bool submitting;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1340,16 +1482,35 @@ class _PaymentWaitingModal extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              const SizedBox(
+                width: 48,
+                height: 48,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: Color(0xFF4ADE80),
+                ),
+              ),
+              const SizedBox(height: 16),
               const Text(
                 'Subiri uthibitisho kwenye simu',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
               ),
+              const SizedBox(height: 8),
+              Text(
+                'Thibitisha PIN kwenye simu yako',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.75),
+                ),
+              ),
               const SizedBox(height: 14),
               ClipRRect(
                 borderRadius: BorderRadius.circular(999),
                 child: LinearProgressIndicator(
-                  value: progress,
+                  value: progress > 0.01 ? progress : null,
                   minHeight: 5,
                   backgroundColor: Colors.white10,
                   color: const Color(0xFF22C55E),
@@ -1357,7 +1518,9 @@ class _PaymentWaitingModal extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               Text(
-                'Sekunde $elapsedSeconds · tunahakiki malipo mara kwa mara (haraka mwanzoni)',
+                elapsedSeconds <= 0
+                    ? 'Tunahakiki malipo mara kwa mara…'
+                    : 'Sekunde $elapsedSeconds · tunahakiki malipo (haraka mwanzoni)',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.82), height: 1.35),
               ),

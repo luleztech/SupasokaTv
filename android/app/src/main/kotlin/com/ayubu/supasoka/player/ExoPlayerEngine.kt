@@ -115,14 +115,14 @@ class ExoPlayerEngine(
         private const val TAG = "ExoPlayerEngine"
         
         // Buffer configuration tuned for fast live IPTV start on mobile networks.
-        private const val MIN_BUFFER_MS = 8000
-        private const val MAX_BUFFER_MS = 25000
-        private const val BUFFER_FOR_PLAYBACK_MS = 750
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1250
+        private const val MIN_BUFFER_MS = 5000
+        private const val MAX_BUFFER_MS = 20000
+        private const val BUFFER_FOR_PLAYBACK_MS = 500
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1000
 
         // Timeouts: fail fast → surface error → retry rather than hanging silently.
-        private const val CONNECT_TIMEOUT_MS = 10000  // 10s connect (was 30s)
-        private const val READ_TIMEOUT_MS = 20000     // 20s read (was 30s)
+        private const val CONNECT_TIMEOUT_MS = 8000
+        private const val READ_TIMEOUT_MS = 15000
     }
 
     /**
@@ -634,10 +634,12 @@ class ExoPlayerEngine(
         dataSourceFactory: HttpDataSource.Factory,
         headers: Map<String, String>
     ): MediaSource {
-        // Reference player used `false` here for broader HLS server compatibility; chunkless can
-        // break some IPTV origins that require a full playlist read before preparation.
+        // Chunkless prep starts live HLS faster; disabled for gateway/sniff URLs that need full playlist.
+        val allowChunkless = StreamUrlClassifier.hasObviousM3u8(streamSession.mpdUrl) &&
+            !StreamUrlClassifier.isLikelyGatewayUrl(streamSession.mpdUrl) &&
+            !StreamUrlClassifier.isPhpLikeUrl(streamSession.mpdUrl)
         val hlsFactory = HlsMediaSource.Factory(dataSourceFactory)
-            .setAllowChunklessPreparation(false)
+            .setAllowChunklessPreparation(allowChunkless)
 
         // Add DRM session manager if needed (for SAMPLE-AES encryption)
         if (streamSession.drmType != DrmType.NONE) {

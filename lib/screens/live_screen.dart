@@ -11,6 +11,7 @@ import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 
@@ -39,8 +40,11 @@ class LiveScreen extends StatelessWidget {
     final tileH = bannerH;
     final matches = store.liveMatches;
 
-    return ColoredBox(
-      color: t.bg1,
+    return Stack(
+      children: [
+        const PremiumAmbientBackground(),
+        ColoredBox(
+      color: Colors.transparent,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -154,6 +158,8 @@ class LiveScreen extends StatelessWidget {
           ),
         ],
       ),
+        ),
+      ],
     );
   }
 }

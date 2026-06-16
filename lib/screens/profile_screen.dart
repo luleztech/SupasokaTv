@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/screens/settings_screen.dart';
@@ -10,6 +11,7 @@ import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
+import 'package:supasoka/widgets/premium_ui.dart';
 
 String _avatarLetters(String publicId) {
   final tail =
@@ -95,6 +97,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _copyUsername() async {
+    final id = _username?.trim();
+    if (id == null || id.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: id));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Jina lako limenakiliwa: $id', style: rajdhani(14, weight: FontWeight.w600)),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
@@ -107,16 +124,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final isPremium = until != null && until.isAfter(now);
     final remaining = until != null ? until.difference(now) : Duration.zero;
 
-    return ColoredBox(
-      color: t.bg1,
-      child: RefreshIndicator(
-        color: t.accent,
-        onRefresh: () => context.read<ContentStore>().refresh(),
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 100),
-          children: [
-          const AppHeader(title: 'Akaunti', subtitle: 'AKAUNTI YAKO'),
+    return Stack(
+      children: [
+        const PremiumAmbientBackground(),
+        ColoredBox(
+          color: Colors.transparent,
+          child: RefreshIndicator(
+            color: t.accent,
+            onRefresh: () => context.read<ContentStore>().refresh(),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: 100),
+              children: [
+                const AppHeader(title: 'Akaunti', subtitle: 'AKAUNTI YAKO'),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
             child: Column(
@@ -133,10 +153,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Text(letters, style: orbitron(28, weight: FontWeight.w900).copyWith(color: Colors.black)),
                 ),
                 const SizedBox(height: 16),
-                Text(
-                  displayName,
-                  style: orbitron(18).copyWith(color: t.text, letterSpacing: 0.6),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: username != null ? _copyUsername : null,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              displayName,
+                              style: orbitron(18).copyWith(color: t.text, letterSpacing: 0.6),
+                            ),
+                          ),
+                          if (username != null) ...[
+                            const SizedBox(width: 8),
+                            Icon(Ionicons.copy_outline, size: 18, color: t.text2),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
+                if (username != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Gusa kunakili jina lako',
+                      style: rajdhani(11, weight: FontWeight.w600).copyWith(color: t.text2),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -183,9 +232,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
-        ],
+              ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 }

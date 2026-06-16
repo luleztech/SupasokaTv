@@ -48,21 +48,16 @@ class SupasokaPlayerOverlay(
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
-            refreshBufferingUi()
-            if (state == Player.STATE_READY && !firstFrameShown) {
-                firstFrameShown = true
-                loadingOverlay.visibility = View.GONE
-            }
+            syncFromPlayer(attachedPlayer)
             refreshTimeLabels()
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            refreshBufferingUi()
+            syncFromPlayer(attachedPlayer)
         }
 
         override fun onRenderedFirstFrame() {
-            firstFrameShown = true
-            loadingOverlay.visibility = View.GONE
+            markFirstFrameReady()
         }
     }
 
@@ -72,16 +67,27 @@ class SupasokaPlayerOverlay(
         attachedPlayer = player
         player.addListener(playerListener)
         mainHandler.post(tickRunnable)
-        refreshBufferingUi()
+        syncFromPlayer(player)
         refreshTimeLabels()
     }
 
-    fun attachWebViewMode() {
+    /**
+     * @param alreadyPlaying When WebView is already decoding (e.g. revert after failed Exo promotion),
+     *   keep the screen clean — never re-show the full-screen spinner.
+     */
+    fun attachWebViewMode(alreadyPlaying: Boolean = false) {
         detach()
         webViewMode = true
         attachedPlayer = null
-        loadingOverlay.visibility = View.VISIBLE
-        liveBadge.visibility = View.VISIBLE
+        if (alreadyPlaying || playbackState == PlaybackState.PLAYING) {
+            markFirstFrameReady()
+            liveBadge.visibility = View.VISIBLE
+        } else {
+            firstFrameShown = false
+            loadingOverlay.visibility = View.VISIBLE
+            bufferingBar.visibility = View.GONE
+            liveBadge.visibility = View.GONE
+        }
         hideVodControls()
         inlineLiveBadge?.visibility = View.VISIBLE
         progressBar?.visibility = View.GONE
@@ -97,30 +103,28 @@ class SupasokaPlayerOverlay(
         playbackState = state
         when (state) {
             PlaybackState.PLAYING -> {
-                if (webViewMode) {
-                    firstFrameShown = true
-                    loadingOverlay.visibility = View.GONE
-                    liveBadge.visibility = View.VISIBLE
-                }
+                markFirstFrameReady()
+                liveBadge.visibility = View.VISIBLE
                 bufferingBar.visibility = View.GONE
             }
-            PlaybackState.BUFFERING -> {
-                if (firstFrameShown || webViewMode) {
-                    bufferingBar.visibility = View.VISIBLE
-                } else {
-                    loadingOverlay.visibility = View.VISIBLE
-                }
-            }
+            PlaybackState.BUFFERING -> showBufferingIndicator()
             PlaybackState.READY -> {
                 bufferingBar.visibility = View.GONE
                 if (!webViewMode && attachedPlayer != null) {
+                    syncFromPlayer(attachedPlayer)
                     refreshTimeLabels()
                 }
             }
             PlaybackState.PAUSED -> bufferingBar.visibility = View.GONE
             else -> { }
         }
-        refreshBufferingUi()
+    }
+
+    /** Gateway → Exo handoff: keep video visible, only show the thin top bar while rebuffering. */
+    fun markStreamHandoff() {
+        firstFrameShown = true
+        loadingOverlay.visibility = View.GONE
+        bufferingBar.visibility = View.VISIBLE
     }
 
     fun resetForNewStream() {
@@ -130,15 +134,44 @@ class SupasokaPlayerOverlay(
         liveBadge.visibility = View.GONE
     }
 
-    private fun refreshBufferingUi() {
-        if (webViewMode) return
-        val player = attachedPlayer ?: return
-        val buffering = player.playbackState == Player.STATE_BUFFERING
-        if (buffering && firstFrameShown) {
+    private fun markFirstFrameReady() {
+        firstFrameShown = true
+        loadingOverlay.visibility = View.GONE
+        bufferingBar.visibility = View.GONE
+    }
+
+    private fun showBufferingIndicator() {
+        if (firstFrameShown || playbackState == PlaybackState.PLAYING || attachedPlayer?.isPlaying == true) {
+            loadingOverlay.visibility = View.GONE
             bufferingBar.visibility = View.VISIBLE
-        } else if (player.playbackState == Player.STATE_READY ||
+        } else if (webViewMode) {
+            // WebView initial load — spinner stays until PLAYING; no full overlay on rebuffer.
+            bufferingBar.visibility = View.VISIBLE
+        } else {
+            bufferingBar.visibility = View.GONE
+            loadingOverlay.visibility = View.VISIBLE
+        }
+    }
+
+    /** Sync overlay when listener attaches after Exo already prepared (avoids spinner over playing video). */
+    private fun syncFromPlayer(player: Player?) {
+        if (webViewMode || player == null) return
+
+        val ready = player.playbackState == Player.STATE_READY ||
+            player.playbackState == Player.STATE_BUFFERING ||
             player.playbackState == Player.STATE_ENDED
-        ) {
+        val playing = player.isPlaying
+
+        if (ready || playing) {
+            firstFrameShown = true
+            loadingOverlay.visibility = View.GONE
+        }
+
+        if (player.playbackState == Player.STATE_BUFFERING && firstFrameShown) {
+            bufferingBar.visibility = View.VISIBLE
+        } else if (player.playbackState == Player.STATE_READY && playing) {
+            bufferingBar.visibility = View.GONE
+        } else if (player.playbackState == Player.STATE_READY && !playing) {
             bufferingBar.visibility = View.GONE
         }
     }

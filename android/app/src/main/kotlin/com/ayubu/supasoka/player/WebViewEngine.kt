@@ -31,6 +31,11 @@ class WebViewEngine(
 ) {
     companion object {
         private const val TAG = "WebViewEngine"
+        /** Detects active <video> playback when the JS bridge never fires onPlaybackStarted. */
+        private const val VIDEO_PLAYING_PROBE_JS =
+            "(function(){var v=document.querySelector('video');" +
+                "if(v&&!v.paused&&!v.ended&&v.readyState>=2&&(v.currentTime>0||v.videoWidth>0))return'playing';" +
+                "return'';})()"
     }
 
     private var webView: WebView? = null
@@ -60,6 +65,12 @@ class WebViewEngine(
     private var licenseHeadersWaitRunnable: Runnable? = null
     private var licenseHeadersWaitExpired = false
     private var licenseBridge: WebViewLicenseBridge? = null
+    /** Encrypted gateway playing in WebView — stop JS extract/probe loops (main-thread jank). */
+    private var gatewayExtractLocked = false
+    /** No native license URL — keep Shaka/Widevine inside WebView instead of Exo promotion. */
+    private var exoPromotionDeferred = false
+    private val gatewayExtractRunnables = mutableListOf<Runnable>()
+    private var playbackMonitorRunnable: Runnable? = null
 
     fun initialize(streamSession: StreamSession) {
         released = false
@@ -72,6 +83,10 @@ class WebViewEngine(
         shakaDrmSignaled = false
         capturedManifestHeaders = emptyMap()
         licenseHeadersWaitExpired = false
+        gatewayExtractLocked = false
+        exoPromotionDeferred = false
+        cancelGatewayExtractRunnables()
+        cancelPlaybackMonitor()
         cancelLicenseHeadersWait()
         cancelManifestFallback()
         currentSession = streamSession
@@ -176,7 +191,7 @@ class WebViewEngine(
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, startedUrl: String?, favicon: android.graphics.Bitmap?) {
                     super.onPageStarted(view, startedUrl, favicon)
-                    if (!usingShakaEmbed) {
+                    if (!usingShakaEmbed && !playbackStarted) {
                         view?.alpha = 0f
                         view?.evaluateJavascript(PhpWebViewSupport.gatewayShakaConfigureHookScript(), null)
                         view?.evaluateJavascript(PhpWebViewSupport.gatewayShakaHookScript(), null)
@@ -187,35 +202,19 @@ class WebViewEngine(
                     super.onPageFinished(view, finishedUrl)
                     val w = view ?: return
                     if (usingShakaEmbed) return
-                    injectPlayerOnlyUi(w)
-                    if (!okoaApiInjected) {
-                        okoaApiInjected = true
-                        w.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
-                    }
-                    w.evaluateJavascript(PhpWebViewSupport.gatewayPageRecoveryScript(), null)
-                    w.evaluateJavascript(PhpWebViewSupport.gatewayShakaConfigureHookScript(), null)
-                    w.evaluateJavascript(PhpWebViewSupport.gatewayShakaHookScript(), null)
-                    w.evaluateJavascript(PhpWebViewSupport.gatewayHtmlProbeScript(), null)
-                    licenseBridge?.injectScript()
-                    scheduleGatewayHtmlPrefetch(currentSession?.mpdUrl ?: finishedUrl.orEmpty())
-                    listOf(50L, 150L, 350L, 700L, 1500L, 2500L).forEach { delayMs ->
-                        w.postDelayed({
-                            if (!released && !usingShakaEmbed && !streamDelivered) {
-                                w.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
-                            }
-                        }, delayMs)
-                    }
-                    listOf(2500L, 5000L, 8000L).forEach { delayMs ->
-                        w.postDelayed({
-                            if (!released && !usingShakaEmbed) {
-                                w.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
-                                w.evaluateJavascript(PhpWebViewSupport.gatewayHtmlProbeScript(), null)
-                            }
-                        }, delayMs)
+                    ensureGatewayPageReady(w)
+                    if (!gatewayExtractLocked) {
+                        w.evaluateJavascript(PhpWebViewSupport.gatewayHtmlProbeScript(), null)
+                        w.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
+                        scheduleGatewayHtmlPrefetch(currentSession?.mpdUrl ?: finishedUrl.orEmpty())
+                        scheduleGatewayExtractRetries(w)
                     }
                     applyDefaultOkoa360(w)
                     scheduleUiInjection(w)
-                    scheduleManifestFallback()
+                    if (!exoPromotionDeferred) {
+                        scheduleManifestFallback()
+                    }
+                    scheduleWebViewPlaybackMonitor()
                 }
 
                 override fun onReceivedError(
@@ -278,24 +277,23 @@ class WebViewEngine(
             }
             jsInterface = WebViewJsInterface(
                 onPlaybackStateChanged = { state ->
-                    when (state) {
-                        PlaybackState.PLAYING -> {
-                            playbackStarted = true
-                            webViewPaused = false
-                            cancelPlaybackWatchdog()
-                            webView?.alpha = 1f
+                    mainHandler.post {
+                        when (state) {
+                            PlaybackState.PLAYING -> notifyWebViewPlaybackStarted()
+                            PlaybackState.PAUSED -> {
+                                webViewPaused = true
+                                onPlaybackStateChanged(state)
+                            }
+                            else -> onPlaybackStateChanged(state)
                         }
-                        PlaybackState.PAUSED -> webViewPaused = true
-                        else -> { }
                     }
-                    onPlaybackStateChanged(state)
                 },
-                onError = { handleJsPlaybackError() },
+                onError = { mainHandler.post { if (usingShakaEmbed) handleJsPlaybackError() } },
                 onStreamExtracted = { extracted ->
-                    deliverExtractedStream(extracted)
+                    mainHandler.post { deliverExtractedStream(extracted) }
                 },
                 onHtmlProbe = { html ->
-                    probeHtmlForGatewayExtract(html)
+                    mainHandler.post { probeHtmlForGatewayExtract(html) }
                 },
             )
             addJavascriptInterface(jsInterface!!, "ShakaPlayerBridge")
@@ -314,7 +312,7 @@ class WebViewEngine(
     }
 
     private fun scheduleGatewayHtmlPrefetch(gatewayUrl: String) {
-        if (!gatewayUrl.startsWith("http")) return
+        if (!gatewayUrl.startsWith("http") || gatewayExtractLocked) return
         worker.execute {
             try {
                 val session = currentSession ?: return@execute
@@ -339,7 +337,9 @@ class WebViewEngine(
     }
 
     private fun probeHtmlForGatewayExtract(html: String) {
-        if (released || (streamDelivered && lastExtracted?.licenseUrl?.isNotEmpty() == true)) return
+        if (released || gatewayExtractLocked ||
+            (streamDelivered && lastExtracted?.licenseUrl?.isNotEmpty() == true)
+        ) return
         worker.execute {
             val manifest = capturedManifestUrl.orEmpty()
             val extracted = PhpGatewayExtractor.extractFromHtml(html, manifest)
@@ -371,12 +371,17 @@ class WebViewEngine(
         val enriched = enrichExtracted(extracted)
         if (enriched.streamUrl.isBlank()) return
 
+        if (gatewayExtractLocked) {
+            val upgrade = enriched.licenseUrl.isNotEmpty() || enriched.licenseHeaders.isNotEmpty()
+            if (!upgrade) return
+        }
+
         if (enriched.licenseUrl.isEmpty() &&
             shouldWaitForLicense(enriched.streamUrl) &&
             !streamDelivered
         ) {
-            Log.d(TAG, "Encrypted stream without license — deferring Exo promotion")
             lastExtracted = enriched
+            deferExoPromotionToWebView()
             return
         }
 
@@ -463,7 +468,7 @@ class WebViewEngine(
             licenseHeadersWaitExpired = true
             Log.d(TAG, "License header wait timeout — promoting with CDN Origin/Referer defaults")
             lastExtracted?.let { deliverExtractedStream(it) }
-        }.also { mainHandler.postDelayed(it, 1_200L) }
+        }.also { mainHandler.postDelayed(it, 700L) }
     }
 
     private fun cancelLicenseHeadersWait() {
@@ -482,11 +487,12 @@ class WebViewEngine(
     }
 
     private fun scheduleManifestFallback() {
+        if (gatewayExtractLocked || exoPromotionDeferred) return
         cancelManifestFallback()
         manifestFallbackRunnable = Runnable {
             if (released || streamDelivered) return@Runnable
             tryManifestFallback(extended = false)
-        }.also { mainHandler.postDelayed(it, 3_500L) }
+        }.also { mainHandler.postDelayed(it, 1_800L) }
     }
 
     private fun scheduleExtendedManifestFallback() {
@@ -494,7 +500,7 @@ class WebViewEngine(
         manifestExtendedFallbackRunnable = Runnable {
             if (released || streamDelivered) return@Runnable
             tryManifestFallback(extended = true)
-        }.also { mainHandler.postDelayed(it, 9_000L) }
+        }.also { mainHandler.postDelayed(it, 5_500L) }
     }
 
     private fun shouldWaitForLicense(streamUrl: String): Boolean {
@@ -519,7 +525,7 @@ class WebViewEngine(
     private fun scheduleManifestDrmProbe(manifestUrl: String) {
         mainHandler.postDelayed({
             if (!released) probeManifestDrmAsync(manifestUrl)
-        }, 350L)
+        }, 120L)
     }
 
     private fun manifestProbeHeaders(session: StreamSession, manifestUrl: String): Map<String, String> {
@@ -556,6 +562,10 @@ class WebViewEngine(
             }
             mainHandler.post {
                 if (released) return@post
+                if (playbackStarted || exoPromotionDeferred) {
+                    Log.d(TAG, "Manifest fallback skipped — WebView playback active")
+                    return@post
+                }
                 if (streamDelivered && lastExtracted?.licenseUrl?.isNotEmpty() == true) return@post
                 manifestRequiresDrm = manifestRequiresDrm || probe.hasWidevine || shakaDrmSignaled
                 if (license.isEmpty() && shouldWaitForLicense(manifest) && !extended) {
@@ -564,6 +574,10 @@ class WebViewEngine(
                     return@post
                 }
                 if (license.isEmpty() && shouldWaitForLicense(manifest) && extended) {
+                    if (playbackStarted || exoPromotionDeferred) {
+                        Log.d(TAG, "No native license URL — keeping in-WebView Widevine playback")
+                        return@post
+                    }
                     webView?.evaluateJavascript(PhpWebViewSupport.gatewayHtmlProbeScript(), null)
                     webView?.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
                     Log.w(TAG, "No license after extended wait — cannot play encrypted stream")
@@ -738,6 +752,102 @@ class WebViewEngine(
         onError(message)
     }
 
+    private fun ensureGatewayPageReady(w: WebView) {
+        if (released || usingShakaEmbed) return
+        injectPlayerOnlyUi(w)
+        if (!okoaApiInjected) {
+            okoaApiInjected = true
+            w.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
+        }
+        w.evaluateJavascript(PhpWebViewSupport.gatewayPageRecoveryScript(), null)
+        w.evaluateJavascript(PhpWebViewSupport.gatewayShakaConfigureHookScript(), null)
+        w.evaluateJavascript(PhpWebViewSupport.gatewayShakaHookScript(), null)
+        licenseBridge?.injectScript()
+        w.alpha = 1f
+    }
+
+    /** Widevine gateway with no extractable license URL — play inside WebView, never spam Exo promotion. */
+    private fun deferExoPromotionToWebView() {
+        if (!exoPromotionDeferred) {
+            exoPromotionDeferred = true
+            Log.d(TAG, "Encrypted stream without license — staying on in-WebView Widevine")
+        }
+        stopGatewayExtractLoop()
+        webView?.let { ensureGatewayPageReady(it) }
+        scheduleWebViewPlaybackMonitor()
+    }
+
+    private fun notifyWebViewPlaybackStarted() {
+        if (playbackStarted || released) return
+        playbackStarted = true
+        webViewPaused = false
+        cancelPlaybackWatchdog()
+        cancelManifestFallback()
+        cancelExtendedManifestFallback()
+        cancelLicenseHeadersWait()
+        cancelPlaybackMonitor()
+        stopGatewayExtractLoop()
+        webView?.alpha = 1f
+        onPlaybackStateChanged(PlaybackState.PLAYING)
+    }
+
+    private fun scheduleWebViewPlaybackMonitor() {
+        cancelPlaybackMonitor()
+        var attempts = 0
+        val monitor = object : Runnable {
+            override fun run() {
+                if (released || playbackStarted) return
+                val w = webView ?: return
+                w.evaluateJavascript(VIDEO_PLAYING_PROBE_JS) { result ->
+                    if (released || playbackStarted) return@evaluateJavascript
+                    if (result?.contains("playing") == true) {
+                        mainHandler.post { notifyWebViewPlaybackStarted() }
+                    } else if (++attempts < 80) {
+                        mainHandler.postDelayed(this, 400L)
+                    }
+                }
+            }
+        }
+        playbackMonitorRunnable = monitor
+        mainHandler.postDelayed(monitor, 350L)
+    }
+
+    private fun cancelPlaybackMonitor() {
+        playbackMonitorRunnable?.let { mainHandler.removeCallbacks(it) }
+        playbackMonitorRunnable = null
+    }
+
+    private fun stopGatewayExtractLoop() {
+        if (gatewayExtractLocked) return
+        gatewayExtractLocked = true
+        cancelGatewayExtractRunnables()
+        cancelManifestFallback()
+        cancelExtendedManifestFallback()
+        cancelLicenseHeadersWait()
+        webView?.evaluateJavascript(
+            "try{window.__eaMaxExtractSent=true;}catch(e){}",
+            null,
+        )
+    }
+
+    /** At most 3 lightweight retries — first extract usually succeeds or triggers lock. */
+    private fun scheduleGatewayExtractRetries(w: WebView) {
+        cancelGatewayExtractRunnables()
+        listOf(400L, 1200L).forEach { delayMs ->
+            val r = Runnable {
+                if (released || usingShakaEmbed || gatewayExtractLocked || streamDelivered) return@Runnable
+                w.evaluateJavascript(PhpWebViewSupport.gatewayStreamExtractScript(), null)
+            }
+            gatewayExtractRunnables.add(r)
+            w.postDelayed(r, delayMs)
+        }
+    }
+
+    private fun cancelGatewayExtractRunnables() {
+        gatewayExtractRunnables.forEach { mainHandler.removeCallbacks(it) }
+        gatewayExtractRunnables.clear()
+    }
+
     private fun scheduleUiInjection(target: WebView) {
         cancelUiInjectionRunnables()
         listOf(100L, 400L, 900L, 1800L, 3500L, 6000L).forEach { delayMs ->
@@ -756,12 +866,26 @@ class WebViewEngine(
         cancelPlaybackWatchdog()
         playbackWatchdog = Runnable {
             if (released || playbackStarted) return@Runnable
+            val w = webView
+            if (w != null && !usingShakaEmbed) {
+                w.evaluateJavascript(VIDEO_PLAYING_PROBE_JS) { result ->
+                    if (released || playbackStarted) return@evaluateJavascript
+                    if (result?.contains("playing") == true) {
+                        mainHandler.post { notifyWebViewPlaybackStarted() }
+                    } else if (exoPromotionDeferred) {
+                        scheduleWebViewPlaybackMonitor()
+                    } else {
+                        reportErrorOnce("unavailable")
+                    }
+                }
+                return@Runnable
+            }
             if (usingShakaEmbed && lastExtracted != null) {
                 onShakaFailed?.invoke(lastExtracted!!)
             } else {
                 reportErrorOnce("unavailable")
             }
-        }.also { mainHandler.postDelayed(it, 20_000L) }
+        }.also { mainHandler.postDelayed(it, 22_000L) }
     }
 
     private fun cancelPlaybackWatchdog() {
@@ -840,6 +964,8 @@ class WebViewEngine(
         released = true
         cancelManifestFallback()
         cancelExtendedManifestFallback()
+        cancelGatewayExtractRunnables()
+        cancelPlaybackMonitor()
         cancelDefaultOkoaRunnables()
         cancelUiInjectionRunnables()
         cancelPlaybackWatchdog()
@@ -905,34 +1031,28 @@ class WebViewJsInterface(
             val streamUrl = o.optString("streamUrl", "").trim()
             val licenseHeaders = parseLicenseHeadersJson(o.optJSONObject("licenseHeaders"))
             if (streamUrl.isEmpty() && licenseHeaders.isEmpty()) return
-            if (streamUrl.isNotEmpty()) {
-                Log.d("WebViewEngine", "JS gateway extract: ${streamUrl.take(80)}...")
-            } else if (licenseHeaders.isNotEmpty()) {
-                Log.d("WebViewEngine", "JS captured license headers: ${licenseHeaders.keys.joinToString()}")
-            }
-            val clearKeyRaw = o.optString("clearKeyRaw", "").trim()
-            val clearKeys = if (clearKeyRaw.contains(':')) {
-                val parts = clearKeyRaw.split(':', limit = 2)
-                listOf(
-                    ClearKey(
-                        kid = parts.getOrElse(0) { "" }.trim(),
-                        k = parts.getOrElse(1) { "" }.trim(),
-                    ),
-                )
-            } else {
-                emptyList()
-            }
             val extracted = PhpGatewayExtractor.Extracted(
                 streamUrl = streamUrl,
                 isHls = o.optBoolean("isHls", streamUrl.contains(".m3u8", ignoreCase = true)),
                 licenseUrl = o.optString("licenseUrl", "").trim(),
                 authToken = o.optString("authToken", "").trim(),
-                clearKeys = clearKeys,
+                clearKeys = parseClearKeys(o.optString("clearKeyRaw", "").trim()),
                 licenseHeaders = licenseHeaders,
             )
             onStreamExtracted?.invoke(extracted)
         } catch (_: Exception) {
         }
+    }
+
+    private fun parseClearKeys(clearKeyRaw: String): List<ClearKey> {
+        if (!clearKeyRaw.contains(':')) return emptyList()
+        val parts = clearKeyRaw.split(':', limit = 2)
+        return listOf(
+            ClearKey(
+                kid = parts.getOrElse(0) { "" }.trim(),
+                k = parts.getOrElse(1) { "" }.trim(),
+            ),
+        )
     }
 
     private fun parseLicenseHeadersJson(obj: org.json.JSONObject?): Map<String, String> {

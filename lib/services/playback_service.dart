@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -86,7 +87,20 @@ Future<Map<String, String>> _versionHeaders() async {
 }
 
 /// Server-authoritative stream URL — never trust channel list cache for playback.
-Future<PlaybackResolveResult> resolveChannelPlayback(int channelId) async {
+/// Results are cached briefly so repeat opens feel instant (stale-while-revalidate).
+const _playbackCacheTtl = Duration(seconds: 45);
+
+final Map<int, ({PlaybackSession session, DateTime fetchedAt})> _playbackCache = {};
+
+void invalidatePlaybackCache([int? channelId]) {
+  if (channelId == null) {
+    _playbackCache.clear();
+  } else {
+    _playbackCache.remove(channelId);
+  }
+}
+
+Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
   final base = apiConfigUrl.trim();
   if (base.isEmpty) return PlaybackResolveResult.unavailable();
 
@@ -104,7 +118,7 @@ Future<PlaybackResolveResult> resolveChannelPlayback(int channelId) async {
   try {
     final res = await http
         .get(uri, headers: await _versionHeaders())
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 10));
 
     Map<String, dynamic>? j;
     try {
@@ -137,5 +151,27 @@ Future<PlaybackResolveResult> resolveChannelPlayback(int channelId) async {
     );
   } catch (_) {
     return PlaybackResolveResult.unavailable();
+  }
+}
+
+Future<PlaybackResolveResult> resolveChannelPlayback(int channelId) async {
+  final cached = _playbackCache[channelId];
+  final now = DateTime.now();
+  if (cached != null && now.difference(cached.fetchedAt) < _playbackCacheTtl) {
+    // Return cached session immediately; refresh in background for next open.
+    unawaited(_refreshPlaybackCacheEntry(channelId));
+    return PlaybackResolveResult.ok(cached.session);
+  }
+  final result = await _fetchChannelPlayback(channelId);
+  if (result.code == PlaybackResolveCode.ok && result.session != null) {
+    _playbackCache[channelId] = (session: result.session!, fetchedAt: now);
+  }
+  return result;
+}
+
+Future<void> _refreshPlaybackCacheEntry(int channelId) async {
+  final result = await _fetchChannelPlayback(channelId);
+  if (result.code == PlaybackResolveCode.ok && result.session != null) {
+    _playbackCache[channelId] = (session: result.session!, fetchedAt: DateTime.now());
   }
 }

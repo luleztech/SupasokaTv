@@ -59,6 +59,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _loading = true;
   _PlayerIssue? _issue;
   bool _useWebView = false;
+  /// Resolved playback URL (authoritative); used for retries/fallbacks.
+  String _playbackUrl = '';
+  Timer? _webLoadingSafetyTimer;
   /// On web, retry once with WebView when video_player (HLS/DASH) fails.
   bool _webFallbackAttempted = false;
 
@@ -123,6 +126,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
       return;
     }
+    _playbackUrl = url;
 
     final needsWebPlayer = StreamUrlClassifier.needsWebPlayer(url);
 
@@ -156,12 +160,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _initWebView(String url) async {
+    _webLoadingSafetyTimer?.cancel();
     try {
       final controller = WebViewController();
       await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
       await controller.setUserAgent(kBrowserPlaybackUserAgent);
       await controller.setBackgroundColor(Colors.black);
       await controller.enableZoom(true);
+      await controller.addJavaScriptChannel(
+        'SupasokaPlayback',
+        onMessageReceived: (JavaScriptMessage message) {
+          if (!mounted || message.message != 'playing') return;
+          _webLoadingSafetyTimer?.cancel();
+          if (_loading) setState(() => _loading = false);
+        },
+      );
       await controller.setNavigationDelegate(
         NavigationDelegate(
           onPageFinished: (_) {
@@ -171,6 +184,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             if (!mounted) return;
             // -3 is often cancelled navigation; ignore for UX.
             if (error.errorCode == -3) return;
+            _webLoadingSafetyTimer?.cancel();
             setState(() {
               _loading = false;
               _issue = _PlayerIssue.playbackUnavailable;
@@ -187,11 +201,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (!mounted) return;
       setState(() {
         _web = controller;
-        _loading = false;
+        _loading = true;
         _issue = null;
+      });
+      _webLoadingSafetyTimer = Timer(const Duration(seconds: 25), () {
+        if (!mounted || !_loading) return;
+        setState(() => _loading = false);
       });
     } catch (_) {
       if (!mounted) return;
+      _webLoadingSafetyTimer?.cancel();
       setState(() {
         _loading = false;
         _issue = _PlayerIssue.playbackUnavailable;
@@ -208,6 +227,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _onNativeVideoEvent() {
     final v = _video;
     if (v == null || !mounted || _useWebView) return;
+
+    if (v.value.isInitialized && (v.value.isPlaying || !v.value.isBuffering)) {
+      if (_loading) setState(() => _loading = false);
+    }
+
     if (!v.value.hasError) return;
 
     assert(() {
@@ -215,7 +239,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return true;
     }());
 
-    final url = _channel?.streamUrl.trim() ?? '';
+    final url = _playbackUrl.trim().isNotEmpty
+        ? _playbackUrl.trim()
+        : (_channel?.streamUrl.trim() ?? '');
     if (url.isEmpty) {
       _disposeNativeControllers();
       setState(() {
@@ -309,7 +335,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _video = video;
         _chewie = chewie;
-        _loading = false;
+        _loading = video.value.isBuffering && !video.value.isPlaying;
         _issue = null;
       });
     } catch (_) {
@@ -351,6 +377,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    _webLoadingSafetyTimer?.cancel();
     _video?.removeListener(_onNativeVideoEvent);
     _chewie?.dispose();
     _video?.dispose();
@@ -361,15 +388,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _reloadWeb() async {
     final w = _web;
-    final url = (_channel?.streamUrl ?? '').trim();
+    final url = _playbackUrl.trim().isNotEmpty
+        ? _playbackUrl.trim()
+        : (_channel?.streamUrl ?? '').trim();
     if (w == null || url.isEmpty) return;
+    _webLoadingSafetyTimer?.cancel();
     setState(() => _loading = true);
     final headers = playbackHttpHeaders(url);
     await w.loadRequest(
       Uri.parse(url),
       headers: Map<String, String>.from(headers),
     );
-    if (mounted) setState(() => _loading = false);
+    _webLoadingSafetyTimer = Timer(const Duration(seconds: 25), () {
+      if (!mounted || !_loading) return;
+      setState(() => _loading = false);
+    });
   }
 
   @override

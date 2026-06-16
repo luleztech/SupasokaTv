@@ -83,32 +83,31 @@ class _MainShellState extends State<MainShell> {
             ],
           ),
           bottomNavigationBar: Padding(
-            padding: EdgeInsets.fromLTRB(12, 0, 12, bottom + 10),
+            padding: EdgeInsets.fromLTRB(16, 0, 16, bottom + 12),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(30),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
                 child: Container(
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(24),
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        const Color(0xFF0B0D12).withValues(alpha: 0.92),
-                        const Color(0xFF131722).withValues(alpha: 0.88),
-                      ],
-                    ),
-                    border: Border.all(color: t.border.withValues(alpha: 0.55)),
+                    borderRadius: BorderRadius.circular(30),
+                    color: const Color(0xFF111111).withValues(alpha: 0.82),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.40),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
+                        color: Colors.black.withValues(alpha: 0.55),
+                        blurRadius: 28,
+                        offset: const Offset(0, 14),
+                      ),
+                      BoxShadow(
+                        color: t.accent.withValues(alpha: 0.08),
+                        blurRadius: 40,
+                        spreadRadius: -12,
+                        offset: const Offset(0, -4),
                       ),
                     ],
                   ),
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                  padding: const EdgeInsets.fromLTRB(6, 10, 6, 10),
                   child: Row(
                     children: [
                       _TabButton(
@@ -197,14 +196,13 @@ class _TabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.watch<ThemeController>().colors;
     final icon = selected ? solid : outline;
-    final active = t.accent;
     const activeIcon = Colors.white;
-    final idle = const Color(0xFF71717a);
-    final activeText = Color.lerp(const Color(0xFFD9FEE7), Colors.white, 0.35)!;
+    final idle = t.textMuted;
+    final activeText = Colors.white;
 
     return Expanded(
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         onTap: () {
           final changed = context.read<AppNav>().setTab(i);
           if (changed) {
@@ -218,46 +216,38 @@ class _TabButton extends StatelessWidget {
           }
         },
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 260),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutCubic,
           margin: const EdgeInsets.symmetric(horizontal: 2),
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
             gradient: selected
-                ? LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      active.withValues(alpha: 0.22),
-                      active.withValues(alpha: 0.10),
-                    ],
+                ? const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF3B30), Color(0xFFFF6B00)],
                   )
                 : null,
-            border: Border.all(
-              color: selected
-                  ? active.withValues(alpha: 0.35)
-                  : Colors.transparent,
-            ),
             boxShadow: selected
                 ? [
                     BoxShadow(
-                      color: active.withValues(alpha: 0.26),
-                      blurRadius: 16,
-                      spreadRadius: -5,
+                      color: t.accent.withValues(alpha: 0.45),
+                      blurRadius: 18,
+                      spreadRadius: -4,
                       offset: const Offset(0, 8),
                     ),
                   ]
                 : null,
           ),
           child: AnimatedScale(
-            scale: selected ? 1.04 : 1,
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
+            scale: selected ? 1.08 : 1,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 21, color: selected ? activeIcon : idle),
+                Icon(icon, size: 22, color: selected ? activeIcon : idle),
                 const SizedBox(height: 4),
                 Text(
                   label.toUpperCase(),
@@ -265,21 +255,11 @@ class _TabButton extends StatelessWidget {
                   textAlign: TextAlign.center,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: label.length > 10 ? 8.5 : 10,
+                    fontSize: label.length > 10 ? 8 : 9.5,
                     fontWeight: FontWeight.w800,
-                    letterSpacing: 0.35,
+                    letterSpacing: 0.4,
                     height: 1.1,
                     color: selected ? activeText : idle,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  width: selected ? 16 : 0,
-                  height: 2.2,
-                  decoration: BoxDecoration(
-                    color: active,
-                    borderRadius: BorderRadius.circular(99),
                   ),
                 ),
               ],
