@@ -20,15 +20,19 @@ object PhpWebViewSupport {
 
         return """
             (function () {
+              if (window.__eaMaxRecoveryInstalled) return true;
+              window.__eaMaxRecoveryInstalled = true;
+
               var lastProgressAt = Date.now();
-              var waitingSince = 0;
-              var monitorStarted = false;
+              var lastNudgeAt = 0;
 
               function getVideo() {
                 return document.querySelector('video');
               }
 
               function tryPlay(video) {
+                if (!video || window.__eaMaxPlaybackLocked) return;
+                if (!video.paused || video.ended) return;
                 try {
                   var p = video.play && video.play();
                   if (p && typeof p.catch === 'function') p.catch(function(){});
@@ -45,54 +49,35 @@ object PhpWebViewSupport {
 
                 video.addEventListener('timeupdate', function () {
                   lastProgressAt = Date.now();
-                  waitingSince = 0;
                 });
 
                 video.addEventListener('playing', function () {
                   lastProgressAt = Date.now();
-                  waitingSince = 0;
+                  window.__eaMaxPlaybackLocked = true;
                   $postPlaying
                 });
 
-                video.addEventListener('waiting', function () {
-                  waitingSince = waitingSince || Date.now();
-                });
-
-                tryPlay(video);
+                if (!window.__eaMaxPlaybackLocked) tryPlay(video);
               }
 
               function startMonitor() {
-                if (monitorStarted) return;
-                monitorStarted = true;
                 setInterval(function () {
+                  if (window.__eaMaxPlaybackLocked) return;
                   var video = getVideo();
-                  if (!video) return;
+                  if (!video || video.ended) return;
+                  if (!video.paused) return;
                   bindVideo(video);
-
                   var now = Date.now();
-                  var noProgressMs = now - lastProgressAt;
-                  if (video.paused && !video.ended) {
+                  if (now - lastNudgeAt > 8000) {
                     tryPlay(video);
+                    lastNudgeAt = now;
                   }
-
-                  if ((video.readyState < 3 || video.seeking) && waitingSince === 0) {
-                    waitingSince = now;
-                  }
-
-                  if (waitingSince > 0 && noProgressMs > 8000) {
-                    try {
-                      if (isFinite(video.currentTime) && video.currentTime > 0.15) {
-                        video.currentTime = Math.max(0, video.currentTime - 0.1);
-                      }
-                    } catch (e) {}
-                    tryPlay(video);
-                    waitingSince = now;
-                  }
-                }, 2500);
+                }, 5000);
               }
 
               try {
                 var observer = new MutationObserver(function () {
+                  if (window.__eaMaxPlaybackLocked) return;
                   var v = getVideo();
                   if (v) bindVideo(v);
                 });
@@ -289,6 +274,17 @@ object PhpWebViewSupport {
                     if (typeof oc === 'function') {
                       p.configure = function (cfg, clear) {
                         captureCfg(cfg);
+                        if (!window.__eaMaxOkoaUserInitiated && !p.__eaMaxStartup360Injected) {
+                          try {
+                            cfg = cfg || {};
+                            cfg.abr = cfg.abr || {};
+                            cfg.abr.enabled = false;
+                            cfg.abr.restrictions = cfg.abr.restrictions || {};
+                            cfg.abr.restrictions.maxHeight = 360;
+                            cfg.abr.restrictions.maxBandwidth = 800000;
+                            p.__eaMaxStartup360Injected = true;
+                          } catch (e6) {}
+                        }
                         var ret = oc.call(this, cfg, clear);
                         try {
                           if (!p.__eaMaxLicFilter && typeof p.getNetworkingEngine === 'function') {
@@ -608,13 +604,14 @@ object PhpWebViewSupport {
                 } catch (e9) {}
               }
               setInterval(function () {
+                if (window.__eaMaxPlaybackLocked) return;
                 tryShaka();
-                if (window.__eaMaxCapturedManifest) {
+                if (window.__eaMaxCapturedManifest && !window.__eaMaxExtractSent) {
                   post(window.__eaMaxCapturedManifest,
                        window.__eaMaxCapturedLicense || '',
                        '');
                 }
-              }, 500);
+              }, 800);
               return true;
             })();
         """.trimIndent()
@@ -733,6 +730,7 @@ object PhpWebViewSupport {
                   if (!hls || !hls.levels || !hls.levels.length) return;
                   found = true;
                   if (maxH <= 0) {
+                    if (hls.currentLevel === -1) return;
                     hls.currentLevel = -1;
                     if (typeof hls.loadLevel === 'function') hls.loadLevel(-1);
                     if (typeof hls.autoLevelEnabled !== 'undefined') hls.autoLevelEnabled = true;
@@ -741,6 +739,7 @@ object PhpWebViewSupport {
                   if (typeof hls.autoLevelEnabled !== 'undefined') hls.autoLevelEnabled = false;
                   var idx = pickLevel(hls.levels, maxH);
                   if (idx >= 0) {
+                    if (hls.currentLevel === idx) return;
                     hls.currentLevel = idx;
                     if (typeof hls.loadLevel === 'function') hls.loadLevel(idx);
                   }
@@ -763,6 +762,8 @@ object PhpWebViewSupport {
                   var pl = candidates[i];
                   try {
                     if (maxH <= 0) {
+                      if (pl.__eaMaxOkoaMaxH === 0) continue;
+                      pl.__eaMaxOkoaMaxH = 0;
                       pl.configure({
                         abr: { enabled: true },
                         restrictions: {
@@ -772,7 +773,14 @@ object PhpWebViewSupport {
                       });
                       continue;
                     }
+                    if (pl.__eaMaxOkoaMaxH === maxH) {
+                      var active = pl.getVariantTracks().filter(function(tr) {
+                        return tr.active && tr.height > 0 && tr.height <= maxH;
+                      });
+                      if (active.length) continue;
+                    }
                     var cap = maxBitrateForHeight(maxH);
+                    pl.__eaMaxOkoaMaxH = maxH;
                     pl.configure({
                       abr: { enabled: false },
                       restrictions: { maxHeight: maxH, maxBandwidth: cap }
@@ -786,34 +794,81 @@ object PhpWebViewSupport {
                       if (h > 0 && h <= maxH && h > bestH) { best = tr; bestH = h; }
                     }
                     if (best) {
-                      pl.selectVariantTrack(best, true);
+                      if (!best.active) pl.selectVariantTrack(best, false);
                     } else if (tracks.length) {
                       var minTr = tracks[0], minHt = tracks[0].height || 99999;
                       for (var u = 1; u < tracks.length; u++) {
                         var hh = tracks[u].height || 99999;
                         if (hh > 0 && hh < minHt) { minHt = hh; minTr = tracks[u]; }
                       }
-                      pl.selectVariantTrack(minTr, true);
+                      if (!minTr.active) pl.selectVariantTrack(minTr, false);
                     }
                   } catch (e3) {}
                 }
                 return true;
               }
               function applyOkoaQuality(mode) {
+                if (window.__eaMaxPlaybackLocked && !window.__eaMaxOkoaUserInitiated) return false;
                 var maxH = parseTarget(String(mode));
                 var hlsOk = tryHls(maxH);
                 var shakaOk = tryShaka(maxH);
                 return hlsOk || shakaOk;
               }
-              window.__eaMaxOkoaSetQuality = function(mode) {
-                window.__eaMaxOkoaLastMode = String(mode);
-                if (applyOkoaQuality(mode)) return true;
+              window.__eaMaxOkoaApplyStartup360 = function() {
+                if (window.__eaMaxOkoaUserInitiated || window.__eaMaxOkoaLastApplied === '360') return true;
+                if (window.__eaMaxStartup360Active) return false;
+                window.__eaMaxStartup360Active = true;
                 var tries = 0;
-                var id = setInterval(function() {
-                  if (applyOkoaQuality(window.__eaMaxOkoaLastMode) || ++tries >= 30) {
-                    clearInterval(id);
+                function attempt() {
+                  if (window.__eaMaxPlaybackLocked || window.__eaMaxOkoaUserInitiated) {
+                    window.__eaMaxStartup360Active = false;
+                    return;
                   }
-                }, 300);
+                  if (applyOkoaQuality('360')) {
+                    window.__eaMaxOkoaLastApplied = '360';
+                    window.__eaMaxStartup360Active = false;
+                    return;
+                  }
+                  if (++tries < 5) {
+                    setTimeout(attempt, 600);
+                  } else {
+                    window.__eaMaxStartup360Active = false;
+                  }
+                }
+                attempt();
+                return true;
+              };
+              window.__eaMaxOkoaSetQuality = function(mode, userInitiated) {
+                userInitiated = !!userInitiated;
+                if (!userInitiated) {
+                  window.__eaMaxOkoaLastMode = String(mode);
+                  return window.__eaMaxOkoaApplyStartup360();
+                }
+                window.__eaMaxOkoaUserInitiated = true;
+                var modeStr = String(mode);
+                if (window.__eaMaxOkoaLastApplied === modeStr) return true;
+                window.__eaMaxOkoaLastMode = modeStr;
+                if (applyOkoaQuality(modeStr)) {
+                  window.__eaMaxOkoaLastApplied = modeStr;
+                  window.__eaMaxOkoaUserInitiated = false;
+                  return true;
+                }
+                if (window.__eaMaxOkoaRetryId) {
+                  try { clearInterval(window.__eaMaxOkoaRetryId); } catch (e) {}
+                }
+                var tries = 0;
+                window.__eaMaxOkoaRetryId = setInterval(function() {
+                  if (applyOkoaQuality(window.__eaMaxOkoaLastMode)) {
+                    window.__eaMaxOkoaLastApplied = window.__eaMaxOkoaLastMode;
+                    window.__eaMaxOkoaUserInitiated = false;
+                    clearInterval(window.__eaMaxOkoaRetryId);
+                    window.__eaMaxOkoaRetryId = null;
+                  } else if (++tries >= 8) {
+                    clearInterval(window.__eaMaxOkoaRetryId);
+                    window.__eaMaxOkoaRetryId = null;
+                    window.__eaMaxOkoaUserInitiated = false;
+                  }
+                }, 800);
                 return true;
               };
               true;
@@ -884,7 +939,7 @@ video{width:100%;height:100%;background:#000;object-fit:contain;display:block}
     if(clearKeys&&Object.keys(clearKeys).length) drmCfg.clearKeys=clearKeys;
     if(licenseUrl) drmCfg.servers={'com.widevine.alpha':licenseUrl,'org.w3.clearkey':licenseUrl};
     player.configure({
-      streaming:{bufferingGoal:20,rebufferingGoal:3,retryParameters:{maxAttempts:5,baseDelay:1000,timeout:30000}},
+      streaming:{bufferingGoal:12,rebufferingGoal:2,retryParameters:{maxAttempts:4,baseDelay:800,timeout:20000}},
       drm:drmCfg,
       abr:{enabled:true,restrictions:{maxHeight:maxH,maxWidth:maxW}}
     });

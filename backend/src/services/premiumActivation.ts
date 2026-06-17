@@ -184,13 +184,8 @@ export async function activatePremiumForUser(args: {
   const now = Date.now();
   const dur = await resolvePlanDurationMs(pool, planId);
 
-  const res = await pool.query<{ premium_until_ms: string | null }>(
-    `SELECT premium_until_ms FROM users WHERE id = $1`,
-    [publicId],
-  );
-  const existing = res.rows[0]?.premium_until_ms != null ? Number(res.rows[0]!.premium_until_ms) : null;
-  const start = existing != null && Number.isFinite(existing) && existing > now ? existing : now;
-  const end = Math.trunc(start + dur);
+  // Each successful payment grants exactly one plan window from activation time.
+  const end = Math.trunc(now + dur);
 
   await pool.query(
     `UPDATE users

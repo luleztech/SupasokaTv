@@ -2,15 +2,18 @@
 /// (video element recovery; Android JS bridge calls removed).
 const String kPhpGatewayRecoveryJs = '''
 (function () {
-  var lastProgressAt = Date.now();
-  var waitingSince = 0;
-  var monitorStarted = false;
+  if (window.__eaMaxRecoveryInstalled) { return true; }
+  window.__eaMaxRecoveryInstalled = true;
+
+  var lastNudgeAt = 0;
 
   function getVideo() {
     return document.querySelector('video');
   }
 
   function tryPlay(video) {
+    if (!video || window.__eaMaxPlaybackLocked) return;
+    if (!video.paused || video.ended) return;
     try {
       var p = video.play && video.play();
       if (p && typeof p.catch === 'function') p.catch(function(){});
@@ -25,14 +28,8 @@ const String kPhpGatewayRecoveryJs = '''
     try { video.muted = false; } catch (e) {}
     video.controls = true;
 
-    video.addEventListener('timeupdate', function () {
-      lastProgressAt = Date.now();
-      waitingSince = 0;
-    });
-
     video.addEventListener('playing', function () {
-      lastProgressAt = Date.now();
-      waitingSince = 0;
+      window.__eaMaxPlaybackLocked = true;
       try {
         if (window.SupasokaPlayback && SupasokaPlayback.postMessage) {
           SupasokaPlayback.postMessage('playing');
@@ -40,45 +37,26 @@ const String kPhpGatewayRecoveryJs = '''
       } catch (e) {}
     });
 
-    video.addEventListener('waiting', function () {
-      waitingSince = waitingSince || Date.now();
-    });
-
-    tryPlay(video);
+    if (!window.__eaMaxPlaybackLocked) tryPlay(video);
   }
 
   function startMonitor() {
-    if (monitorStarted) return;
-    monitorStarted = true;
     setInterval(function () {
+      if (window.__eaMaxPlaybackLocked) return;
       var video = getVideo();
-      if (!video) return;
+      if (!video || video.ended || !video.paused) return;
       bindVideo(video);
-
       var now = Date.now();
-      var noProgressMs = now - lastProgressAt;
-      if (video.paused && !video.ended) {
+      if (now - lastNudgeAt > 8000) {
         tryPlay(video);
+        lastNudgeAt = now;
       }
-
-      if ((video.readyState < 3 || video.seeking) && waitingSince === 0) {
-        waitingSince = now;
-      }
-
-      if (waitingSince > 0 && noProgressMs > 8000) {
-        try {
-          if (isFinite(video.currentTime) && video.currentTime > 0.15) {
-            video.currentTime = Math.max(0, video.currentTime - 0.1);
-          }
-        } catch (e) {}
-        tryPlay(video);
-        waitingSince = now;
-      }
-    }, 2500);
+    }, 5000);
   }
 
   try {
     var observer = new MutationObserver(function () {
+      if (window.__eaMaxPlaybackLocked) return;
       var v = getVideo();
       if (v) bindVideo(v);
     });

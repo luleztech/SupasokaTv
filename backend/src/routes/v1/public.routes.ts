@@ -8,7 +8,7 @@ import {
   stripCatalogForForcedUpdate,
 } from '../../services/appUpdatePolicy';
 import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../services/playbackAccess';
-import { registerPublicUser, getUserPremiumRecord } from '../../services/userDirectory';
+import { registerPublicUser, getUserPremiumRecord, clearAllExpiredPremiumInDatabase } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
   getIntent,
@@ -238,6 +238,7 @@ publicRouter.post('/register-user', async (req, res, next) => {
 /** Viewer app: get premium status for a user. */
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
+    await clearAllExpiredPremiumInDatabase();
     const userId = String(req.params.userId ?? '').trim();
     await reconcilePremiumForUser(userId);
     const out = await getUserPremiumRecord(userId);

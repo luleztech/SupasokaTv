@@ -20,7 +20,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 /// Shown for any stream/decoder failure — never expose URLs, stack traces, or PlatformException text.
 const _kPlaybackUnavailableCopy =
-    'Mafundi wetu wanafanyia kazi. Channel itarejea hivi punde.';
+    'Haikuweza kucheza mfululizo. Jaribu tena.';
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({

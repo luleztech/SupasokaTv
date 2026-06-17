@@ -6,7 +6,7 @@ import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/user_identity.dart';
 
-/// Local premium expiry (set after successful Malipo flow).
+/// Local premium expiry (mirrors server — server is authoritative).
 class SubscriptionStore {
   SubscriptionStore._();
 
@@ -16,65 +16,69 @@ class SubscriptionStore {
   /// Keeps Akaunti / Malipo in sync without prop drilling.
   static final ValueNotifier<DateTime?> premiumUntilNotifier = ValueNotifier<DateTime?>(null);
 
+  static bool _isActiveMs(int? ms) {
+    if (ms == null) return false;
+    return DateTime.fromMillisecondsSinceEpoch(ms).isAfter(DateTime.now());
+  }
+
+  static Future<void> clearLocalPremium() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kUntilMs);
+    await p.remove(_kPlanId);
+    premiumUntilNotifier.value = null;
+  }
+
+  static Future<void> purgeExpiredLocalPremium() async {
+    final p = await SharedPreferences.getInstance();
+    final ms = p.getInt(_kUntilMs);
+    if (ms == null) {
+      premiumUntilNotifier.value = null;
+      return;
+    }
+    if (!_isActiveMs(ms)) {
+      await clearLocalPremium();
+      return;
+    }
+    premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
   static Future<DateTime?> premiumUntil() async {
     final p = await SharedPreferences.getInstance();
     final ms = p.getInt(_kUntilMs);
-    if (ms == null) return null;
+    if (ms == null || !_isActiveMs(ms)) {
+      if (ms != null) await clearLocalPremium();
+      return null;
+    }
     return DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
   static Future<String?> premiumPlanId() async {
     final p = await SharedPreferences.getInstance();
+    final ms = p.getInt(_kUntilMs);
+    if (ms == null || !_isActiveMs(ms)) return null;
     return p.getString(_kPlanId);
   }
 
   static Future<void> refreshNotifierFromPrefs() async {
-    premiumUntilNotifier.value = await premiumUntil();
+    await purgeExpiredLocalPremium();
   }
 
-  /// Sets expiry from server confirmation (same source as admin / other devices).
+  /// Sets expiry from server confirmation (authoritative).
   static Future<void> setPremiumUntilMs(int premiumUntilMs) async {
     final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
-    if (!end.isAfter(DateTime.now())) return;
+    if (!end.isAfter(DateTime.now())) {
+      await clearLocalPremium();
+      return;
+    }
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kUntilMs, premiumUntilMs);
     premiumUntilNotifier.value = end;
   }
 
-  /// Stacks on top of an active subscription if still valid. Prefer server [confirm-zeno-premium] for exact duration from admin malipo row.
-  static Future<void> activatePlan(String planId) async {
-    final p = await SharedPreferences.getInstance();
-    final now = DateTime.now();
-    final id = planId.trim().toLowerCase();
-    final dur = switch (id) {
-      'weekly' => const Duration(days: 7),
-      'monthly' => const Duration(days: 30),
-      'yearly' => const Duration(days: 365),
-      'annual' => const Duration(days: 365),
-      'quarterly' ||
-      'quarter' ||
-      'three_month' ||
-      'trimestrial' ||
-      'miezi_3' ||
-      'miezi3' =>
-        const Duration(days: 90),
-      'daily' => const Duration(days: 1),
-      _ => const Duration(days: 30),
-    };
-    final existingMs = p.getInt(_kUntilMs);
-    var start = now;
-    if (existingMs != null) {
-      final ex = DateTime.fromMillisecondsSinceEpoch(existingMs);
-      if (ex.isAfter(now)) start = ex;
-    }
-    final end = start.add(dur);
-    await p.setInt(_kUntilMs, end.millisecondsSinceEpoch);
-    await p.setString(_kPlanId, planId);
-    premiumUntilNotifier.value = end;
-  }
-
-  /// Sync premium status from backend (authoritative for existing users).
+  /// Sync premium status from backend (authoritative for all users).
   static Future<void> syncPremiumFromBackend() async {
+    await purgeExpiredLocalPremium();
+
     final base = apiConfigUrl.trim();
     if (base.isEmpty) return;
 
@@ -101,57 +105,22 @@ class SubscriptionStore {
               : null;
       final userExists = j['userExists'] == true;
 
-      final p = await SharedPreferences.getInstance();
-      final now = DateTime.now();
-      final localMs = p.getInt(_kUntilMs);
-      final localEnd = localMs != null ? DateTime.fromMillisecondsSinceEpoch(localMs) : null;
-      final localActive = localEnd != null && localEnd.isAfter(now);
-
-      if (premiumUntilMs != null) {
-        final serverEnd = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
-        final serverActive = serverEnd.isAfter(now);
-
-        if (serverActive) {
-          // Prefer the later expiry (covers stacking and transient server lag).
-          final bestMs = localActive && localEnd!.isAfter(serverEnd)
-              ? localEnd.millisecondsSinceEpoch
-              : premiumUntilMs;
-          await p.setInt(_kUntilMs, bestMs);
-          premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(bestMs);
-          return;
-        }
-
-        // Server timestamp is in the past — subscription ended.
-        if (localActive) {
-          // Keep local grant until its own expiry if server briefly disagrees.
-          premiumUntilNotifier.value = localEnd;
-          return;
-        }
-
-        await p.remove(_kUntilMs);
-        await p.remove(_kPlanId);
-        premiumUntilNotifier.value = null;
+      if (premiumUntilMs != null && _isActiveMs(premiumUntilMs)) {
+        final p = await SharedPreferences.getInstance();
+        await p.setInt(_kUntilMs, premiumUntilMs);
+        premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
         return;
       }
 
-      // Server has no premium timestamp — keep an active local subscription until it expires.
-      if (localActive) {
-        premiumUntilNotifier.value = localEnd;
-        return;
-      }
-
-      // Backend says no premium and local is expired/absent.
       if (userExists) {
         await PremiumRecovery.clearPendingPaymentState();
       }
-
-      await p.remove(_kUntilMs);
-      await p.remove(_kPlanId);
-      premiumUntilNotifier.value = null;
+      await clearLocalPremium();
     } catch (e) {
       if (kDebugMode) {
         debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');
       }
+      await purgeExpiredLocalPremium();
     }
   }
 }

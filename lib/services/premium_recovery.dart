@@ -234,9 +234,6 @@ class PremiumRecovery {
 
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
-      } else {
-        // Provider confirmed paid but server activation lagged — unlock locally for the selected plan.
-        await SubscriptionStore.activatePlan(planId);
       }
 
       if (phone.isNotEmpty) {

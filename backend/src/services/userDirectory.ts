@@ -88,6 +88,40 @@ export async function deleteUserById(id: string): Promise<boolean> {
   return (res.rowCount ?? 0) > 0;
 }
 
+export function isPremiumUntilActive(premiumUntilMs: number | null | undefined): premiumUntilMs is number {
+  return premiumUntilMs != null && Number.isFinite(premiumUntilMs) && premiumUntilMs > Date.now();
+}
+
+/** Null out expired premium rows so stale timestamps cannot be re-used. */
+export async function clearExpiredPremiumForUser(userId: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const trimmed = userId.trim();
+  if (!trimmed) return;
+  await pool.query(
+    `UPDATE users
+     SET premium_until_ms = NULL, updated_at = now()
+     WHERE id = $1
+       AND premium_until_ms IS NOT NULL
+       AND premium_until_ms <= $2`,
+    [trimmed, Date.now()],
+  );
+}
+
+/** One-shot maintenance — locks all users whose premium window has ended. */
+export async function clearAllExpiredPremiumInDatabase(): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  const res = await pool.query(
+    `UPDATE users
+     SET premium_until_ms = NULL, updated_at = now()
+     WHERE premium_until_ms IS NOT NULL
+       AND premium_until_ms <= $1`,
+    [Date.now()],
+  );
+  return res.rowCount ?? 0;
+}
+
 export async function getUserPremiumStatus(userId: string): Promise<number | null> {
   const row = await getUserPremiumRecord(userId);
   return row.premiumUntilMs;
@@ -122,8 +156,14 @@ export async function getUserPremiumRecord(userId: string): Promise<{ userExists
   );
   const row = res.rows[0];
   if (!row) return { userExists: false, premiumUntilMs: null };
+
+  const raw = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
+  if (raw != null && !isPremiumUntilActive(raw)) {
+    await clearExpiredPremiumForUser(trimmed);
+    return { userExists: true, premiumUntilMs: null };
+  }
   return {
     userExists: true,
-    premiumUntilMs: row.premium_until_ms != null ? Number(row.premium_until_ms) : null,
+    premiumUntilMs: raw,
   };
 }

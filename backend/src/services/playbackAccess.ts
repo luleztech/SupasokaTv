@@ -5,7 +5,7 @@ import {
   fetchAppUpdateSettings,
   readClientAppIdentity,
 } from './appUpdatePolicy';
-import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser } from './userDirectory';
+import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive, clearAllExpiredPremiumInDatabase } from './userDirectory';
 import { reconcilePremiumForUser } from './unifiedPayments';
 
 export type PlaybackSessionPayload = {
@@ -26,8 +26,7 @@ export type PlaybackResolveResult =
     };
 
 function isPremiumActive(premiumUntilMs: number | null): boolean {
-  if (premiumUntilMs == null || !Number.isFinite(premiumUntilMs)) return false;
-  return premiumUntilMs > Date.now();
+  return isPremiumUntilActive(premiumUntilMs);
 }
 
 /** Authoritative live playback — never expose stream URLs in public config. */
@@ -47,6 +46,8 @@ export async function resolvePlaybackForChannel(
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
+
+  await clearAllExpiredPremiumInDatabase();
 
   const chRes = await pool.query<{
     id: number;

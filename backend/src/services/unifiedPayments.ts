@@ -305,8 +305,8 @@ function intentOverrides(
 }
 
 /**
- * Paid order exists but users.premium_until_ms was never set — reconcile on playback/poll.
- * Includes PENDING intents (provider may have completed before status was persisted).
+ * Paid order completed but premium never activated — one-time recovery only.
+ * Never re-grant from orders that were already activated (prevents free extensions).
  */
 export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
   const trimmed = String(publicId ?? '').trim();
@@ -314,7 +314,7 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
 
   const { getUserPremiumStatus } = await import('./userDirectory');
   const existing = await getUserPremiumStatus(trimmed);
-  if (isPremiumUntilActive(existing)) return existing;
+  if (isPremiumUntilActiveLocal(existing)) return existing;
 
   const pool = getPool();
   if (!pool) return null;
@@ -324,25 +324,24 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
     `SELECT order_id
      FROM payment_intents
      WHERE public_id = $1
+       AND activated_at_ms IS NULL
        AND updated_at > now() - interval '30 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
-     ORDER BY
-       CASE WHEN status = 'COMPLETED' OR activated_at_ms IS NOT NULL THEN 0 ELSE 1 END,
-       updated_at DESC
-     LIMIT 10`,
+     ORDER BY updated_at DESC
+     LIMIT 3`,
     [trimmed],
   );
 
   for (const row of res.rows) {
-    const act = await ensurePremiumActivatedForPaidOrder(row.order_id, { publicId: trimmed });
-    if (act.activated && isPremiumUntilActive(act.premiumUntilMs)) {
+    const act = await activatePremiumIfCompletedOrder(row.order_id, { publicId: trimmed });
+    if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
       return act.premiumUntilMs!;
     }
   }
   return null;
 }
 
-function isPremiumUntilActive(until: number | null | undefined): until is number {
+function isPremiumUntilActiveLocal(until: number | null | undefined): until is number {
   return until != null && Number.isFinite(until) && until > Date.now();
 }
 
@@ -396,10 +395,10 @@ export async function activatePremiumIfCompletedOrder(
   if (intent?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
     const until = await getUserPremiumStatus(identity.publicId);
-    if (isPremiumUntilActive(until)) {
-      return { activated: true, premiumUntilMs: until };
-    }
-    // Intent marked paid but premium missing/expired — re-grant below when provider confirms paid.
+    return {
+      activated: isPremiumUntilActiveLocal(until),
+      premiumUntilMs: isPremiumUntilActiveLocal(until) ? until : undefined,
+    };
   }
 
   const gateway = await resolveGatewayForOrder(orderId);
@@ -432,19 +431,19 @@ export async function ensurePremiumActivatedForPaidOrder(
 
   const { getUserPremiumStatus } = await import('./userDirectory');
   const existingUntil = await getUserPremiumStatus(identity.publicId);
-  if (isPremiumUntilActive(existingUntil)) {
+  if (isPremiumUntilActiveLocal(existingUntil)) {
     return { activated: true, premiumUntilMs: existingUntil };
   }
 
+  if (intent?.activated_at_ms != null) {
+    return { activated: false };
+  }
+
   const act = await activatePremiumIfCompletedOrder(trimmed, overrides);
-  if (act.activated && isPremiumUntilActive(act.premiumUntilMs)) return act;
+  if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) return act;
 
   try {
     const gateway = await resolveGatewayForOrder(trimmed);
-    if (intent?.activated_at_ms != null) {
-      const out = await writePremiumForOrder(trimmed, gateway, identity);
-      return { activated: true, premiumUntilMs: out.premiumUntilMs };
-    }
     const ps = await resolvePaidStatusForOrder(trimmed, gateway);
     if (!isPaymentCompletedStatus(ps)) {
       return { activated: false };
@@ -563,12 +562,10 @@ export async function confirmPremiumForOrder(args: {
   if (tracked?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
     const until = await getUserPremiumStatus(publicId);
-    if (isPremiumUntilActive(until)) {
+    if (isPremiumUntilActiveLocal(until)) {
       return { premiumUntilMs: until };
     }
-    const gateway = await resolveGatewayForOrder(orderId);
-    const out = await writePremiumForOrder(orderId, gateway, { publicId, planId, phone });
-    return { premiumUntilMs: out.premiumUntilMs };
+    throw new HttpError(409, 'Payment already used for premium', 'ORDER_ALREADY_ACTIVATED');
   }
 
   const gateway = await resolveGatewayForOrder(orderId);

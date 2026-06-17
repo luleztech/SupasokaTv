@@ -22,6 +22,7 @@ import {
   type PaymentProviderId,
 } from '../../services/paymentProviderSettings';
 import { providerHealthSnapshot } from '../../services/unifiedPayments';
+import { revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
 
 export const adminRouter = Router();
 
@@ -267,6 +268,16 @@ adminRouter.put('/users/:id/premium', requireAdmin, async (req, res, next) => {
       return;
     }
     res.json({ ok: true, userId, premiumUntilMs });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Revoke active premium for users with no verified payment on record (system mistake cleanup). */
+adminRouter.post('/maintenance/revoke-mistaken-premium', requireAdmin, async (_req, res, next) => {
+  try {
+    const out = await revokePremiumWithoutVerifiedPayment();
+    res.json({ ok: true, ...out });
   } catch (e) {
     next(e);
   }

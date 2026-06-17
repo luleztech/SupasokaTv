@@ -150,6 +150,7 @@ class WebViewEngine(
             null,
         )
         schedulePlaybackWatchdog()
+        webView?.let { applyDefaultOkoa360(it) }
     }
 
     private fun loadGatewayFallback(gatewayUrl: String) {
@@ -753,7 +754,7 @@ class WebViewEngine(
     }
 
     private fun ensureGatewayPageReady(w: WebView) {
-        if (released || usingShakaEmbed) return
+        if (released || usingShakaEmbed || playbackStarted) return
         injectPlayerOnlyUi(w)
         if (!okoaApiInjected) {
             okoaApiInjected = true
@@ -786,6 +787,8 @@ class WebViewEngine(
         cancelExtendedManifestFallback()
         cancelLicenseHeadersWait()
         cancelPlaybackMonitor()
+        cancelDefaultOkoaRunnables()
+        cancelUiInjectionRunnables()
         stopGatewayExtractLoop()
         webView?.alpha = 1f
         onPlaybackStateChanged(PlaybackState.PLAYING)
@@ -825,7 +828,9 @@ class WebViewEngine(
         cancelExtendedManifestFallback()
         cancelLicenseHeadersWait()
         webView?.evaluateJavascript(
-            "try{window.__eaMaxExtractSent=true;}catch(e){}",
+            "try{window.__eaMaxExtractSent=true;window.__eaMaxPlaybackLocked=true;" +
+                "if(window.__eaMaxOkoaRetryId){clearInterval(window.__eaMaxOkoaRetryId);window.__eaMaxOkoaRetryId=null;}" +
+                "}catch(e){}",
             null,
         )
     }
@@ -849,9 +854,13 @@ class WebViewEngine(
     }
 
     private fun scheduleUiInjection(target: WebView) {
+        if (playbackStarted || gatewayExtractLocked) return
         cancelUiInjectionRunnables()
-        listOf(100L, 400L, 900L, 1800L, 3500L, 6000L).forEach { delayMs ->
-            val r = Runnable { injectPlayerOnlyUi(target) }
+        listOf(100L, 600L).forEach { delayMs ->
+            val r = Runnable {
+                if (playbackStarted || gatewayExtractLocked) return@Runnable
+                injectPlayerOnlyUi(target)
+            }
             uiInjectRunnables.add(r)
             target.postDelayed(r, delayMs)
         }
@@ -910,6 +919,7 @@ class WebViewEngine(
     }
 
     fun setQuality(quality: StreamQuality, fromUser: Boolean = true) {
+        if (!fromUser && (playbackStarted || userPickedOkoaQuality)) return
         if (fromUser) {
             userPickedOkoaQuality = true
             cancelDefaultOkoaRunnables()
@@ -918,24 +928,24 @@ class WebViewEngine(
             StreamQuality.AUTO -> "auto"
             else -> quality.height.toString()
         }
-        injectOkoaQuality(mode)
+        injectOkoaQuality(mode, fromUser)
         if (fromUser) scheduleOkoaQualityRetries(mode)
     }
 
-    private fun injectOkoaQuality(mode: String) {
+    private fun injectOkoaQuality(mode: String, fromUser: Boolean = false) {
         val w = webView ?: return
         w.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
         w.evaluateJavascript(
-            "try{window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('$mode');}catch(e){}",
+            "try{window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('$mode',${if (fromUser) "true" else "false"});}catch(e){}",
             null,
         )
     }
 
     private fun scheduleOkoaQualityRetries(mode: String) {
-        listOf(300L, 800L, 1500L, 3000L, 5000L, 8000L).forEach { delayMs ->
+        listOf(800L).forEach { delayMs ->
             mainHandler.postDelayed({
                 if (!userPickedOkoaQuality) return@postDelayed
-                injectOkoaQuality(mode)
+                injectOkoaQuality(mode, fromUser = true)
             }, delayMs)
         }
     }
@@ -946,12 +956,14 @@ class WebViewEngine(
     }
 
     private fun applyDefaultOkoa360(target: WebView) {
-        if (userPickedOkoaQuality) return
-        val js = "try{window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('360');}catch(e){}"
-        listOf(450L, 2200L, 5500L).forEach { delayMs ->
+        if (userPickedOkoaQuality || playbackStarted) return
+        val startupJs =
+            "try{window.__eaMaxOkoaApplyStartup360&&window.__eaMaxOkoaApplyStartup360();}catch(e){}"
+        listOf(300L, 900L).forEach { delayMs ->
             val r = Runnable {
-                if (userPickedOkoaQuality || released || usingShakaEmbed) return@Runnable
-                target.evaluateJavascript(js, null)
+                if (userPickedOkoaQuality || released || playbackStarted) return@Runnable
+                target.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
+                target.evaluateJavascript(startupJs, null)
             }
             defaultOkoaRunnables.add(r)
             target.postDelayed(r, delayMs)

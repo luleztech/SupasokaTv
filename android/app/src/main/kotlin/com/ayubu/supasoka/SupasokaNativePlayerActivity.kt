@@ -193,7 +193,9 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                             playerView.visibility = View.GONE
                             attachWebViewIfNeeded(webContainer, playerView)
                             playerManager.getWebView()?.alpha = 1f
-                            playerManager.setQuality(selectedOkoaQuality, fromUser = false)
+                            if (!webAlreadyPlaying) {
+                                playerManager.setQuality(selectedOkoaQuality, fromUser = false)
+                            }
                         } else {
                             if (playbackReady) {
                                 playerOverlay.markStreamHandoff()
