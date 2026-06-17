@@ -77,7 +77,15 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
   final store = context.read<ContentStore>();
   if (store.updateRequired) return;
 
-  final resolved = await resolveChannelPlayback(channel.id);
+  if (!channel.free) {
+    await SubscriptionStore.syncPremiumFromBackend();
+    invalidatePlaybackCache(channel.id);
+  }
+
+  final resolved = await resolveChannelPlayback(
+    channel.id,
+    bypassCache: !channel.free,
+  );
   if (!context.mounted) return;
 
   switch (resolved.code) {
@@ -85,13 +93,22 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
       await _applyUpdatePayload(context, resolved.updatePayload);
       return;
     case PlaybackResolveCode.premiumRequired:
-      final localPremium =
-          SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+      invalidatePlaybackCache(channel.id);
+      await SubscriptionStore.syncPremiumFromBackend();
+      if (SubscriptionStore.isPremiumActiveLocal()) {
+        final retry = await resolveChannelPlayback(channel.id, bypassCache: true);
+        if (!context.mounted) return;
+        if (retry.code == PlaybackResolveCode.ok) {
+          await _openResolvedPlayback(context, retry.session!);
+          return;
+        }
+      }
       final hasPending = await PremiumRecovery.hasRecentPendingPayment();
-      if (localPremium || hasPending) {
+      if (hasPending) {
         final unlocked = await PremiumRecovery.ensurePremiumUnlocked();
         if (unlocked) {
-          final retry = await resolveChannelPlayback(channel.id);
+          invalidatePlaybackCache(channel.id);
+          final retry = await resolveChannelPlayback(channel.id, bypassCache: true);
           if (!context.mounted) return;
           if (retry.code == PlaybackResolveCode.ok) {
             await _openResolvedPlayback(context, retry.session!);

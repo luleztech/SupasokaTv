@@ -10,6 +10,7 @@ import 'package:supasoka/screens/live_screen.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/screens/profile_screen.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/widgets/internet_required_card.dart';
 
@@ -31,13 +32,17 @@ class _MainShellState extends State<MainShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final cs = context.read<ContentStore>();
-      if (cs.ready) unawaited(cs.pollConfigMeta());
+      if (cs.ready) {
+        unawaited(cs.pollConfigMeta());
+        unawaited(SubscriptionStore.syncPremiumFromBackend());
+      }
     });
     _configPoll = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!mounted) return;
       final cs = context.read<ContentStore>();
       if (cs.ready) {
         unawaited(cs.pollConfigMeta());
+        unawaited(SubscriptionStore.syncPremiumFromBackend());
       }
     });
   }

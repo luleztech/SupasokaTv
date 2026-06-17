@@ -196,7 +196,15 @@ export async function activatePremiumForUser(args: {
   await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
-         note = CASE WHEN $3 <> '' THEN $3 ELSE note END,
+         note = CASE
+           WHEN $3 <> '' THEN $3
+           ELSE trim(both ' |' from regexp_replace(
+             COALESCE(note, ''),
+             '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
+             '',
+             'g'
+           ))
+         END,
          updated_at = now()
      WHERE id = $1`,
     [publicId, end, note],

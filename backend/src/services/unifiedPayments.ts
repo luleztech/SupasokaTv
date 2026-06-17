@@ -312,7 +312,9 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
 
-  const { getUserPremiumStatus } = await import('./userDirectory');
+  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
+  if (await isUserPremiumRevokeLocked(trimmed)) return null;
+
   const existing = await getUserPremiumStatus(trimmed);
   if (isPremiumUntilActiveLocal(existing)) return existing;
 

@@ -134,7 +134,7 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _premiumSyncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+    _premiumSyncTimer = Timer.periodic(const Duration(seconds: 12), (_) {
       if (!mounted || !_loaded) return;
       unawaited(_syncPremiumAndTopics());
     });
@@ -169,9 +169,8 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
   }
 
   Future<void> _syncPremiumAndTopics() async {
-    await PremiumRecovery.recoverPendingPaymentIfAny();
     await SubscriptionStore.syncPremiumFromBackend();
-    final isPremium = SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    final isPremium = SubscriptionStore.isPremiumActiveLocal();
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
   }
 

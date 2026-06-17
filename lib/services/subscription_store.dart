@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/premium_recovery.dart';
+import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/services/user_identity.dart';
 
 /// Local premium expiry (mirrors server — server is authoritative).
@@ -45,6 +46,7 @@ class SubscriptionStore {
 
   static Future<void> clearLocalPremium() async {
     _cancelLocalExpiryTimer();
+    invalidatePlaybackCache();
     final p = await SharedPreferences.getInstance();
     await p.remove(_kUntilMs);
     await p.remove(_kPlanId);
@@ -101,6 +103,16 @@ class SubscriptionStore {
     _scheduleLocalExpiry(premiumUntilMs);
   }
 
+  static bool isPremiumActiveLocal() {
+    return premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+  }
+
+  /// Server is authoritative — use before opening paid channels.
+  static Future<bool> syncAndCheckPremiumActive() async {
+    await syncPremiumFromBackend();
+    return isPremiumActiveLocal();
+  }
+
   /// Sync premium status from backend (authoritative for all users).
   static Future<void> syncPremiumFromBackend() async {
     await purgeExpiredLocalPremium();
@@ -142,6 +154,7 @@ class SubscriptionStore {
       if (userExists) {
         await PremiumRecovery.clearPendingPaymentState();
       }
+      invalidatePlaybackCache();
       await clearLocalPremium();
     } catch (e) {
       if (kDebugMode) {

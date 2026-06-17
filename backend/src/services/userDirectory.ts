@@ -117,6 +117,66 @@ export async function getUserPremiumStatus(userId: string): Promise<number | nul
   return isPremiumUntilActive(raw) ? raw : null;
 }
 
+export function isPremiumRevokeLocked(note: string | null | undefined): boolean {
+  return String(note ?? '').includes('premium_revoked:');
+}
+
+export async function applyAdminPremiumUpdate(
+  userId: string,
+  premiumUntilMs: number | null,
+): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) {
+    throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
+  }
+  const trimmed = userId.trim();
+  if (!trimmed) return false;
+
+  const now = Date.now();
+  const revoke = premiumUntilMs == null || premiumUntilMs <= now;
+  const effectiveMs = premiumUntilMs == null ? now : Math.trunc(premiumUntilMs);
+
+  if (revoke) {
+    const res = await pool.query(
+      `UPDATE users
+       SET premium_until_ms = $2,
+           note = CASE
+             WHEN COALESCE(note, '') = '' THEN 'premium_revoked:admin'
+             WHEN note LIKE '%premium_revoked:%' THEN note
+             ELSE note || ' | premium_revoked:admin'
+           END,
+           updated_at = now()
+       WHERE id = $1`,
+      [trimmed, effectiveMs],
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  const res = await pool.query(
+    `UPDATE users
+     SET premium_until_ms = $2,
+         note = trim(both ' |' from regexp_replace(
+           COALESCE(note, ''),
+           '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
+           '',
+           'g'
+         )),
+         updated_at = now()
+     WHERE id = $1`,
+    [trimmed, effectiveMs],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function isUserPremiumRevokeLocked(userId: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const trimmed = userId.trim();
+  if (!trimmed) return false;
+  const res = await pool.query<{ note: string }>(`SELECT note FROM users WHERE id = $1`, [trimmed]);
+  return isPremiumRevokeLocked(res.rows[0]?.note);
+}
+
 export async function setUserPremiumUntilMs(userId: string, premiumUntilMs: number | null): Promise<boolean> {
   const pool = getPool();
   if (!pool) {

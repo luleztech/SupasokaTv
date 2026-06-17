@@ -5,7 +5,7 @@ import {
   fetchAppUpdateSettings,
   readClientAppIdentity,
 } from './appUpdatePolicy';
-import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive, clearAllExpiredPremiumInDatabase } from './userDirectory';
+import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive, isUserPremiumRevokeLocked } from './userDirectory';
 import { reconcilePremiumForUser } from './unifiedPayments';
 
 export type PlaybackSessionPayload = {
@@ -47,8 +47,6 @@ export async function resolvePlaybackForChannel(
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
 
-  await clearAllExpiredPremiumInDatabase();
-
   const chRes = await pool.query<{
     id: number;
     free: boolean;
@@ -84,8 +82,12 @@ export async function resolvePlaybackForChannel(
     }
     const premium = await getUserPremiumRecord(trimmedUser);
     if (!isPremiumActive(premium.premiumUntilMs)) {
-      const reconciled = await reconcilePremiumForUser(trimmedUser);
-      if (!isPremiumActive(reconciled)) {
+      if (!(await isUserPremiumRevokeLocked(trimmedUser))) {
+        const reconciled = await reconcilePremiumForUser(trimmedUser);
+        if (!isPremiumActive(reconciled)) {
+          return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
+        }
+      } else {
         return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
       }
     }

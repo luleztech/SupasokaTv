@@ -131,6 +131,7 @@ Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
       return PlaybackResolveResult.updateRequired(j);
     }
     if (res.statusCode == 403 && j?['premiumRequired'] == true) {
+      _playbackCache.remove(channelId);
       return PlaybackResolveResult.premiumRequired();
     }
     if (res.statusCode != 200 || j == null || j['ok'] != true) {
@@ -154,24 +155,38 @@ Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
   }
 }
 
-Future<PlaybackResolveResult> resolveChannelPlayback(int channelId) async {
+Future<PlaybackResolveResult> resolveChannelPlayback(
+  int channelId, {
+  bool bypassCache = false,
+}) async {
   final cached = _playbackCache[channelId];
   final now = DateTime.now();
-  if (cached != null && now.difference(cached.fetchedAt) < _playbackCacheTtl) {
-    // Return cached session immediately; refresh in background for next open.
+  if (!bypassCache &&
+      cached != null &&
+      cached.session.free &&
+      now.difference(cached.fetchedAt) < _playbackCacheTtl) {
+    // Only cache free channels; paid streams always re-check premium on server.
     unawaited(_refreshPlaybackCacheEntry(channelId));
     return PlaybackResolveResult.ok(cached.session);
   }
   final result = await _fetchChannelPlayback(channelId);
-  if (result.code == PlaybackResolveCode.ok && result.session != null) {
+  if (result.code == PlaybackResolveCode.ok &&
+      result.session != null &&
+      result.session!.free) {
     _playbackCache[channelId] = (session: result.session!, fetchedAt: now);
+  } else {
+    _playbackCache.remove(channelId);
   }
   return result;
 }
 
 Future<void> _refreshPlaybackCacheEntry(int channelId) async {
   final result = await _fetchChannelPlayback(channelId);
-  if (result.code == PlaybackResolveCode.ok && result.session != null) {
+  if (result.code == PlaybackResolveCode.ok &&
+      result.session != null &&
+      result.session!.free) {
     _playbackCache[channelId] = (session: result.session!, fetchedAt: DateTime.now());
+  } else {
+    _playbackCache.remove(channelId);
   }
 }

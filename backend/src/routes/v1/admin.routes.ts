@@ -6,7 +6,7 @@ import { importAppConfig } from '../../services/adminImport';
 import { importAppUpdateSettings } from '../../services/appUpdateSettingsImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
-import { deleteUserById, isValidPublicUserId, listUsersForAdmin, setUserPremiumUntilMs } from '../../services/userDirectory';
+import { applyAdminPremiumUpdate, deleteUserById, isValidPublicUserId, listUsersForAdmin } from '../../services/userDirectory';
 import {
   checkEamaxBridgeConfiguration,
   mirrorPushToEamax,
@@ -262,12 +262,16 @@ adminRouter.put('/users/:id/premium', requireAdmin, async (req, res, next) => {
       }
       premiumUntilMs = Math.trunc(n);
     }
-    const updated = await setUserPremiumUntilMs(userId, premiumUntilMs);
+    const updated = await applyAdminPremiumUpdate(userId, premiumUntilMs);
     if (!updated) {
       res.status(404).json({ ok: false, error: 'user not found' });
       return;
     }
-    res.json({ ok: true, userId, premiumUntilMs });
+    const effectiveMs =
+      premiumUntilMs == null
+        ? Date.now()
+        : premiumUntilMs;
+    res.json({ ok: true, userId, premiumUntilMs: effectiveMs });
   } catch (e) {
     next(e);
   }
