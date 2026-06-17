@@ -6,6 +6,7 @@ import { clearAllExpiredPremiumInDatabase } from './userDirectory';
 export type RevokeMistakenPremiumResult = {
   expiredCleared: number;
   activeRevoked: number;
+  revokedRepaired: number;
   revokedUserIds: string[];
 };
 
@@ -40,20 +41,36 @@ export async function revokePremiumWithoutVerifiedPayment(): Promise<RevokeMista
 
   const revokedUserIds = preview.rows.map((r) => r.id);
 
-  if (revokedUserIds.length === 0) {
-    return { expiredCleared, activeRevoked: 0, revokedUserIds: [] };
+  let activeRevoked = 0;
+  if (revokedUserIds.length > 0) {
+    const res = await pool.query(
+      `UPDATE users u
+       SET premium_until_ms = $1,
+           note = CASE
+             WHEN COALESCE(u.note, '') = '' THEN 'premium_revoked:no_verified_payment'
+             WHEN u.note LIKE '%premium_revoked:no_verified_payment%' THEN u.note
+             ELSE u.note || ' | premium_revoked:no_verified_payment'
+           END,
+           updated_at = now()
+       WHERE u.premium_until_ms IS NOT NULL
+         AND u.premium_until_ms > $1
+         AND NOT EXISTS (
+           SELECT 1
+           FROM payment_intents pi
+           WHERE pi.public_id = u.id
+             AND pi.activated_at_ms IS NOT NULL
+         )`,
+      [now],
+    );
+    activeRevoked = res.rowCount ?? 0;
   }
 
-  const res = await pool.query(
+  const repairRes = await pool.query(
     `UPDATE users u
-     SET premium_until_ms = NULL,
-         note = CASE
-           WHEN COALESCE(u.note, '') = '' THEN 'premium_revoked:no_verified_payment'
-           ELSE u.note || ' | premium_revoked:no_verified_payment'
-         END,
+     SET premium_until_ms = $1,
          updated_at = now()
-     WHERE u.premium_until_ms IS NOT NULL
-       AND u.premium_until_ms > $1
+     WHERE u.premium_until_ms IS NULL
+       AND u.note LIKE '%premium_revoked:no_verified_payment%'
        AND NOT EXISTS (
          SELECT 1
          FROM payment_intents pi
@@ -65,7 +82,8 @@ export async function revokePremiumWithoutVerifiedPayment(): Promise<RevokeMista
 
   return {
     expiredCleared,
-    activeRevoked: res.rowCount ?? 0,
+    activeRevoked,
+    revokedRepaired: repairRes.rowCount ?? 0,
     revokedUserIds,
   };
 }
