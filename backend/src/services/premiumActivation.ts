@@ -6,6 +6,8 @@ import { registerPublicUser, isValidPublicUserId } from './userDirectory';
 const MS_HOUR = 60 * 60 * 1000;
 const MS_DAY = 24 * MS_HOUR;
 
+export { MS_HOUR, MS_DAY };
+
 type MalipoPlanRow = {
   id: string;
   period: string;
@@ -14,7 +16,7 @@ type MalipoPlanRow = {
   price_lines: string;
 };
 
-function planDurationMsFromSlug(planId: string): number | null {
+export function planDurationMsFromSlug(planId: string): number | null {
   const id = planId.trim().toLowerCase();
   if (id === 'daily') return MS_DAY;
   if (id === 'weekly') return 7 * MS_DAY;
@@ -61,7 +63,7 @@ function durationMsFromKnownTzAmountTiers(tzs: number): number | null {
  * Infer premium window from admin-configured malipo copy (id + period + label + amounts).
  * Most specific patterns first.
  */
-function inferDurationMsFromMalipoRow(row: MalipoPlanRow): number {
+export function inferDurationMsFromMalipoRow(row: MalipoPlanRow): number {
   const id = row.id.trim().toLowerCase();
   const tzPrimary =
     parseLargestIntFromMoneyText(row.amount) ?? parseLargestIntFromMoneyText(row.price_lines);
@@ -150,6 +152,11 @@ async function resolvePlanDurationMs(pool: Pool, planId: string): Promise<number
   return planDurationMsFromSlug(trimmed) ?? 30 * MS_DAY;
 }
 
+/** Each payment grants exactly one plan window from activation time (no stacking). */
+export function computePremiumEndMs(activatedAtMs: number, durationMs: number): number {
+  return Math.trunc(activatedAtMs + durationMs);
+}
+
 export async function activatePremiumForUser(args: {
   publicId: string;
   planId: string;
@@ -184,8 +191,7 @@ export async function activatePremiumForUser(args: {
   const now = Date.now();
   const dur = await resolvePlanDurationMs(pool, planId);
 
-  // Each successful payment grants exactly one plan window from activation time.
-  const end = Math.trunc(now + dur);
+  const end = computePremiumEndMs(now, dur);
 
   await pool.query(
     `UPDATE users

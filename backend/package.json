@@ -12,7 +12,8 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only --project tsconfig.json src/index.ts",
     "typecheck": "tsc --noEmit",
-    "revoke-mistaken-premium": "ts-node --project tsconfig.json scripts/revoke-mistaken-premium.ts"
+    "revoke-mistaken-premium": "ts-node --project tsconfig.json scripts/revoke-mistaken-premium.ts",
+    "verify-premium-policy": "ts-node --project tsconfig.json scripts/verify-premium-policy.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

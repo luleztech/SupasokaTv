@@ -227,13 +227,21 @@ class PremiumRecovery {
 
       if (serverUntilMs == null) {
         final rec = await fetchUserPremiumRecord(publicId);
-        if (rec.premiumUntilMs != null) {
-          serverUntilMs = rec.premiumUntilMs;
+        final raw = rec.premiumUntilMs;
+        if (raw != null && raw > DateTime.now().millisecondsSinceEpoch) {
+          serverUntilMs = raw;
         }
       }
 
-      if (serverUntilMs != null) {
+      if (serverUntilMs != null && serverUntilMs > DateTime.now().millisecondsSinceEpoch) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
+        if (phone.isNotEmpty) {
+          await UserIdentity.savePhoneNumber(phone);
+          await UserIdentity.registerWithBackend(phone: phone);
+        }
+        await _clearPendingOrderPrefs();
+        await SubscriptionStore.refreshNotifierFromPrefs();
+        return true;
       }
 
       if (phone.isNotEmpty) {
@@ -241,11 +249,9 @@ class PremiumRecovery {
         await UserIdentity.registerWithBackend(phone: phone);
       }
 
-      if (serverUntilMs != null) {
-        await _clearPendingOrderPrefs();
-      }
+      await SubscriptionStore.syncPremiumFromBackend();
       await SubscriptionStore.refreshNotifierFromPrefs();
-      return true;
+      return SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     } catch (e) {
       if (kDebugMode) {
         debugPrint('PremiumRecovery.recoverPendingPaymentIfAny failed: $e');

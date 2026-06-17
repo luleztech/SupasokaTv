@@ -113,7 +113,8 @@ export async function clearAllExpiredPremiumInDatabase(): Promise<number> {
 
 export async function getUserPremiumStatus(userId: string): Promise<number | null> {
   const row = await getUserPremiumRecord(userId);
-  return row.premiumUntilMs;
+  const raw = row.premiumUntilMs;
+  return isPremiumUntilActive(raw) ? raw : null;
 }
 
 export async function setUserPremiumUntilMs(userId: string, premiumUntilMs: number | null): Promise<boolean> {

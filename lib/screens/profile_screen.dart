@@ -87,7 +87,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final cur = SubscriptionStore.premiumUntilNotifier.value;
         if (cur == null || !cur.isAfter(DateTime.now())) {
           _countdownTimer?.cancel();
-          await SubscriptionStore.refreshNotifierFromPrefs();
+          await SubscriptionStore.purgeExpiredLocalPremium();
+          await SubscriptionStore.syncPremiumFromBackend();
           if (!mounted) return;
           setState(() {});
           return;

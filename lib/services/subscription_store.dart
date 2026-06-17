@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
@@ -16,12 +18,33 @@ class SubscriptionStore {
   /// Keeps Akaunti / Malipo in sync without prop drilling.
   static final ValueNotifier<DateTime?> premiumUntilNotifier = ValueNotifier<DateTime?>(null);
 
+  static Timer? _localExpiryTimer;
+
+  static void _cancelLocalExpiryTimer() {
+    _localExpiryTimer?.cancel();
+    _localExpiryTimer = null;
+  }
+
+  /// Locks channels locally at the exact server expiry time (no wait for poll/sync).
+  static void _scheduleLocalExpiry(int untilMs) {
+    _cancelLocalExpiryTimer();
+    final delayMs = untilMs - DateTime.now().millisecondsSinceEpoch;
+    if (delayMs <= 0) {
+      unawaited(clearLocalPremium());
+      return;
+    }
+    _localExpiryTimer = Timer(Duration(milliseconds: delayMs + 250), () {
+      unawaited(purgeExpiredLocalPremium());
+    });
+  }
+
   static bool _isActiveMs(int? ms) {
     if (ms == null) return false;
     return DateTime.fromMillisecondsSinceEpoch(ms).isAfter(DateTime.now());
   }
 
   static Future<void> clearLocalPremium() async {
+    _cancelLocalExpiryTimer();
     final p = await SharedPreferences.getInstance();
     await p.remove(_kUntilMs);
     await p.remove(_kPlanId);
@@ -33,6 +56,7 @@ class SubscriptionStore {
     final ms = p.getInt(_kUntilMs);
     if (ms == null) {
       premiumUntilNotifier.value = null;
+      _cancelLocalExpiryTimer();
       return;
     }
     if (!_isActiveMs(ms)) {
@@ -40,6 +64,7 @@ class SubscriptionStore {
       return;
     }
     premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(ms);
+    _scheduleLocalExpiry(ms);
   }
 
   static Future<DateTime?> premiumUntil() async {
@@ -73,6 +98,7 @@ class SubscriptionStore {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kUntilMs, premiumUntilMs);
     premiumUntilNotifier.value = end;
+    _scheduleLocalExpiry(premiumUntilMs);
   }
 
   /// Sync premium status from backend (authoritative for all users).
@@ -109,6 +135,7 @@ class SubscriptionStore {
         final p = await SharedPreferences.getInstance();
         await p.setInt(_kUntilMs, premiumUntilMs);
         premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
+        _scheduleLocalExpiry(premiumUntilMs);
         return;
       }
 
