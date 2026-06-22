@@ -15,6 +15,38 @@ String _formatTzs(int amountTzs) {
   return 'TZS ${m}M';
 }
 
+String _formatTzsFull(int amountTzs) {
+  final s = amountTzs.toString();
+  final buf = StringBuffer('TZS ');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+    buf.write(s[i]);
+  }
+  return buf.toString();
+}
+
+String _revenueDayLabel(String dayIso, {required String todayDay}) {
+  if (dayIso == todayDay) return 'Leo';
+  final parts = dayIso.split('-');
+  if (parts.length == 3 && todayDay.split('-').length == 3) {
+    final y = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final d = int.tryParse(parts[2]);
+    final ty = int.tryParse(todayDay.split('-')[0]);
+    final tm = int.tryParse(todayDay.split('-')[1]);
+    final td = int.tryParse(todayDay.split('-')[2]);
+    if (y != null && m != null && d != null && ty != null && tm != null && td != null) {
+      final day = DateTime(y, m, d);
+      final today = DateTime(ty, tm, td);
+      if (today.difference(day).inDays == 1) return 'Jana';
+    }
+  }
+  final parsed = DateTime.tryParse(dayIso);
+  if (parsed == null) return dayIso;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return '${parsed.day} ${months[parsed.month - 1]} ${parsed.year}';
+}
+
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
@@ -39,6 +71,9 @@ class DashboardScreen extends StatelessWidget {
     final completedPayments = payment['completed'] ?? 0;
     final activatedPayments = payment['activated'] ?? 0;
     final totalCollectionsTzs = payment['totalCollectionsTzs'] ?? 0;
+    final todayCollectionsTzs = payment['todayCollectionsTzs'] ?? 0;
+    final todayCompleted = payment['todayCompleted'] ?? 0;
+    final dailyRevenue = store.paymentDailyRevenue;
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
@@ -169,10 +204,164 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 9,
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      const Color(0xFF14532d).withValues(alpha: 0.55),
+                      const Color(0xFF12151c),
+                    ],
+                  ),
+                  border: Border.all(color: Colors.green.withValues(alpha: 0.28)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.green.withValues(alpha: 0.08),
+                      blurRadius: 24,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            color: Colors.green.withValues(alpha: 0.18),
+                          ),
+                          child: Icon(Icons.payments_rounded, color: Colors.green.shade300, size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Revenue leo',
+                                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                              ),
+                              Text(
+                                'Malipo yaliyofanikiwa tu · EAT',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.55),
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Refresh revenue',
+                          onPressed: store.loadingPaymentHealth ? null : store.refreshPaymentHealth,
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      store.loadingPaymentHealth && todayCollectionsTzs == 0 && todayCompleted == 0
+                          ? '—'
+                          : _formatTzsFull(todayCollectionsTzs),
+                      style: TextStyle(
+                        color: Colors.green.shade300,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      todayCompleted == 1
+                          ? '1 malipo lililofanikiwa leo'
+                          : '$todayCompleted malipo yaliyofanikiwa leo',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.62),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (dailyRevenue.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Siku za hivi karibuni',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...dailyRevenue.take(7).map((row) {
+                        final day = row['day'] ?? '';
+                        final count = int.tryParse(row['count'] ?? '0') ?? 0;
+                        final total = int.tryParse(row['totalTzs'] ?? '0') ?? 0;
+                        final isToday = day == store.revenueTodayDay;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _revenueDayLabel(day, todayDay: store.revenueTodayDay),
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
+                                    color: Colors.white.withValues(alpha: isToday ? 0.95 : 0.72),
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                count == 1 ? '1 txn' : '$count txn',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                _formatTzs(total),
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.green.shade300.withValues(alpha: isToday ? 1 : 0.85),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ] else if (!store.loadingPaymentHealth)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Hakuna malipo yaliyofanikiwa bado.',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          sliver: SliverToBoxAdapter(
+            child: StaggerEntrance(
+              index: 10,
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(

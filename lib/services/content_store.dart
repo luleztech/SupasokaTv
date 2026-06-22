@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -6,11 +7,12 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/data/pay_plan.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/util/image_url.dart';
 
-const _prefsKey = 'supasoka_public_config_cache_v1';
+const _prefsKey = 'supasoka_public_config_cache_v2';
 
 /// Last live update policy from server — never infer force-update from stale config cache alone.
 const _prefsKeyUpdatePolicyV1 = 'supasoka_update_policy_v1';
@@ -510,10 +512,11 @@ class ContentStore extends ChangeNotifier {
           img: sanitizeImageUrl(m['img'] as String? ?? ''),
           free: m['free'] as bool? ?? true,
           viewers: m['viewers'] as String? ?? '',
-          streamUrl: '',
-          drm: 'none',
+          streamUrl: (m['streamUrl'] as String? ?? m['url'] as String? ?? '').trim(),
+          drm: (m['drm'] as String? ?? 'none').trim(),
           clearKeyKidKey: '',
           licenseUrl: '',
+          audioLanguage: normalizePlaybackAudioLanguage(m['audioLanguage'] as String?),
         ),
       );
     }
@@ -586,6 +589,8 @@ class ContentStore extends ChangeNotifier {
     } else {
       _customerCareWhatsapp = '';
     }
+
+    unawaited(warmPlaybackCache(_channels.map((c) => c.id)));
   }
 
   Future<void> _syncUpdatePolicy(Map<String, dynamic> j) async {

@@ -79,6 +79,7 @@ class PlayerManager(
                                 return@post
                             }
                             isInitialized = true
+                            applyAudioLanguageFromSession()
                             onReady()
                         }
                         else -> {
@@ -115,6 +116,7 @@ class PlayerManager(
                                                     onError(error)
                                                 } else {
                                                     isInitialized = true
+                                                    applyAudioLanguageFromSession()
                                                     onReady()
                                                 }
                                             } catch (e: Exception) {
@@ -150,6 +152,7 @@ class PlayerManager(
                                 }
                             }
                             isInitialized = true
+                            applyAudioLanguageFromSession()
                             onReady()
                         }
                     }
@@ -395,6 +398,7 @@ class PlayerManager(
                 return
             }
             isInitialized = true
+            applyAudioLanguageFromSession()
             onReady()
             engine?.play()
         } catch (e: Exception) {
@@ -434,6 +438,11 @@ class PlayerManager(
         Log.d(TAG, "Audio language changed to: $language")
     }
 
+    private fun applyAudioLanguageFromSession() {
+        val lang = currentSession?.preferredAudioLanguage ?: return
+        setAudioLanguage(lang)
+    }
+
     /**
      * Set specific track
      */
@@ -471,6 +480,14 @@ class PlayerManager(
      */
     fun getAvailableTracks(): Tracks {
         return engine?.getAvailableTracks() ?: Tracks.EMPTY
+    }
+
+    fun listSelectableAudioTracks(): List<ExoPlayerEngine.SelectableAudioTrack> {
+        return engine?.listSelectableAudioTracks() ?: emptyList()
+    }
+
+    fun selectAudioTrack(group: Tracks.Group, trackIndex: Int) {
+        engine?.setTrack(group, trackIndex)
     }
 
     /**

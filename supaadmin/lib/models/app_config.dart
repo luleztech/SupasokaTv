@@ -136,6 +136,7 @@ class ChannelDto {
     this.enabled = true,
     this.drm = 'none',
     this.clearKeyKidKey = '',
+    this.audioLanguage = 'sw',
   });
 
   int id;
@@ -154,6 +155,8 @@ class ChannelDto {
   String drm;
   /// ClearKey only: `keyId:key` (hex or base64 strings, one colon between KID and key).
   String clearKeyKidKey;
+  /// Preferred playback audio: `sw` (Swahili, default) | `en` (English).
+  String audioLanguage;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -166,6 +169,7 @@ class ChannelDto {
         'enabled': enabled,
         'drm': drm,
         'clearKeyKidKey': clearKeyKidKey,
+        'audioLanguage': audioLanguage,
       };
 
   factory ChannelDto.fromJson(Map<String, dynamic> j) => ChannelDto(
@@ -179,6 +183,7 @@ class ChannelDto {
         enabled: j['enabled'] as bool? ?? true,
         drm: normalizeChannelDrm(j['drm'] as String?),
         clearKeyKidKey: j['clearKeyKidKey'] as String? ?? '',
+        audioLanguage: normalizeChannelAudioLanguage(j['audioLanguage'] as String?),
       );
 
   ChannelDto copy() => ChannelDto(
@@ -192,6 +197,7 @@ class ChannelDto {
         enabled: enabled,
         drm: drm,
         clearKeyKidKey: clearKeyKidKey,
+        audioLanguage: audioLanguage,
       );
 
   ChannelDto copyWith({
@@ -205,6 +211,7 @@ class ChannelDto {
     bool? enabled,
     String? drm,
     String? clearKeyKidKey,
+    String? audioLanguage,
   }) {
     return ChannelDto(
       id: id ?? this.id,
@@ -217,6 +224,7 @@ class ChannelDto {
       enabled: enabled ?? this.enabled,
       drm: drm ?? this.drm,
       clearKeyKidKey: clearKeyKidKey ?? this.clearKeyKidKey,
+      audioLanguage: audioLanguage ?? this.audioLanguage,
     );
   }
 }
@@ -238,6 +246,22 @@ const kChannelDrmOptions = <String, String>{
 String channelCategoryLabel(String cat) => kChannelCategoryOptions[cat] ?? cat;
 
 String channelDrmLabel(String drm) => kChannelDrmOptions[drm] ?? drm;
+
+/// Selectable audio languages for channel playback.
+const kChannelAudioLanguageOptions = <String, String>{
+  'sw': 'Swahili',
+  'en': 'English',
+};
+
+String channelAudioLanguageLabel(String lang) => kChannelAudioLanguageOptions[lang] ?? lang;
+
+String normalizeChannelAudioLanguage(String? raw) {
+  final r = (raw ?? 'sw').toLowerCase().trim();
+  if (kChannelAudioLanguageOptions.containsKey(r)) return r;
+  if (r.startsWith('en') || r == 'english' || r == 'eng') return 'en';
+  if (r.startsWith('sw') || r == 'swahili' || r == 'kiswahili' || r == 'swa') return 'sw';
+  return 'sw';
+}
 
 String normalizeChannelDrm(String? raw) {
   final r = (raw ?? 'none').toLowerCase().trim();

@@ -14,6 +14,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -30,8 +31,10 @@ import androidx.media3.ui.PlayerView
 import com.ayubu.supasoka.domain.model.DrmType
 import com.ayubu.supasoka.domain.model.PlaybackState
 import com.ayubu.supasoka.domain.model.StreamQuality
+import com.ayubu.supasoka.player.ExoPlayerEngine
 import com.ayubu.supasoka.player.PlayerManager
 import com.ayubu.supasoka.player.StreamSessionBuilder
+import com.ayubu.supasoka.player.AudioLanguageSupport
 import com.ayubu.supasoka.player.SupasokaPlayerOverlay
 
 /** Full-screen playback using the native PlayerManager stack (see repo `player/` sources). */
@@ -57,6 +60,14 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     /** After landscape once, do not show rotate hint again this session. */
     private var hasBeenLandscapeThisSession = false
     private var playbackReady = false
+    private var preferredAudioLanguage: String = AudioLanguageSupport.DEFAULT
+    private lateinit var playerTopTools: LinearLayout
+    private lateinit var playerViewRef: PlayerView
+
+    private sealed class LanguageChoice {
+        data class Preset(val code: String) : LanguageChoice()
+        data class StreamTrack(val track: ExoPlayerEngine.SelectableAudioTrack) : LanguageChoice()
+    }
 
     /** Never expose URLs / HTTP / DRM details to the user (security). */
     private fun showChannelUnavailableAndFinish() {
@@ -105,18 +116,25 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             showChannelUnavailableAndFinish()
             return
         }
+        preferredAudioLanguage = PlayerLanguagePreferences.get(this)
+            ?: AudioLanguageSupport.normalize(session.preferredAudioLanguage)
 
-        val playerView = findViewById<PlayerView>(R.id.player_view).apply {
+        playerViewRef = findViewById<PlayerView>(R.id.player_view).apply {
             applyResizeModeForOrientation()
             setKeepScreenOn(true)
+            controllerShowTimeoutMs = 6000
             setErrorMessageProvider(
                 ErrorMessageProvider { _: PlaybackException ->
                     android.util.Pair(0, getString(R.string.channel_unavailable_message))
                 },
             )
         }
+        val playerView = playerViewRef
         val webContainer = findViewById<FrameLayout>(R.id.webview_container)
         loadingOverlay = findViewById(R.id.loading_overlay)
+        loadingOverlay.isClickable = false
+        loadingOverlay.isFocusable = false
+        loadingOverlay.setOnTouchListener { _, _ -> false }
         bufferingBar = findViewById(R.id.buffering_bar)
         liveBadge = findViewById(R.id.live_badge)
         playerOverlay = SupasokaPlayerOverlay(
@@ -178,21 +196,25 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     showChannelUnavailableAndFinish()
                 }
             },
-            onTracksAvailable = {},
+            onTracksAvailable = {
+                runOnUiThread {
+                    playerManager.setAudioLanguage(preferredAudioLanguage)
+                }
+            },
             onReady = {
                 runOnUiThread {
                     if (isFinishing) return@runOnUiThread
                     playbackReady = true
                     try {
-                        val okoaBtn = findViewById<Button>(R.id.btn_okoa_bundle)
                         if (playerManager.isWebViewPlayback()) {
                             val webAlreadyPlaying = playerManager.isPlaying()
                             playerOverlay.attachWebViewMode(alreadyPlaying = webAlreadyPlaying)
                             playerView.player = null
-                            okoaBtn.visibility = View.VISIBLE
+                            showPlayerTopTools()
                             playerView.visibility = View.GONE
                             attachWebViewIfNeeded(webContainer, playerView)
                             playerManager.getWebView()?.alpha = 1f
+                            playerManager.setAudioLanguage(preferredAudioLanguage)
                             if (!webAlreadyPlaying) {
                                 playerManager.setQuality(selectedOkoaQuality, fromUser = false)
                             }
@@ -204,10 +226,11 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                             webContainer.visibility = View.GONE
                             webContainer.removeAllViews()
                             playerView.visibility = View.VISIBLE
-                            okoaBtn.visibility = View.VISIBLE
+                            showPlayerTopTools()
                             playerManager.setQuality(selectedOkoaQuality, fromUser = false)
                             bindExoToPlayerViewIfNeeded(playerView, strictNull = true)
                             playerManager.getExoPlayer()?.let { playerOverlay.attachExoPlayer(it) }
+                            playerView.showController()
                         }
                         maybeShowRotateHint()
                     } catch (e: Exception) {
@@ -218,6 +241,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             },
         )
         playerManager.initialize(session)
+        playerManager.setAudioLanguage(preferredAudioLanguage)
 
         rotateHintOverlay = findViewById(R.id.rotate_hint_overlay)
         rotateHintPhone = findViewById(R.id.rotate_hint_phone)
@@ -231,7 +255,94 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             hideRotateHintOverlay()
         }
         findViewById<ImageButton>(R.id.btn_close).setOnClickListener { finish() }
+        playerTopTools = findViewById(R.id.player_top_tools)
+        findViewById<ImageButton>(R.id.btn_player_language).setOnClickListener { showLanguageDialog() }
+        findViewById<ImageButton>(R.id.btn_player_settings).setOnClickListener { showPlayerSettingsDialog() }
         findViewById<Button>(R.id.btn_okoa_bundle).setOnClickListener { showOkoaQualityDialog() }
+    }
+
+    private fun showPlayerTopTools() {
+        if (::playerTopTools.isInitialized) {
+            playerTopTools.visibility = View.VISIBLE
+            playerTopTools.bringToFront()
+            findViewById<ImageButton>(R.id.btn_close).bringToFront()
+        }
+    }
+
+    private fun applyUserAudioLanguage(code: String) {
+        preferredAudioLanguage = AudioLanguageSupport.normalize(code)
+        PlayerLanguagePreferences.set(this, preferredAudioLanguage)
+        if (::playerManager.isInitialized) {
+            playerManager.setAudioLanguage(preferredAudioLanguage)
+        }
+    }
+
+    private fun applyLanguageChoice(choice: LanguageChoice) {
+        when (choice) {
+            is LanguageChoice.Preset -> applyUserAudioLanguage(choice.code)
+            is LanguageChoice.StreamTrack -> {
+                val track = choice.track
+                val code = AudioLanguageSupport.normalize(track.languageCode)
+                preferredAudioLanguage = code
+                PlayerLanguagePreferences.set(this, code)
+                if (::playerManager.isInitialized) {
+                    playerManager.selectAudioTrack(track.group, track.trackIndex)
+                    playerManager.setAudioLanguage(code)
+                }
+            }
+        }
+    }
+
+    private fun buildLanguageChoices(): List<Pair<String, LanguageChoice>> {
+        val choices = LinkedHashMap<String, LanguageChoice>()
+        choices[getString(R.string.language_swahili)] = LanguageChoice.Preset("sw")
+        choices[getString(R.string.language_english)] = LanguageChoice.Preset("en")
+        if (::playerManager.isInitialized && !playerManager.isWebViewPlayback()) {
+            for (track in playerManager.listSelectableAudioTracks()) {
+                choices[track.displayLabel] = LanguageChoice.StreamTrack(track)
+            }
+        }
+        return choices.entries.map { it.key to it.value }
+    }
+
+    private fun showLanguageDialog() {
+        val entries = buildLanguageChoices()
+        if (entries.isEmpty()) return
+        val labels = entries.map { it.first }.toTypedArray()
+        val currentIndex = entries.indexOfFirst { (_, choice) ->
+            when (choice) {
+                is LanguageChoice.Preset ->
+                    AudioLanguageSupport.normalize(choice.code) == preferredAudioLanguage
+                is LanguageChoice.StreamTrack ->
+                    AudioLanguageSupport.matchesTrackLanguage(choice.track.languageCode, preferredAudioLanguage)
+            }
+        }.let { if (it >= 0) it else 0 }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.pick_language)
+            .setSingleChoiceItems(labels, currentIndex) { d, which ->
+                applyLanguageChoice(entries[which].second)
+                d.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showPlayerSettingsDialog() {
+        val items = arrayOf(
+            getString(R.string.settings_pick_quality),
+            getString(R.string.settings_pick_language),
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.player_settings)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showOkoaQualityDialog()
+                    1 -> showLanguageDialog()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -334,6 +445,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     }
 
     private fun showOkoaQualityDialog() {
+        if (!::playerManager.isInitialized) return
         val qualities = listOf(
             StreamQuality.AUTO,
             StreamQuality.QUALITY_240P,
@@ -343,14 +455,14 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             StreamQuality.QUALITY_1080P,
         )
         val initial = qualities.indexOf(selectedOkoaQuality).let { if (it >= 0) it else 2 }
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle(R.string.pick_quality)
             .setSingleChoiceItems(
                 qualities.map { it.label }.toTypedArray(),
                 initial,
             ) { d, which ->
                 selectedOkoaQuality = qualities[which]
-                playerManager.setQuality(selectedOkoaQuality)
+                playerManager.setQuality(selectedOkoaQuality, fromUser = true)
                 d.dismiss()
             }
             .setNegativeButton(android.R.string.cancel, null)

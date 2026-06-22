@@ -7,10 +7,10 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Tracks
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
@@ -104,6 +104,7 @@ class ExoPlayerEngine(
     private val trackSelector = DefaultTrackSelector(context)
     /** Kotlin-owned quality; default ~360p (“Okoa bando”) until user picks Auto or higher. */
     private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
+    private var preferredAudioLanguage: String = AudioLanguageSupport.DEFAULT
     private var currentSession: StreamSession? = null
     private var currentFormat: StreamFormat? = null
     private var malformedManifestRecovered = false
@@ -135,6 +136,7 @@ class ExoPlayerEngine(
         webViewLicenseBridge: WebViewLicenseBridge? = null,
     ) {
         currentSession = streamSession
+        preferredAudioLanguage = AudioLanguageSupport.normalize(streamSession.preferredAudioLanguage)
         this.webViewLicenseBridge = webViewLicenseBridge
         if (resetRecoveryFlags) {
             malformedManifestRecovered = false
@@ -201,6 +203,7 @@ class ExoPlayerEngine(
                     ts.parameters = ts.buildUponParameters()
                         .setMaxVideoSize(Int.MAX_VALUE, StreamQuality.QUALITY_360P.height)
                         .setForceHighestSupportedBitrate(false)
+                        .setPreferredAudioLanguage(preferredAudioLanguage)
                         .build()
 
                     setAudioAttributes(
@@ -909,12 +912,47 @@ class ExoPlayerEngine(
     }
 
     fun setAudioLanguage(language: String) {
-        trackSelector.setParameters(
-            trackSelector.buildUponParameters()
-                .setPreferredAudioLanguage(language)
-                .build()
-        )
-        Log.d(TAG, "🔊 Audio language set to: $language")
+        preferredAudioLanguage = AudioLanguageSupport.normalize(language)
+        applyPreferredAudioLanguage(preferredAudioLanguage)
+    }
+
+    private fun applyPreferredAudioLanguage(language: String) {
+        val lang = AudioLanguageSupport.normalize(language)
+        val params = trackSelector.buildUponParameters()
+            .setPreferredAudioLanguage(lang)
+            .build()
+        trackSelector.setParameters(params)
+        exoPlayer?.trackSelectionParameters = params
+        trySelectAudioTrackExplicit(lang)
+        Log.d(TAG, "🔊 Audio language set to: $lang")
+    }
+
+    private fun trySelectAudioTrackExplicit(preferred: String) {
+        val player = exoPlayer ?: return
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO) continue
+            var bestIndex = -1
+            for (i in 0 until group.length) {
+                if (!group.isTrackSupported(i)) continue
+                val format = group.getTrackFormat(i)
+                if (AudioLanguageSupport.matchesTrackLanguage(format.language, preferred) ||
+                    AudioLanguageSupport.matchesTrackLabel(format.label, preferred)
+                ) {
+                    bestIndex = i
+                    break
+                }
+            }
+            if (bestIndex >= 0) {
+                val overrideParams = player.trackSelectionParameters
+                    .buildUpon()
+                    .addOverride(TrackSelectionOverride(group.mediaTrackGroup, bestIndex))
+                    .build()
+                player.trackSelectionParameters = overrideParams
+                trackSelector.setParameters(overrideParams)
+                Log.d(TAG, "🔊 Explicit audio track selected: $preferred idx=$bestIndex")
+                return
+            }
+        }
     }
 
     fun setTrack(group: Tracks.Group, trackIndex: Int) {
@@ -937,6 +975,47 @@ class ExoPlayerEngine(
     fun getPlayer(): ExoPlayer? = exoPlayer
 
     fun getAvailableTracks(): Tracks = exoPlayer?.currentTracks ?: Tracks.EMPTY
+
+    data class SelectableAudioTrack(
+        val displayLabel: String,
+        val languageCode: String,
+        val group: Tracks.Group,
+        val trackIndex: Int,
+    )
+
+    fun listSelectableAudioTracks(): List<SelectableAudioTrack> {
+        val player = exoPlayer ?: return emptyList()
+        val out = LinkedHashMap<String, SelectableAudioTrack>()
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO) continue
+            for (i in 0 until group.length) {
+                if (!group.isTrackSupported(i)) continue
+                val format = group.getTrackFormat(i)
+                val lang = format.language?.trim().orEmpty()
+                val label = format.label?.trim().orEmpty()
+                val display = when {
+                    label.isNotEmpty() && lang.isNotEmpty() -> "$label ($lang)"
+                    label.isNotEmpty() -> label
+                    lang.isNotEmpty() -> AudioLanguageSupport.displayName(lang).let {
+                        if (it != lang) it else lang.uppercase()
+                    }
+                    else -> "Audio ${i + 1}"
+                }
+                val code = if (lang.isNotEmpty()) lang else AudioLanguageSupport.normalize(label)
+                val key = "$display|$code|$i"
+                out.putIfAbsent(
+                    key,
+                    SelectableAudioTrack(
+                        displayLabel = display,
+                        languageCode = code,
+                        group = group,
+                        trackIndex = i,
+                    ),
+                )
+            }
+        }
+        return out.values.toList()
+    }
 
     fun refreshSession(newSession: StreamSession) {
         Log.d(TAG, "🔄 Refreshing session...")
@@ -1004,6 +1083,7 @@ class ExoPlayerEngine(
             if (selectedQuality != StreamQuality.AUTO) {
                 applySelectedQuality()
             }
+            applyPreferredAudioLanguage(preferredAudioLanguage)
             
             onTracksChangedCallback(tracks)
         }

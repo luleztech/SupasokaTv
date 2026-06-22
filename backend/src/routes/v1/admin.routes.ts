@@ -23,6 +23,7 @@ import {
 } from '../../services/paymentProviderSettings';
 import { providerHealthSnapshot } from '../../services/unifiedPayments';
 import { revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
+import { fetchPaymentHealth } from '../../services/paymentHealth';
 
 export const adminRouter = Router();
 
@@ -134,95 +135,15 @@ adminRouter.get('/payment-health', requireAdmin, async (_req, res, next) => {
       throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
     }
 
-    const rows = await pool.query<{ status: string; count: string }>(
-      `SELECT UPPER(COALESCE(status, 'PENDING')) AS status, COUNT(*)::text AS count
-       FROM payment_intents
-       GROUP BY UPPER(COALESCE(status, 'PENDING'))`,
-    );
-    const activated = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM payment_intents WHERE activated_at_ms IS NOT NULL`,
-    );
-    const totalCollections = await pool.query<{ total_tzs: string }>(
-      `SELECT COALESCE(SUM(amount_tzs), 0)::text AS total_tzs
-       FROM payment_intents
-       WHERE status = 'COMPLETED' AND amount_tzs IS NOT NULL`,
-    );
-    const recent = await pool.query<{
-      order_id: string;
-      public_id: string | null;
-      plan_id: string | null;
-      amount_tzs: number | null;
-      status: string;
-      created_at: Date;
-    }>(
-      `SELECT order_id, public_id, plan_id, amount_tzs, status, created_at
-       FROM payment_intents
-       ORDER BY created_at DESC
-       LIMIT 8`,
-    );
-
-    const summary: {
-      total: number;
-      pending: number;
-      completed: number;
-      failed: number;
-      cancelled: number;
-      expired: number;
-      rejected: number;
-      error: number;
-      activated: number;
-      totalCollectionsTzs: number;
-    } = {
-      total: 0,
-      pending: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      expired: 0,
-      rejected: 0,
-      error: 0,
-      activated: Number(activated.rows[0]?.count ?? '0') || 0,
-      totalCollectionsTzs: Number(totalCollections.rows[0]?.total_tzs ?? '0') || 0,
-    };
-    for (const r of rows.rows) {
-      const n = Number(r.count) || 0;
-      summary.total += n;
-      switch (r.status) {
-        case 'COMPLETED':
-          summary.completed += n;
-          break;
-        case 'FAILED':
-          summary.failed += n;
-          break;
-        case 'CANCELLED':
-          summary.cancelled += n;
-          break;
-        case 'EXPIRED':
-          summary.expired += n;
-          break;
-        case 'REJECTED':
-          summary.rejected += n;
-          break;
-        case 'ERROR':
-          summary.error += n;
-          break;
-        default:
-          summary.pending += n;
-          break;
-      }
-    }
+    const { summary, recent, dailyRevenue, revenueTodayDay } = await fetchPaymentHealth(pool);
 
     res.json({
       ok: true,
       summary,
-      recent: recent.rows.map((r) => ({
-        orderId: r.order_id,
-        publicId: r.public_id,
-        planId: r.plan_id,
-        amountTzs: r.amount_tzs ?? 0,
-        status: r.status,
-        createdAt: r.created_at.toISOString(),
-      })),
+      recent,
+      dailyRevenue,
+      revenueTodayDay,
+      revenueTimezone: 'Africa/Dar_es_Salaam',
       updatedAtMs: Date.now(),
     });
   } catch (e) {

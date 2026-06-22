@@ -13,7 +13,7 @@
         app:controller_layout_id="@layout/supasoka_player_controls"
         app:hide_on_touch="true"
         app:show_buffering="never"
-        app:show_timeout="4000"
+        app:show_timeout="6000"
         app:surface_type="surface_view"
         app:use_controller="true" />
 
@@ -147,25 +147,64 @@
         android:layout_gravity="top|start"
         android:layout_margin="16dp"
         android:background="#80000000"
+        android:clickable="true"
         android:contentDescription="@string/close_player"
-        android:elevation="12dp"
+        android:elevation="14dp"
+        android:focusable="true"
         android:src="@android:drawable/ic_menu_close_clear_cancel" />
 
-    <Button
-        android:id="@+id/btn_okoa_bundle"
+    <LinearLayout
+        android:id="@+id/player_top_tools"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="16dp"
-        android:layout_marginEnd="16dp"
-        android:backgroundTint="#CC000000"
-        android:elevation="12dp"
-        android:minHeight="48dp"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:text="@string/okoa_bundle"
-        android:textAllCaps="false"
-        android:textColor="#FFFFFFFF"
-        android:textSize="13sp"
-        android:visibility="gone" />
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="12dp"
+        android:clickable="false"
+        android:elevation="14dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/btn_player_language"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/player_toolbar_button_bg"
+            android:clickable="true"
+            android:contentDescription="@string/pick_language"
+            android:focusable="true"
+            android:padding="12dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_player_language" />
+
+        <ImageButton
+            android:id="@+id/btn_player_settings"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/player_toolbar_button_bg"
+            android:clickable="true"
+            android:contentDescription="@string/player_settings"
+            android:focusable="true"
+            android:padding="12dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_player_settings" />
+
+        <Button
+            android:id="@+id/btn_okoa_bundle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:backgroundTint="#CC000000"
+            android:clickable="true"
+            android:focusable="true"
+            android:minHeight="48dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:text="@string/okoa_bundle"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
 </FrameLayout>

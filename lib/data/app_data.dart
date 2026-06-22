@@ -13,6 +13,7 @@ class Channel {
     this.drm = 'none',
     this.clearKeyKidKey = '',
     this.licenseUrl = '',
+    this.audioLanguage = 'sw',
   });
 
   final int id;
@@ -29,6 +30,8 @@ class Channel {
   final String clearKeyKidKey;
   /// License server URL for server-backed DRM types when present.
   final String licenseUrl;
+  /// Preferred playback audio from admin: `sw` | `en`.
+  final String audioLanguage;
 }
 
 class LiveMatch {

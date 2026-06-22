@@ -1,13 +1,15 @@
 package com.ayubu.supasoka
 
 import android.content.Intent
+import android.os.Bundle
 import com.ayubu.supasoka.player.GatewayWebPlayerFactory
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableScreenshotBlocking()
     }
@@ -39,7 +41,6 @@ class MainActivity : FlutterActivity() {
                         intent.putExtra("licenseUrl", args["licenseUrl"]?.toString().orEmpty())
                         intent.putExtra("token", args["token"]?.toString().orEmpty())
                         intent.putExtra("drmType", args["drmType"]?.toString().orEmpty().ifEmpty { "NONE" })
-                        // Backend may emit any of these keys for the ClearKey payload — accept all and use the first non-blank.
                         val mergedClearKey = sequenceOf(
                             args["clearKeyHex"]?.toString(),
                             args["drmClearKey"]?.toString(),
@@ -47,12 +48,17 @@ class MainActivity : FlutterActivity() {
                         ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
                         intent.putExtra("clearKeyHex", mergedClearKey)
                         intent.putExtra("headersJson", args["headersJson"]?.toString().orEmpty())
+                        intent.putExtra(
+                            "audioLanguage",
+                            args["audioLanguage"]?.toString().orEmpty().ifEmpty { "sw" },
+                        )
                         startActivity(intent)
                         result.success(null)
                     } catch (e: Exception) {
                         result.error("native_open_failed", e.message ?: "Failed to open player", null)
                     }
                 }
+                "updatePlayerConfig" -> result.success(null)
                 else -> result.notImplemented()
             }
         }

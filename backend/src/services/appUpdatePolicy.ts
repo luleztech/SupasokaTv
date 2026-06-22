@@ -152,7 +152,7 @@ export function stripCatalogForForcedUpdate(
   };
 }
 
-/** Hide stream URLs / DRM keys from public config — playback uses `/playback/:id` only. */
+/** Hide DRM keys from public config — stream URLs stay for one-tap play (EaMax-style). */
 export function redactPlaybackSecretsFromConfig(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -162,11 +162,8 @@ export function redactPlaybackSecretsFromConfig(
     ...config,
     channels: channels.map((entry) => {
       const row = { ...(entry as Record<string, unknown>) };
-      row.streamUrl = '';
-      row.url = '';
       row.clearKeyKidKey = '';
       row.licenseUrl = '';
-      row.drm = 'none';
       return row;
     }),
   };

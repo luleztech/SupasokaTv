@@ -49,6 +49,8 @@ class WebViewEngine(
     private var playbackStarted = false
     private var webViewPaused = false
     private var userPickedOkoaQuality = false
+    private var preferredAudioLanguage: String = AudioLanguageSupport.DEFAULT
+    private val audioLanguageRunnables = mutableListOf<Runnable>()
     private var lastExtracted: PhpGatewayExtractor.Extracted? = null
     private var usingShakaEmbed = false
     private var released = false
@@ -90,7 +92,9 @@ class WebViewEngine(
         cancelLicenseHeadersWait()
         cancelManifestFallback()
         currentSession = streamSession
+        preferredAudioLanguage = AudioLanguageSupport.normalize(streamSession.preferredAudioLanguage)
         playbackStarted = false
+        userPickedOkoaQuality = false
         usingShakaEmbed = false
         lastExtracted = null
 
@@ -141,9 +145,10 @@ class WebViewEngine(
             clearKeys = clearKeysForShaka(session, extracted),
             licenseUrl = license,
             maxHeight = 360,
+            preferredAudioLanguage = preferredAudioLanguage,
         )
         w.loadDataWithBaseURL(
-            "https://player.eamax.local/",
+            "https://player.supasoka.local/",
             html,
             "text/html",
             "UTF-8",
@@ -759,6 +764,11 @@ class WebViewEngine(
         if (!okoaApiInjected) {
             okoaApiInjected = true
             w.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
+            w.evaluateJavascript(PhpWebViewSupport.eaMaxAudioLanguageApiScript(), null)
+            w.evaluateJavascript(
+                "try{window.__eaMaxSetAudioLanguage&&window.__eaMaxSetAudioLanguage('$preferredAudioLanguage');}catch(e){}",
+                null,
+            )
         }
         w.evaluateJavascript(PhpWebViewSupport.gatewayPageRecoveryScript(), null)
         w.evaluateJavascript(PhpWebViewSupport.gatewayShakaConfigureHookScript(), null)
@@ -787,11 +797,33 @@ class WebViewEngine(
         cancelExtendedManifestFallback()
         cancelLicenseHeadersWait()
         cancelPlaybackMonitor()
-        cancelDefaultOkoaRunnables()
         cancelUiInjectionRunnables()
         stopGatewayExtractLoop()
         webView?.alpha = 1f
+        applyPreferredAudioLanguage()
+        if (!userPickedOkoaQuality) {
+            applyDefaultOkoa360PostPlayback()
+        }
         onPlaybackStateChanged(PlaybackState.PLAYING)
+    }
+
+    /** Apply 360p default once the gateway player is actually playing (Shaka/hls ready). */
+    private fun applyDefaultOkoa360PostPlayback() {
+        val w = webView ?: return
+        injectOkoaQuality("360", fromUser = false)
+        scheduleOkoaQualityRetries("360", onlyIfDefault = true)
+        listOf(400L, 1200L, 2500L).forEach { delayMs ->
+            val r = Runnable {
+                if (released || userPickedOkoaQuality) return@Runnable
+                w.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
+                w.evaluateJavascript(
+                    "try{window.__eaMaxOkoaApplyStartup360&&window.__eaMaxOkoaApplyStartup360();}catch(e){}",
+                    null,
+                )
+            }
+            defaultOkoaRunnables.add(r)
+            mainHandler.postDelayed(r, delayMs)
+        }
     }
 
     private fun scheduleWebViewPlaybackMonitor() {
@@ -919,7 +951,7 @@ class WebViewEngine(
     }
 
     fun setQuality(quality: StreamQuality, fromUser: Boolean = true) {
-        if (!fromUser && (playbackStarted || userPickedOkoaQuality)) return
+        if (!fromUser && userPickedOkoaQuality) return
         if (fromUser) {
             userPickedOkoaQuality = true
             cancelDefaultOkoaRunnables()
@@ -929,7 +961,7 @@ class WebViewEngine(
             else -> quality.height.toString()
         }
         injectOkoaQuality(mode, fromUser)
-        if (fromUser) scheduleOkoaQualityRetries(mode)
+        scheduleOkoaQualityRetries(mode, onlyIfDefault = !fromUser)
     }
 
     private fun injectOkoaQuality(mode: String, fromUser: Boolean = false) {
@@ -941,11 +973,14 @@ class WebViewEngine(
         )
     }
 
-    private fun scheduleOkoaQualityRetries(mode: String) {
-        listOf(800L).forEach { delayMs ->
+    private fun scheduleOkoaQualityRetries(mode: String, onlyIfDefault: Boolean = false) {
+        val delays = if (onlyIfDefault) listOf(600L, 1500L, 3000L) else listOf(400L, 800L, 1600L, 3200L)
+        delays.forEach { delayMs ->
             mainHandler.postDelayed({
-                if (!userPickedOkoaQuality) return@postDelayed
-                injectOkoaQuality(mode, fromUser = true)
+                if (released) return@postDelayed
+                if (onlyIfDefault && userPickedOkoaQuality) return@postDelayed
+                if (!onlyIfDefault && !userPickedOkoaQuality) return@postDelayed
+                injectOkoaQuality(mode, fromUser = !onlyIfDefault)
             }, delayMs)
         }
     }
@@ -956,12 +991,12 @@ class WebViewEngine(
     }
 
     private fun applyDefaultOkoa360(target: WebView) {
-        if (userPickedOkoaQuality || playbackStarted) return
+        if (userPickedOkoaQuality || released) return
         val startupJs =
             "try{window.__eaMaxOkoaApplyStartup360&&window.__eaMaxOkoaApplyStartup360();}catch(e){}"
-        listOf(300L, 900L).forEach { delayMs ->
+        listOf(300L, 900L, 1800L).forEach { delayMs ->
             val r = Runnable {
-                if (userPickedOkoaQuality || released || playbackStarted) return@Runnable
+                if (userPickedOkoaQuality || released) return@Runnable
                 target.evaluateJavascript(PhpWebViewSupport.eaMaxOkoaQualityApiScript(), null)
                 target.evaluateJavascript(startupJs, null)
             }
@@ -970,7 +1005,43 @@ class WebViewEngine(
         }
     }
 
-    fun setAudioLanguage(language: String) {}
+    fun setAudioLanguage(language: String) {
+        preferredAudioLanguage = AudioLanguageSupport.normalize(language)
+        applyPreferredAudioLanguage()
+    }
+
+    private fun applyPreferredAudioLanguage() {
+        val w = webView ?: return
+        val lang = preferredAudioLanguage
+        w.evaluateJavascript(PhpWebViewSupport.eaMaxAudioLanguageApiScript(), null)
+        w.evaluateJavascript(
+            "try{window.__eaMaxSetAudioLanguage&&window.__eaMaxSetAudioLanguage('$lang');}catch(e){}",
+            null,
+        )
+        scheduleAudioLanguageRetries(lang)
+    }
+
+    private fun scheduleAudioLanguageRetries(lang: String) {
+        cancelAudioLanguageRunnables()
+        listOf(800L, 1600L, 3200L).forEach { delayMs ->
+            val r = Runnable {
+                if (released) return@Runnable
+                val target = webView ?: return@Runnable
+                target.evaluateJavascript(PhpWebViewSupport.eaMaxAudioLanguageApiScript(), null)
+                target.evaluateJavascript(
+                    "try{window.__eaMaxSetAudioLanguage&&window.__eaMaxSetAudioLanguage('$lang');}catch(e){}",
+                    null,
+                )
+            }
+            audioLanguageRunnables.add(r)
+            mainHandler.postDelayed(r, delayMs)
+        }
+    }
+
+    private fun cancelAudioLanguageRunnables() {
+        audioLanguageRunnables.forEach { mainHandler.removeCallbacks(it) }
+        audioLanguageRunnables.clear()
+    }
 
     fun release() {
         released = true
@@ -981,6 +1052,7 @@ class WebViewEngine(
         cancelDefaultOkoaRunnables()
         cancelUiInjectionRunnables()
         cancelPlaybackWatchdog()
+        cancelAudioLanguageRunnables()
         webView?.apply {
             stopLoading()
             clearHistory()

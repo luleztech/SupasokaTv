@@ -39,6 +39,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
   late final TextEditingController _clearKeyCtrl;
   late String _cat;
   late String _drm;
+  late String _audioLanguage;
   late bool _premiumOnly;
   late bool _enabled;
 
@@ -54,6 +55,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     _clearKeyCtrl = TextEditingController(text: e?.clearKeyKidKey ?? '');
     _cat = normalizeChannelCategory(e?.cat ?? 'movies');
     _drm = normalizeChannelDrm(e?.drm);
+    _audioLanguage = normalizeChannelAudioLanguage(e?.audioLanguage);
     _premiumOnly = e != null ? !e.free : false;
     _enabled = e?.enabled ?? true;
     _imgCtrl.addListener(() => setState(() {}));
@@ -106,6 +108,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
         enabled: _enabled,
         drm: _drm,
         clearKeyKidKey: clearKey,
+        audioLanguage: _audioLanguage,
       ),
     );
     if (mounted) Navigator.of(context).pop();
@@ -178,7 +181,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                               ),
                         ),
                         Text(
-                          'Stream · DRM · Mpira/Movies/Habari · Premium · Active',
+                          'Stream · DRM · Language · Mpira/Movies/Habari · Premium · Active',
                           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                         ),
                       ],
@@ -283,6 +286,26 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                             label: e.value,
                             selected: _cat == e.key,
                             onTap: () => setState(() => _cat = e.key),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    _SectionLabel(icon: Icons.language_rounded, title: 'Audio language'),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Default audio track viewers hear when playing this channel.',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (final e in kChannelAudioLanguageOptions.entries)
+                          _CategoryChip(
+                            label: e.value,
+                            selected: _audioLanguage == e.key,
+                            onTap: () => setState(() => _audioLanguage = e.key),
                           ),
                       ],
                     ),

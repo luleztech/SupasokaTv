@@ -1,5 +1,6 @@
 package com.ayubu.supasoka.domain.model
 
+import com.ayubu.supasoka.player.AudioLanguageSupport
 import java.util.UUID
 
 /**
@@ -16,6 +17,8 @@ data class StreamSession(
     val trialRemaining: Int, // Default is now handled in DTO
     val channelIsPremium: Boolean = false, // 🔥 CRITICAL: Is this channel premium (needs trial timer)?
     val headers: Map<String, String> = emptyMap(),
+    /** ISO 639-1 preferred audio: `sw` (default) | `en`. */
+    val preferredAudioLanguage: String = AudioLanguageSupport.DEFAULT,
     val sessionId: String = UUID.randomUUID().toString()
 ) {
     fun isValid(): Boolean {

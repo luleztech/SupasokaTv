@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   firebase_core
+  media_kit_video
   share_plus
   url_launcher_windows
 )

@@ -14,6 +14,7 @@ export type PlaybackSessionPayload = {
   clearKeyKidKey: string;
   licenseUrl: string;
   free: boolean;
+  audioLanguage: string;
 };
 
 export type PlaybackResolveResult =
@@ -27,6 +28,13 @@ export type PlaybackResolveResult =
 
 function isPremiumActive(premiumUntilMs: number | null): boolean {
   return isPremiumUntilActive(premiumUntilMs);
+}
+
+function normalizeChannelAudioLanguage(raw: unknown): string {
+  const r = String(raw ?? '').trim().toLowerCase();
+  if (r === 'en' || r.startsWith('en-') || r === 'english' || r === 'eng') return 'en';
+  if (r === 'sw' || r.startsWith('sw-') || r === 'swahili' || r === 'kiswahili' || r === 'swa') return 'sw';
+  return 'sw';
 }
 
 /** Authoritative live playback — never expose stream URLs in public config. */
@@ -54,8 +62,9 @@ export async function resolvePlaybackForChannel(
     stream_url: string;
     drm: string;
     clear_key_kid_key: string;
+    audio_language: string;
   }>(
-    `SELECT id, free, enabled, stream_url, drm, clear_key_kid_key
+    `SELECT id, free, enabled, stream_url, drm, clear_key_kid_key, audio_language
      FROM channels WHERE id = $1`,
     [channelId],
   );
@@ -101,6 +110,7 @@ export async function resolvePlaybackForChannel(
       clearKeyKidKey: String(row.clear_key_kid_key ?? ''),
       licenseUrl: '',
       free: row.free === true,
+      audioLanguage: normalizeChannelAudioLanguage(row.audio_language),
     },
   };
 }

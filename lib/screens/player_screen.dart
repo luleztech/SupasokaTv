@@ -30,7 +30,7 @@ class PlayerScreen extends StatefulWidget {
   });
 
   final int channelId;
-  final PlaybackSession? playbackSession;
+  final ApiPlaybackSession? playbackSession;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -85,7 +85,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return;
     }
 
-    PlaybackSession? session = widget.playbackSession;
+    ApiPlaybackSession? session = widget.playbackSession;
     if (session == null && widget.channelId > 0) {
       final ch = store.channelById(widget.channelId);
       _channel = ch;
@@ -138,6 +138,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           licenseUrl: session!.licenseUrl.trim(),
           drmType: nativeDrmTypeForSession(session),
           clearKeyHex: session.clearKeyKidKey.trim(),
+          audioLanguage: session.audioLanguage,
           headers: playbackHttpHeaders(url),
         );
         if (mounted) Navigator.of(context).pop();

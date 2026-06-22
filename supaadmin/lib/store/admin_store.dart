@@ -83,6 +83,8 @@ class AdminStore extends ChangeNotifier {
   Timer? _syncRetryTimer;
   Map<String, int> _paymentHealthSummary = const {};
   List<Map<String, String?>> _paymentHealthRecent = const [];
+  List<Map<String, String?>> _paymentDailyRevenue = const [];
+  String _revenueTodayDay = '';
   bool _loadingPaymentHealth = false;
 
   String _paymentProvider = 'zeno';
@@ -102,6 +104,8 @@ class AdminStore extends ChangeNotifier {
   bool get savingAppUpdatePolicy => _savingAppUpdatePolicy;
   Map<String, int> get paymentHealthSummary => _paymentHealthSummary;
   List<Map<String, String?>> get paymentHealthRecent => _paymentHealthRecent;
+  List<Map<String, String?>> get paymentDailyRevenue => _paymentDailyRevenue;
+  String get revenueTodayDay => _revenueTodayDay;
   bool get loadingPaymentHealth => _loadingPaymentHealth;
 
   String get paymentProvider => _paymentProvider;
@@ -568,6 +572,22 @@ class AdminStore extends ChangeNotifier {
             )
             .toList(growable: false);
       }
+      final dailyRaw = decoded['dailyRevenue'];
+      if (dailyRaw is List) {
+        _paymentDailyRevenue = dailyRaw
+            .whereType<Map>()
+            .map(
+              (r) => <String, String?>{
+                'day': r['day']?.toString(),
+                'count': r['count']?.toString(),
+                'totalTzs': r['totalTzs']?.toString(),
+              },
+            )
+            .toList(growable: false);
+      } else {
+        _paymentDailyRevenue = const [];
+      }
+      _revenueTodayDay = decoded['revenueTodayDay']?.toString() ?? '';
     } catch (_) {
       // Keep dashboard usable even if health endpoint is temporarily unavailable.
     } finally {

@@ -16,6 +16,7 @@ type ChannelIn = {
   enabled?: boolean;
   drm?: string;
   clearKeyKidKey?: string;
+  audioLanguage?: string;
 };
 
 function digitsWhatsapp(raw: unknown): string {
@@ -51,6 +52,14 @@ function asBool(raw: unknown, fallback: boolean): boolean {
   if (s === 'false' || s === '0' || s === 'no') return false;
   if (s === 'true' || s === '1' || s === 'yes') return true;
   return fallback;
+}
+
+/** ISO 639-1 audio preference for playback: `sw` (default) | `en`. */
+function normalizeChannelAudioLanguage(raw: unknown): string {
+  const r = String(raw ?? '').trim().toLowerCase();
+  if (r === 'en' || r.startsWith('en-') || r === 'english' || r === 'eng') return 'en';
+  if (r === 'sw' || r.startsWith('sw-') || r === 'swahili' || r === 'kiswahili' || r === 'swa') return 'sw';
+  return 'sw';
 }
 
 /** Dart `Color.value` is 32-bit ARGB (>2^31-1); PG INTEGER must stay ≤ 2147483647. Keep RGB only. */
@@ -90,8 +99,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
       channelIds.add(channelId);
       const streamUrl = asString(ch.streamUrl ?? ch.url, '');
       await client.query(
-        `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           channelId,
           asString(ch.name, ''),
@@ -103,6 +112,7 @@ export async function importAppConfig(body: unknown): Promise<void> {
           asBool(ch.enabled, true),
           asString(ch.drm, 'none'),
           asString(ch.clearKeyKidKey, ''),
+          normalizeChannelAudioLanguage(ch.audioLanguage),
           sort,
         ],
       );

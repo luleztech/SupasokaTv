@@ -808,8 +808,11 @@ object PhpWebViewSupport {
                 return true;
               }
               function applyOkoaQuality(mode) {
-                if (window.__eaMaxPlaybackLocked && !window.__eaMaxOkoaUserInitiated) return false;
                 var maxH = parseTarget(String(mode));
+                // After playback starts, only allow default 360p cap until user picks a quality.
+                if (window.__eaMaxPlaybackLocked && !window.__eaMaxOkoaUserInitiated && maxH !== 360) {
+                  return false;
+                }
                 var hlsOk = tryHls(maxH);
                 var shakaOk = tryShaka(maxH);
                 return hlsOk || shakaOk;
@@ -820,7 +823,7 @@ object PhpWebViewSupport {
                 window.__eaMaxStartup360Active = true;
                 var tries = 0;
                 function attempt() {
-                  if (window.__eaMaxPlaybackLocked || window.__eaMaxOkoaUserInitiated) {
+                  if (window.__eaMaxOkoaUserInitiated) {
                     window.__eaMaxStartup360Active = false;
                     return;
                   }
@@ -829,7 +832,7 @@ object PhpWebViewSupport {
                     window.__eaMaxStartup360Active = false;
                     return;
                   }
-                  if (++tries < 5) {
+                  if (++tries < 12) {
                     setTimeout(attempt, 600);
                   } else {
                     window.__eaMaxStartup360Active = false;
@@ -876,6 +879,120 @@ object PhpWebViewSupport {
         """.trimIndent()
     }
 
+    /** Defines [window.__eaMaxSetAudioLanguage] for Shaka / hls.js players inside gateway pages. */
+    fun eaMaxAudioLanguageApiScript(): String {
+        return """
+            (function(){
+              if (window.__eaMaxAudioLangInstalled) return true;
+              window.__eaMaxAudioLangInstalled = true;
+              function normalizeLang(raw) {
+                var r = String(raw || 'sw').toLowerCase();
+                if (r.indexOf('en') === 0 || r === 'english' || r === 'eng') return 'en';
+                return 'sw';
+              }
+              function matchLang(trackLang, preferred) {
+                var t = String(trackLang || '').toLowerCase();
+                if (!t) return false;
+                if (preferred === 'en') return t === 'en' || t.indexOf('en-') === 0 || t === 'eng';
+                if (preferred === 'sw') return t === 'sw' || t.indexOf('sw-') === 0 || t === 'swa';
+                return t === preferred || t.indexOf(preferred + '-') === 0;
+              }
+              function collectShakaPlayers() {
+                var out = [], seen = [];
+                function add(p) {
+                  if (!p || typeof p.selectAudioLanguage !== 'function') return;
+                  for (var s = 0; s < seen.length; s++) { if (seen[s] === p) return; }
+                  seen.push(p); out.push(p);
+                }
+                try {
+                  [window.shakaPlayer, window.player, window.shaka_player].forEach(add);
+                  var vids = document.querySelectorAll('video');
+                  for (var i = 0; i < vids.length; i++) {
+                    var v = vids[i];
+                    if (window.shaka && shaka.Player &&
+                        typeof shaka.Player.getPlayerInstance === 'function') {
+                      add(shaka.Player.getPlayerInstance(v));
+                    }
+                  }
+                } catch (e0) {}
+                return out;
+              }
+              function tryShaka(lang) {
+                var players = collectShakaPlayers(), applied = false;
+                for (var i = 0; i < players.length; i++) {
+                  var pl = players[i];
+                  try {
+                    var langs = typeof pl.getAudioLanguages === 'function' ? pl.getAudioLanguages() : [];
+                    if (langs && langs.length) {
+                      for (var j = 0; j < langs.length; j++) {
+                        if (matchLang(langs[j], lang)) {
+                          pl.selectAudioLanguage(langs[j]);
+                          applied = true;
+                          break;
+                        }
+                      }
+                    } else {
+                      pl.selectAudioLanguage(lang);
+                      applied = true;
+                    }
+                  } catch (e1) {}
+                }
+                return applied;
+              }
+              function tryHls(lang) {
+                var found = false;
+                function tryOne(hls) {
+                  if (!hls || !hls.audioTracks || !hls.audioTracks.length) return;
+                  for (var i = 0; i < hls.audioTracks.length; i++) {
+                    var tr = hls.audioTracks[i];
+                    if (matchLang(tr.lang || tr.name, lang)) {
+                      hls.audioTrack = i;
+                      found = true;
+                      return;
+                    }
+                  }
+                }
+                try { if (window.hls) tryOne(window.hls); } catch (e0) {}
+                try {
+                  var vids = document.querySelectorAll('video');
+                  for (var i = 0; i < vids.length; i++) {
+                    var v = vids[i];
+                    if (v.hls) tryOne(v.hls);
+                    if (v._hls) tryOne(v._hls);
+                  }
+                } catch (e1) {}
+                return found;
+              }
+              function applyAudioLanguage(raw) {
+                var lang = normalizeLang(raw);
+                window.__eaMaxPreferredAudioLang = lang;
+                return tryShaka(lang) || tryHls(lang);
+              }
+              window.__eaMaxSetAudioLanguage = function(lang) {
+                if (applyAudioLanguage(lang)) return true;
+                if (window.__eaMaxAudioLangRetryId) {
+                  try { clearInterval(window.__eaMaxAudioLangRetryId); } catch (e) {}
+                }
+                var tries = 0;
+                window.__eaMaxAudioLangRetryId = setInterval(function() {
+                  if (applyAudioLanguage(window.__eaMaxPreferredAudioLang || lang)) {
+                    clearInterval(window.__eaMaxAudioLangRetryId);
+                    window.__eaMaxAudioLangRetryId = null;
+                  } else if (++tries >= 8) {
+                    clearInterval(window.__eaMaxAudioLangRetryId);
+                    window.__eaMaxAudioLangRetryId = null;
+                  }
+                }, 800);
+                return true;
+              };
+              if (window.__eaMaxPreferredAudioLang) {
+                try { window.__eaMaxSetAudioLanguage(window.__eaMaxPreferredAudioLang); } catch (e2) {}
+              }
+              true;
+            })();
+        """.trimIndent()
+    }
+
     /**
      * Embedded Shaka Player 4.11.4 — HLS (.m3u8) and DASH (.mpd) in WebView (no raw gateway page).
      * Posts playback events to [androidInterfaceName] (ShakaPlayerBridge).
@@ -886,12 +1003,14 @@ object PhpWebViewSupport {
         clearKeys: Map<String, String> = emptyMap(),
         licenseUrl: String = "",
         maxHeight: Int = 360,
+        preferredAudioLanguage: String = AudioLanguageSupport.DEFAULT,
         androidInterfaceName: String = "ShakaPlayerBridge",
     ): String {
         val headerJson = org.json.JSONObject(headers as Map<*, *>).toString()
         val clearKeysJson = org.json.JSONObject(clearKeys as Map<*, *>).toString()
         val urlJson = org.json.JSONObject.quote(streamUrl)
         val licenseJson = org.json.JSONObject.quote(licenseUrl)
+        val audioLangJson = org.json.JSONObject.quote(AudioLanguageSupport.normalize(preferredAudioLanguage))
         val maxW = when {
             maxHeight >= 1080 -> 1920
             maxHeight >= 720 -> 1280
@@ -919,7 +1038,7 @@ video{width:100%;height:100%;background:#000;object-fit:contain;display:block}
 (function(){
   var BR='$androidInterfaceName';
   var url=$urlJson, headers=$headerJson, clearKeys=$clearKeysJson;
-  var licenseUrl=$licenseJson, maxH=$maxHeight, maxW=$maxW;
+  var licenseUrl=$licenseJson, maxH=$maxHeight, maxW=$maxW, audioLang=$audioLangJson;
   function postPlaying(){ try{ window[BR]&&window[BR].onPlaybackStarted&&window[BR].onPlaybackStarted(); }catch(e){} }
   function postError(){ try{ window[BR]&&window[BR].onPlaybackError&&window[BR].onPlaybackError('unavailable'); }catch(e){} }
   function waitShaka(cb){ var n=0;(function t(){ if(typeof shaka!=='undefined'){ cb(true); return; } if(++n>40){ cb(false); return; } setTimeout(t,150); })(); }
@@ -947,6 +1066,16 @@ video{width:100%;height:100%;background:#000;object-fit:contain;display:block}
     v.addEventListener('playing', postPlaying);
     player.load(url).then(function(){
       try{
+        var langs=typeof player.getAudioLanguages==='function'?player.getAudioLanguages():[];
+        var pick=audioLang;
+        if(langs&&langs.length){
+          for(var i=0;i<langs.length;i++){
+            var l=String(langs[i]||'').toLowerCase();
+            if(pick==='en'&&(l==='en'||l.indexOf('en-')===0||l==='eng')){ pick=langs[i]; break; }
+            if(pick==='sw'&&(l==='sw'||l.indexOf('sw-')===0||l==='swa')){ pick=langs[i]; break; }
+          }
+        }
+        if(typeof player.selectAudioLanguage==='function') player.selectAudioLanguage(pick);
         var tracks=player.getVariantTracks();
         if(tracks&&tracks.length){
           var best=tracks[0], bestH=tracks[0].height||0;

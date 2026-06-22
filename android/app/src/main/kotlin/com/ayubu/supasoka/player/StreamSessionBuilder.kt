@@ -19,6 +19,7 @@ object StreamSessionBuilder {
         val drmTypeStr = (b.getString("drmType") ?: "NONE").uppercase()
         val clearKeyHex = b.getString("clearKeyHex")?.trim().orEmpty()
         val headersJson = b.getString("headersJson")?.trim().orEmpty()
+        val audioLanguage = AudioLanguageSupport.normalize(b.getString("audioLanguage"))
 
         val expiresAt = (System.currentTimeMillis() / 1000) + 86400 * 365L
 
@@ -65,6 +66,7 @@ object StreamSessionBuilder {
             trialRemaining = 999_999,
             channelIsPremium = false,
             headers = headers,
+            preferredAudioLanguage = audioLanguage,
         )
     }
 

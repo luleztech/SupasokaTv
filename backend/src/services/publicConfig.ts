@@ -38,6 +38,7 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
                   stream_url AS "streamUrl",
                   enabled, drm,
                   clear_key_kid_key AS "clearKeyKidKey",
+                  audio_language AS "audioLanguage",
                   sort_order AS "sortOrder"
            FROM channels ORDER BY sort_order, id`,
         ),
