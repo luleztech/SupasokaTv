@@ -109,7 +109,7 @@ export function formatPhoneToIntl255(local0: string): string {
 }
 
 /**
- * Phone formats to try with Zeno/Sonic (order matters by network).
+ * Phone formats to try with ZenoPay (order matters by network).
  * Avoids sending duplicate STK when the first attempt already succeeded upstream.
  */
 export function phoneCandidatesForPaymentApi(local0: string): string[] {
@@ -124,6 +124,20 @@ export function phoneCandidatesForPaymentApi(local0: string): string[] {
   else ordered = [local0fmt, intl255];
 
   return [...new Set(ordered.filter((p) => p.length > 0))];
+}
+
+/**
+ * SonicPesa create_order phone formats (differs from Zeno — no wallet `provider` field).
+ * Halopesa (061–063) often rejects `255…`; Airtel/Vodacom/Tigo expect `255…` per Sonic docs.
+ */
+export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
+  const local0fmt = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
+  const intl255 = formatPhoneToIntl255(local0fmt);
+  if (detectTzMobileNetwork(local0fmt) === 'halotel') {
+    return [...new Set([local0fmt, intl255].filter((p) => p.length > 0))];
+  }
+  return [...new Set([intl255, local0fmt].filter((p) => p.length > 0))];
 }
 
 /** Wallet providers to try (primary first, then auto-detect). */

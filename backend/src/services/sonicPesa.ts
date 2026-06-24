@@ -6,7 +6,7 @@ import {
   isRecoverablePaymentCreateError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
-import { formatPhoneToIntl255, phoneCandidatesForPaymentApi } from '../lib/tzPhone';
+import { formatPhoneToIntl255, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 28_000;
@@ -158,7 +158,7 @@ export function formatPhoneForSonicPesaApi(local0: string): string {
 
 export function sonicPhoneCandidatesForApi(local0: string): string[] {
   if (env.sonicSendLocalPhone) return [local0];
-  return phoneCandidatesForPaymentApi(local0);
+  return phoneCandidatesForSonicPesaApi(local0);
 }
 
 const SONIC_STK_FAILURE_CODES = new Set([
@@ -172,11 +172,27 @@ export function isSonicStkSendFailure(rawMessage: string, rawCode: string): bool
   if (code && SONIC_STK_FAILURE_CODES.has(code)) return true;
   if (/^general system error/i.test(msg)) return true;
   if (/\b9012\b|\b999\b/.test(combined)) return true;
+  if (
+    /\bambiguous\b|\bfail\b|\berror\b/.test(combined) &&
+    /upstream|system|ussd|push|send|reponse|response/i.test(combined)
+  ) {
+    return true;
+  }
   return (
-    /hayajatumika|malipo hayajatumika|hayajaweza kutumika|not sent|could not send|push failed|failed to send/i.test(
+    /hayajatumika|malipo hayajatumika|hayajaweza kutumika|malipo hayajaweza kutumika|hayajaweza kutuma/i.test(
       combined,
-    ) || /no response from upstream|upstream system|ongoing ussd/i.test(combined)
+    ) ||
+    /not sent|could not send|push failed|failed to send|unable to send|cannot send|was not sent/i.test(
+      combined,
+    ) ||
+    /no reponse from upstream|no response from upstream|upstream system|upstream/i.test(combined) ||
+    /rejecting.*ussd|ongoing ussd|ussd session/i.test(combined)
   );
+}
+
+function isSonicCreateRetryable(errorMessage: string, errorCode: string): boolean {
+  if (isPaymentRateLimitError(errorMessage, errorCode)) return false;
+  return isRecoverablePaymentCreateError(errorMessage, errorCode) || isSonicStkSendFailure(errorMessage, errorCode);
 }
 
 export type SonicCreateResult = {
@@ -215,19 +231,29 @@ export async function tryCreateSonicOrder(args: {
         headers: getSonicPesaRequestHeaders(),
         body: JSON.stringify(payload),
       });
+      const responseMessage = String(last.data.message ?? last.data.error ?? '');
+      const responseCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+
       if (isSonicInitiateSuccess(last.data, last.response)) {
         const orderId = extractSonicOrderId(last.data);
-        if (!orderId) break;
-        return {
-          ok: true,
-          orderId,
-          message: String(last.data.message ?? 'Request in progress. You will receive a prompt on your phone.'),
-          raw: last.data,
-        };
+        if (orderId && !isSonicStkSendFailure(responseMessage, responseCode)) {
+          return {
+            ok: true,
+            orderId,
+            message: String(
+              last.data.message ?? 'Request in progress. You will receive a prompt on your phone.',
+            ),
+            raw: last.data,
+          };
+        }
+        if (!isSonicCreateRetryable(responseMessage, responseCode)) {
+          break;
+        }
+        continue;
       }
 
-      const errorMessage = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
-      const errorCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+      const errorMessage = responseMessage || 'Failed to start SonicPesa payment';
+      const errorCode = responseCode;
       if (isPaymentRateLimitError(errorMessage, errorCode)) {
         return {
           ok: false,
@@ -238,7 +264,7 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      if (!isRecoverablePaymentCreateError(errorMessage, errorCode)) {
+      if (!isSonicCreateRetryable(errorMessage, errorCode)) {
         break;
       }
     } catch (e) {
