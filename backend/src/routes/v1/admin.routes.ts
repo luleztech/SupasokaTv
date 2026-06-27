@@ -15,11 +15,8 @@ import { checkPushConfiguration, sendPushToTopic, sendPushToUser } from '../../s
 import {
   getSelectedPaymentProvider,
   isSonicPesaConfigured,
-  isZenoConfigured,
-  normalizePaymentProvider,
   PAYMENT_PROVIDERS,
   setPaymentProvider,
-  type PaymentProviderId,
 } from '../../services/paymentProviderSettings';
 import { providerHealthSnapshot } from '../../services/unifiedPayments';
 import { revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
@@ -83,19 +80,16 @@ adminRouter.get('/users', requireAdmin, async (_req, res, next) => {
 adminRouter.get('/settings/payment-provider', requireAdmin, async (_req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    const paymentProvider = await getSelectedPaymentProvider();
-    const health = providerHealthSnapshot(paymentProvider);
-    res.json({ ok: true, ...health });
+    await getSelectedPaymentProvider();
+    res.json({ ok: true, ...providerHealthSnapshot() });
   } catch (e) {
     next(e);
   }
 });
 
-adminRouter.put('/settings/payment-provider', requireAdmin, async (req, res, next) => {
+adminRouter.put('/settings/payment-provider', requireAdmin, async (_req, res, next) => {
   try {
-    const raw = (req.body ?? {}) as Record<string, unknown>;
-    const nextProvider = normalizePaymentProvider(raw.paymentProvider);
-    if (nextProvider === PAYMENT_PROVIDERS.SONICPESA && !isSonicPesaConfigured()) {
+    if (!isSonicPesaConfigured()) {
       res.status(400).json({
         ok: false,
         error: {
@@ -103,26 +97,13 @@ adminRouter.put('/settings/payment-provider', requireAdmin, async (req, res, nex
             'SonicPesa haijasanidi: weka SONICPESA_API_KEY (na SONICPESA_SECRET_KEY ikiwa inahitajika) kwenye Railway — tumia thamani sawa na EaMax.',
           code: 'SONIC_NOT_CONFIGURED',
         },
-        paymentProvider: nextProvider,
+        paymentProvider: PAYMENT_PROVIDERS.SONICPESA,
         configured: false,
       });
       return;
     }
-    if (nextProvider === PAYMENT_PROVIDERS.ZENO && !isZenoConfigured()) {
-      res.status(400).json({
-        ok: false,
-        error: {
-          message:
-            'ZenoPay haijasanidi: weka ZENO_API_KEY kwenye Railway kabla ya kuwezesha mtoa huduma huyu.',
-          code: 'ZENO_NOT_CONFIGURED',
-        },
-        paymentProvider: nextProvider,
-        configured: false,
-      });
-      return;
-    }
-    await setPaymentProvider(nextProvider as PaymentProviderId);
-    res.json({ ok: true, paymentProvider: nextProvider, configured: true });
+    await setPaymentProvider(PAYMENT_PROVIDERS.SONICPESA);
+    res.json({ ok: true, paymentProvider: PAYMENT_PROVIDERS.SONICPESA, configured: true });
   } catch (e) {
     next(e);
   }

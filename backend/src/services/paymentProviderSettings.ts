@@ -1,39 +1,24 @@
 import { getPool } from '../db/pool';
-import { HttpError } from '../middleware/errorHandler';
 
 export const PAYMENT_PROVIDER_SETTING_KEY = 'payment_provider';
 
-export type PaymentProviderId = 'zeno' | 'sonicpesa';
+/** SonicPesa is the only supported mobile-money gateway. */
+export type PaymentProviderId = 'sonicpesa';
 
 export const PAYMENT_PROVIDERS = {
-  ZENO: 'zeno' as const,
   SONICPESA: 'sonicpesa' as const,
 };
 
-export function normalizePaymentProvider(raw: unknown): PaymentProviderId {
-  const compact = String(raw ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]/g, '');
-  if (compact === 'sonicpesa') return PAYMENT_PROVIDERS.SONICPESA;
-  return PAYMENT_PROVIDERS.ZENO;
-}
-
-export function isZenoConfigured(): boolean {
-  const key =
-    process.env.ZENO_API_KEY?.trim() ||
-    process.env.ZENOPAY_API_KEY?.trim() ||
-    process.env.ZENOURI_API_KEY?.trim() ||
-    '';
-  return key.length > 0;
+export function normalizePaymentProvider(_raw: unknown): PaymentProviderId {
+  return PAYMENT_PROVIDERS.SONICPESA;
 }
 
 export function isSonicPesaConfigured(): boolean {
   return Boolean(process.env.SONICPESA_API_KEY?.trim());
 }
 
-export function isProviderConfigured(provider: PaymentProviderId): boolean {
-  return provider === PAYMENT_PROVIDERS.SONICPESA ? isSonicPesaConfigured() : isZenoConfigured();
+export function isProviderConfigured(_provider?: PaymentProviderId): boolean {
+  return isSonicPesaConfigured();
 }
 
 async function ensureAppSettingsTable(): Promise<void> {
@@ -47,52 +32,26 @@ async function ensureAppSettingsTable(): Promise<void> {
   );
 }
 
-/** Optional Railway override: PAYMENT_PROVIDER=sonicpesa|zeno (DB setting used when unset). */
-function paymentProviderFromEnv(): PaymentProviderId | null {
-  const raw = process.env.PAYMENT_PROVIDER?.trim();
-  if (!raw) return null;
-  return normalizePaymentProvider(raw);
-}
-
 export async function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
   const pool = getPool();
   if (pool) {
     await ensureAppSettingsTable();
-    const res = await pool.query<{ value: string }>(
-      `SELECT value FROM app_settings WHERE key = $1 LIMIT 1`,
-      [PAYMENT_PROVIDER_SETTING_KEY],
-    );
-    const dbRaw = res.rows[0]?.value;
-    if (dbRaw != null && String(dbRaw).trim() !== '') {
-      return normalizePaymentProvider(dbRaw);
-    }
-  }
-
-  const fromEnv = paymentProviderFromEnv();
-  if (fromEnv) return fromEnv;
-
-  return PAYMENT_PROVIDERS.ZENO;
-}
-
-/** Throws when admin selected SonicPesa — blocks any outbound call to zenoapi.com. */
-export async function assertZenoPayAllowed(): Promise<void> {
-  const selected = await getSelectedPaymentProvider();
-  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
-    throw new HttpError(
-      403,
-      'SonicPesa imewashwa na admin. Malipo mapya hayaruhusiwi kwenda ZenoPay.',
-      'ZENO_DISABLED_BY_ADMIN',
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [PAYMENT_PROVIDER_SETTING_KEY, PAYMENT_PROVIDERS.SONICPESA],
     );
   }
+  return PAYMENT_PROVIDERS.SONICPESA;
 }
 
-export async function setPaymentProvider(provider: PaymentProviderId): Promise<void> {
+export async function setPaymentProvider(_provider: PaymentProviderId): Promise<void> {
   const pool = getPool();
   if (!pool) throw new Error('DATABASE_URL is not configured');
   await ensureAppSettingsTable();
   await pool.query(
     `INSERT INTO app_settings (key, value) VALUES ($1, $2)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-    [PAYMENT_PROVIDER_SETTING_KEY, provider],
+    [PAYMENT_PROVIDER_SETTING_KEY, PAYMENT_PROVIDERS.SONICPESA],
   );
 }

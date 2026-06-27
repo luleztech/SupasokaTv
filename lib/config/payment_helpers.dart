@@ -1,7 +1,7 @@
 String normalizedPaymentStatus(Object? status) =>
     (status?.toString() ?? '').trim().toUpperCase();
 
-/// Zeno / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
+/// Gateway / proxy responses vary; normalize so [isPaymentCompleted] sees the real status.
 Object? paymentStatusFromCheckResponse(Map<String, dynamic> response) {
   Object? pickRow(Map<String, dynamic> m) {
     for (final k in const [

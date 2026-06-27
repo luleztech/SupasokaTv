@@ -87,9 +87,8 @@ class AdminStore extends ChangeNotifier {
   String _revenueTodayDay = '';
   bool _loadingPaymentHealth = false;
 
-  String _paymentProvider = 'zeno';
+  String _paymentProvider = 'sonicpesa';
   bool? _paymentProviderConfigured;
-  bool? _zenoConfigured;
   bool? _sonicConfigured;
   bool? _paymentProviderApiReady;
   String? _paymentProviderStatusHint;
@@ -110,7 +109,6 @@ class AdminStore extends ChangeNotifier {
 
   String get paymentProvider => _paymentProvider;
   bool get paymentProviderConfigured => _paymentProviderConfigured ?? false;
-  bool get zenoConfigured => _zenoConfigured ?? false;
   bool get sonicConfigured => _sonicConfigured ?? false;
   bool get loadingPaymentProvider => _loadingPaymentProvider ?? false;
   bool get savingPaymentProvider => _savingPaymentProvider ?? false;
@@ -444,9 +442,8 @@ class AdminStore extends ChangeNotifier {
       if (decoded is! Map<String, dynamic>) return;
       _paymentProviderApiReady = true;
       _paymentProviderStatusHint = null;
-      _paymentProvider = (decoded['paymentProvider'] ?? 'zeno').toString();
+      _paymentProvider = (decoded['paymentProvider'] ?? 'sonicpesa').toString();
       _paymentProviderConfigured = _jsonBool(decoded['configured']);
-      _zenoConfigured = _jsonBool(decoded['zenoConfigured']);
       _sonicConfigured = _jsonBool(decoded['sonicConfigured']);
     } catch (_) {
       _paymentProviderApiReady = false;
@@ -458,8 +455,7 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<bool> updatePaymentProvider(String next) async {
-    if (!hasAdminSession || (savingPaymentProvider)) return false;
-    final normalized = next.toLowerCase() == 'sonicpesa' ? 'sonicpesa' : 'zeno';
+    if (!hasAdminSession || savingPaymentProvider) return false;
     if (!paymentProviderApiReady) {
       _snack(
         _paymentProviderStatusHint ??
@@ -467,19 +463,12 @@ class AdminStore extends ChangeNotifier {
       );
       return false;
     }
-    if (normalized == 'sonicpesa' && !sonicConfigured) {
+    if (!sonicConfigured) {
       _snack(
         'SONICPESA_API_KEY haipo kwenye Supasoka Railway. Nakili kutoka EaMax → Variables, kisha Redeploy.',
       );
       return false;
     }
-    if (normalized == 'zeno' && !zenoConfigured) {
-      _snack('ZENO_API_KEY haipo kwenye Supasoka Railway. Weka key kisha Redeploy.');
-      return false;
-    }
-    if (normalized == _paymentProvider) return true;
-    final previous = _paymentProvider;
-    _paymentProvider = normalized;
     _savingPaymentProvider = true;
     notifyListeners();
     try {
@@ -489,7 +478,7 @@ class AdminStore extends ChangeNotifier {
           .put(
             uri,
             headers: _authHeaders(contentType: 'application/json'),
-            body: jsonEncode({'paymentProvider': normalized}),
+            body: jsonEncode({'paymentProvider': 'sonicpesa'}),
           )
           .timeout(const Duration(seconds: 22));
       Map<String, dynamic>? decoded;
@@ -497,26 +486,20 @@ class AdminStore extends ChangeNotifier {
         decoded = jsonDecode(res.body) as Map<String, dynamic>?;
       } catch (_) {}
       if (res.statusCode < 200 || res.statusCode >= 300) {
-        _paymentProvider = previous;
         final err = decoded?['error'];
         final msg = err is Map
             ? (err['message'] ?? err['code'])?.toString()
             : decoded?['error']?.toString();
-        _snack(msg?.isNotEmpty == true ? msg! : 'Could not update payment provider (${res.statusCode})');
+        _snack(msg?.isNotEmpty == true ? msg! : 'Could not verify payment provider (${res.statusCode})');
         return false;
       }
-      _paymentProvider = (decoded?['paymentProvider'] ?? normalized).toString();
+      _paymentProvider = 'sonicpesa';
       _paymentProviderConfigured = decoded?['configured'] != false;
       await refreshPaymentProvider();
-      _snack(
-        normalized == 'sonicpesa'
-            ? 'SonicPesa — malipo mapya yanaenda kwenye akaunti yako ya SonicPesa (sawa na EaMax).'
-            : 'ZenoPay — malipo mapya yanaenda kwenye ZenoPay.',
-      );
+      _snack('SonicPesa — malipo yote yanaenda kwenye akaunti yako ya SonicPesa (sawa na EaMax).');
       return true;
     } catch (e) {
-      _paymentProvider = previous;
-      _snack('Could not update payment provider: $e');
+      _snack('Could not verify payment provider: $e');
       return false;
     } finally {
       _savingPaymentProvider = false;

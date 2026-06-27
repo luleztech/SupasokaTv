@@ -18,11 +18,6 @@ export const env = {
   adminAppPassword: process.env.ADMIN_APP_PASSWORD ?? '',
   /** Sign admin JWTs (long random string in production). */
   jwtSecret: process.env.JWT_SECRET ?? process.env.ADMIN_JWT_SECRET ?? '',
-  /** ZenoPay server-side verification (keep secret on backend only). */
-  zenoApiKey: process.env.ZENO_API_KEY ?? '',
-  zenoApiBase: process.env.ZENO_API_BASE ?? 'https://zenoapi.com',
-  /** Optional webhook callback URL for payment completion push. */
-  zenoWebhookUrl: process.env.ZENO_WEBHOOK_URL ?? '',
   /** SonicPesa — same account/credentials as EaMax (Railway env). */
   sonicPesaApiKey: process.env.SONICPESA_API_KEY ?? '',
   sonicPesaSecretKey:

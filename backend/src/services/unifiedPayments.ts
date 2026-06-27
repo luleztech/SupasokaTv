@@ -1,9 +1,8 @@
-import { randomUUID } from 'crypto';
-import { fetchZenoOrderStatus, tryCreateZenoOrder } from './zenoPay';
 import {
   fetchSonicOrderStatus,
   isSonicPaymentCompleted,
   isSonicRawPaymentCompleted,
+  mapSonicInitiateUserError,
   tryCreateSonicOrder,
 } from './sonicPesa';
 import { logger } from '../lib/logger';
@@ -11,7 +10,6 @@ import {
   getSelectedPaymentProvider,
   isProviderConfigured,
   isSonicPesaConfigured,
-  isZenoConfigured,
   PAYMENT_PROVIDERS,
   type PaymentProviderId,
 } from './paymentProviderSettings';
@@ -29,7 +27,7 @@ import { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
-export function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
+export function paymentStatusFromProviderRow(row: Record<string, unknown> | null | undefined): string {
   if (!row || typeof row !== 'object') return '';
   const keys = [
     'payment_status', 'PaymentStatus', 'paymentStatus',
@@ -67,26 +65,6 @@ function isPaymentTerminalFailure(ps: string): boolean {
   );
 }
 
-function normalizeStoredProvider(raw: string | null | undefined): PaymentProviderId | null {
-  if (typeof raw !== 'string' || !raw.trim()) return null;
-  const compact = raw.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-  if (compact === 'sonicpesa') return PAYMENT_PROVIDERS.SONICPESA;
-  if (compact === 'zeno' || compact === 'zenopay') return PAYMENT_PROVIDERS.ZENO;
-  return null;
-}
-
-async function resolveGatewayForOrder(orderId: string): Promise<PaymentProviderId> {
-  const selected = await getSelectedPaymentProvider();
-  // Admin toggle is authoritative: when SonicPesa is active, never call Zeno for status/confirm.
-  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
-    return PAYMENT_PROVIDERS.SONICPESA;
-  }
-  const intent = await getIntent(orderId);
-  const fromIntent = normalizeStoredProvider(intent?.payment_provider);
-  if (fromIntent) return fromIntent;
-  return selected;
-}
-
 function metadataFromProviderPayload(payload: unknown): { publicId: string; planId: string } {
   if (!payload || typeof payload !== 'object') return { publicId: '', planId: '' };
   const p = payload as Record<string, unknown>;
@@ -111,7 +89,7 @@ export type StartPaymentInput = {
   buyerEmail?: string;
 };
 
-/** Map legacy Zeno-shaped POST bodies to unified checkout fields. */
+/** Map legacy checkout POST bodies to unified fields. */
 export function parseStartPaymentFromLegacyBody(
   body: Record<string, unknown>,
 ): StartPaymentInput | null {
@@ -128,14 +106,12 @@ export function parseStartPaymentFromLegacyBody(
     body.phone ?? body.buyer_phone ?? metadata.buyer_phone ?? '',
   ).trim();
   const amountTzs = Number(body.amount ?? body.amountTzs ?? 0);
-  const orderId = String(body.order_id ?? body.orderId ?? '').trim();
 
   if (!publicId || !planId || !phone || amountTzs < 1) {
     return null;
   }
 
   return {
-    orderId: orderId || undefined,
     publicId,
     planId,
     amountTzs,
@@ -178,113 +154,58 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     throw new HttpError(400, 'Amount must be at least 1 TZS', 'BAD_AMOUNT');
   }
 
-  const selected = await getSelectedPaymentProvider();
+  await getSelectedPaymentProvider();
 
-  if (!isProviderConfigured(selected)) {
-    if (selected === PAYMENT_PROVIDERS.SONICPESA) {
-      throw new HttpError(
-        503,
-        'SonicPesa haijasanidi kwenye seva. Wasiliana na admin au chagua ZenoPay kwenye SupaAdmin.',
-        'SONIC_NOT_CONFIGURED',
-      );
-    }
+  if (!isProviderConfigured()) {
     throw new HttpError(
       503,
-      'ZenoPay haijasanidi kwenye seva. Wasiliana na admin au chagua SonicPesa kwenye SupaAdmin.',
-      'ZENO_NOT_CONFIGURED',
+      'SonicPesa haijasanidi kwenye seva. Wasiliana na admin.',
+      'SONIC_NOT_CONFIGURED',
     );
   }
 
   const buyerName = (input.buyerName ?? input.publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${input.publicId}@supasoka.app`).trim();
 
-  if (selected === PAYMENT_PROVIDERS.SONICPESA) {
-    const sonic = await tryCreateSonicOrder({
-      buyerEmail,
-      buyerName,
-      localPhone,
-      amountTzs,
-    });
-    if (!sonic.ok || !sonic.orderId) {
-      throw new HttpError(
-        400,
-        sonic.errorMessage ?? sonic.message ?? 'Failed to start SonicPesa payment',
-        'SONIC_CREATE_FAILED',
-      );
-    }
-    await upsertPendingIntent({
-      orderId: sonic.orderId,
-      publicId: input.publicId,
-      planId: input.planId,
-      amountTzs,
-      buyerPhone: localPhone,
-      provider: PAYMENT_PROVIDERS.SONICPESA,
-      providerPayload: sonic.raw,
-    });
-    return {
-      orderId: sonic.orderId,
-      message: sonic.message,
-      provider: PAYMENT_PROVIDERS.SONICPESA,
-      status: 'pending',
-    };
-  }
-
-  const orderId = (input.orderId ?? randomUUID()).trim();
-  const metadata = {
-    plan_id: input.planId,
-    external_id: input.publicId,
-    public_id: input.publicId,
-    buyer_phone: localPhone,
-  };
-
-  const zeno = await tryCreateZenoOrder({
-    orderId,
+  const sonic = await tryCreateSonicOrder({
     buyerEmail,
     buyerName,
     localPhone,
     amountTzs,
-    metadata,
   });
-  if (!zeno.ok || !zeno.orderId) {
-    throw new HttpError(
-      400,
-      zeno.errorMessage ?? zeno.message ?? 'Failed to start ZenoPay payment',
-      'ZENO_CREATE_FAILED',
+  if (!sonic.ok || !sonic.orderId) {
+    const userMsg = mapSonicInitiateUserError(
+      localPhone,
+      sonic.errorMessage ?? sonic.message,
+      sonic.errorCode ?? '',
     );
+    throw new HttpError(400, userMsg, 'SONIC_CREATE_FAILED');
   }
-  const pollId = zeno.orderId;
 
   await upsertPendingIntent({
-    orderId: pollId,
+    orderId: sonic.orderId,
     publicId: input.publicId,
     planId: input.planId,
     amountTzs,
     buyerPhone: localPhone,
-    provider: PAYMENT_PROVIDERS.ZENO,
-    providerPayload: zeno.raw,
+    provider: PAYMENT_PROVIDERS.SONICPESA,
+    providerPayload: sonic.raw,
   });
 
   return {
-    orderId: pollId,
-    message: zeno.message,
-    provider: PAYMENT_PROVIDERS.ZENO,
+    orderId: sonic.orderId,
+    message: sonic.message,
+    provider: PAYMENT_PROVIDERS.SONICPESA,
     status: 'pending',
   };
 }
 
-async function resolvePaidStatusForOrder(
-  orderId: string,
-  gateway: PaymentProviderId,
-): Promise<string> {
-  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
-    const { paymentStatus, raw } = await fetchSonicOrderStatus(orderId);
-    if (isPaymentCompletedStatus(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
-      return paymentStatus || 'COMPLETED';
-    }
-    return paymentStatus;
+async function resolvePaidStatusForOrder(orderId: string): Promise<string> {
+  const { paymentStatus, raw } = await fetchSonicOrderStatus(orderId);
+  if (isPaymentCompletedStatus(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
+    return paymentStatus || 'COMPLETED';
   }
-  const row = await fetchZenoOrderStatus(orderId);
-  return paymentStatusFromZenoRow(row as Record<string, unknown> | null);
+  return paymentStatus;
 }
 
 type ActivateOverrides = {
@@ -304,10 +225,6 @@ function intentOverrides(
   };
 }
 
-/**
- * Paid order completed but premium never activated — one-time recovery only.
- * Never re-grant from orders that were already activated (prevents free extensions).
- */
 export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
@@ -366,14 +283,13 @@ function resolveOrderIdentity(
 
 async function writePremiumForOrder(
   orderId: string,
-  gateway: PaymentProviderId,
   identity: { publicId: string; planId: string; phone: string },
 ): Promise<{ premiumUntilMs: number }> {
   const activated = await activatePremiumForUser({
     publicId: identity.publicId,
     planId: identity.planId,
     phone: identity.phone,
-    note: `${gateway}:${orderId}`,
+    note: `sonicpesa:${orderId}`,
   });
   await markIntentActivated(orderId);
   logger.info(
@@ -383,7 +299,6 @@ async function writePremiumForOrder(
   return { premiumUntilMs: activated.premiumUntilMs };
 }
 
-/** Idempotent: activate premium when provider reports paid (poll / webhook / confirm). */
 export async function activatePremiumIfCompletedOrder(
   orderId: string,
   overrides?: ActivateOverrides,
@@ -403,20 +318,15 @@ export async function activatePremiumIfCompletedOrder(
     };
   }
 
-  const gateway = await resolveGatewayForOrder(orderId);
-  const ps = await resolvePaidStatusForOrder(orderId, gateway);
+  const ps = await resolvePaidStatusForOrder(orderId);
   if (!isPaymentCompletedStatus(ps)) {
     return { activated: false };
   }
 
-  const out = await writePremiumForOrder(orderId, gateway, identity);
+  const out = await writePremiumForOrder(orderId, identity);
   return { activated: true, premiumUntilMs: out.premiumUntilMs };
 }
 
-/**
- * Provider already confirmed paid — always persist premium when we know user + plan
- * (covers DB races, webhook/poll timing, or a failed first activation attempt).
- */
 export async function ensurePremiumActivatedForPaidOrder(
   orderId: string,
   overrides?: ActivateOverrides,
@@ -445,12 +355,11 @@ export async function ensurePremiumActivatedForPaidOrder(
   if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) return act;
 
   try {
-    const gateway = await resolveGatewayForOrder(trimmed);
-    const ps = await resolvePaidStatusForOrder(trimmed, gateway);
+    const ps = await resolvePaidStatusForOrder(trimmed);
     if (!isPaymentCompletedStatus(ps)) {
       return { activated: false };
     }
-    const out = await writePremiumForOrder(trimmed, gateway, identity);
+    const out = await writePremiumForOrder(trimmed, identity);
     return { activated: true, premiumUntilMs: out.premiumUntilMs };
   } catch (e) {
     logger.error({ orderId: trimmed, err: e }, 'payment_force_activate_failed');
@@ -485,60 +394,30 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     };
   }
 
-  const gateway = await resolveGatewayForOrder(trimmed);
-
-  if (gateway === PAYMENT_PROVIDERS.SONICPESA) {
-    const { ok, paymentStatus, raw } = await fetchSonicOrderStatus(trimmed);
-    const msg = String(raw.message ?? raw.error ?? '').toLowerCase();
-    if (!ok && (msg.includes('not found') || msg.includes('no order'))) {
-      return { status: 'PENDING', raw };
-    }
-    if (paymentStatus) {
-      await updateIntentStatus({
-        orderId: trimmed,
-        providerStatus: paymentStatus,
-        providerPayload: raw,
-      });
-    }
-    if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
-      const intentAfter = (await getIntent(trimmed)) ?? local;
-      const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter));
-      return {
-        status: 'COMPLETED',
-        resultcode: '000',
-        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
-        activated: act.activated,
-        premiumUntilMs: act.premiumUntilMs,
-      };
-    }
-    return { status: paymentStatus || 'PENDING', raw };
+  const { ok, paymentStatus, raw } = await fetchSonicOrderStatus(trimmed);
+  const msg = String(raw.message ?? raw.error ?? '').toLowerCase();
+  if (!ok && (msg.includes('not found') || msg.includes('no order'))) {
+    return { status: 'PENDING', raw };
   }
-
-  const row = await fetchZenoOrderStatus(trimmed);
-  const ps = paymentStatusFromZenoRow(row as Record<string, unknown> | null);
-  if (ps) {
+  if (paymentStatus) {
     await updateIntentStatus({
       orderId: trimmed,
-      providerStatus: ps,
-      providerPayload: row ?? null,
+      providerStatus: paymentStatus,
+      providerPayload: raw,
     });
   }
-  if (isPaymentCompletedStatus(ps)) {
+  if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
     const intentAfter = (await getIntent(trimmed)) ?? local;
     const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter));
     return {
       status: 'COMPLETED',
       resultcode: '000',
-      raw: row ? { data: [row] } : { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+      raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
       activated: act.activated,
       premiumUntilMs: act.premiumUntilMs,
     };
   }
-  return {
-    status: ps || 'PENDING',
-    resultcode: row ? '000' : '404',
-    raw: row ? { data: [row] } : { data: [] },
-  };
+  return { status: paymentStatus || 'PENDING', raw };
 }
 
 export async function confirmPremiumForOrder(args: {
@@ -570,19 +449,18 @@ export async function confirmPremiumForOrder(args: {
     throw new HttpError(409, 'Payment already used for premium', 'ORDER_ALREADY_ACTIVATED');
   }
 
-  const gateway = await resolveGatewayForOrder(orderId);
   if (!tracked?.public_id || !tracked.plan_id) {
     await upsertPendingIntent({
       orderId,
       publicId,
       planId,
       buyerPhone: phone,
-      provider: gateway,
+      provider: PAYMENT_PROVIDERS.SONICPESA,
     });
     tracked = await getIntent(orderId);
   }
 
-  const ps = await resolvePaidStatusForOrder(orderId, gateway);
+  const ps = await resolvePaidStatusForOrder(orderId);
 
   if (ps) {
     await updateIntentStatus({ orderId, providerStatus: ps });
@@ -600,14 +478,15 @@ export async function confirmPremiumForOrder(args: {
   return { premiumUntilMs: act.premiumUntilMs };
 }
 
-export function providerHealthSnapshot(selected: PaymentProviderId): {
+export function providerHealthSnapshot(): {
   paymentProvider: PaymentProviderId;
   configured: boolean;
-  zenoConfigured: boolean;
   sonicConfigured: boolean;
 } {
-  const zenoConfigured = isZenoConfigured();
   const sonicConfigured = isSonicPesaConfigured();
-  const configured = isProviderConfigured(selected);
-  return { paymentProvider: selected, configured, zenoConfigured, sonicConfigured };
+  return {
+    paymentProvider: PAYMENT_PROVIDERS.SONICPESA,
+    configured: sonicConfigured,
+    sonicConfigured,
+  };
 }

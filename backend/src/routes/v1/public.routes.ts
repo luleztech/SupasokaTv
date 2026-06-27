@@ -12,14 +12,11 @@ import { registerPublicUser, getUserPremiumRecord } from '../../services/userDir
 import { logger } from '../../lib/logger';
 import {
   getIntent,
-  upsertPendingIntent,
-  updateIntentStatus,
 } from '../../services/paymentIntents';
 import { getSelectedPaymentProvider } from '../../services/paymentProviderSettings';
 import {
   confirmPremiumForOrder,
   ensurePremiumActivatedForPaidOrder,
-  isPaymentCompletedStatus,
   parseStartPaymentFromLegacyBody,
   pollUnifiedPaymentStatus,
   providerHealthSnapshot,
@@ -32,74 +29,6 @@ import {
   extractSonicWebhookPaid,
   verifySonicPesaWebhookHmac,
 } from '../../services/sonicPesa';
-import { PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
-import { normalizePhoneToLocal0 } from '../../lib/tzPhone';
-
-function isZenoPaymentTerminalFailure(paymentStatus: string): boolean {
-  const s = String(paymentStatus ?? '')
-    .trim()
-    .toUpperCase();
-  return (
-    s === 'FAILED' ||
-    s === 'ERROR' ||
-    s === 'CANCELLED' ||
-    s === 'CANCELED' ||
-    s === 'REJECTED' ||
-    s === 'DECLINED' ||
-    s === 'EXPIRED'
-  );
-}
-
-/** Compare TZ national numbers across `07…`, `+255…`, `255…` shapes. */
-function normalizeTzBuyerPhone(raw: string): string {
-  const norm = normalizePhoneToLocal0(raw);
-  if (norm.local) return norm.local;
-  const d = String(raw ?? '').replace(/\D/g, '');
-  if (d.length >= 9 && d.startsWith('255')) return `0${d.slice(3, 12)}`.slice(0, 10);
-  if (d.length === 9) return `0${d}`.slice(0, 10);
-  if (d.length >= 10 && d.startsWith('0')) return d.slice(0, 10);
-  return d.slice(0, 12);
-}
-
-function paymentStatusFromZenoRow(row: Record<string, unknown> | null | undefined): string {
-  if (!row || typeof row !== 'object') return '';
-  const keys = [
-    'payment_status',
-    'PaymentStatus',
-    'paymentStatus',
-    'transaction_status',
-    'TransactionStatus',
-    'order_status',
-    'OrderStatus',
-    'payment_state',
-    'PaymentState',
-  ] as const;
-  for (const k of keys) {
-    const v = row[k];
-    if (v == null) continue;
-    const s = String(v).trim();
-    if (s.length > 0) return s.toUpperCase();
-  }
-  return '';
-}
-
-function paymentStatusFromUnknown(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const map = payload as Record<string, unknown>;
-  const direct = paymentStatusFromZenoRow(map);
-  if (direct) return direct;
-  for (const key of ['data', 'order', 'transaction', 'payload'] as const) {
-    const nested = map[key];
-    if (Array.isArray(nested) && nested.length > 0) {
-      const d = paymentStatusFromUnknown(nested[0]);
-      if (d) return d;
-    } else if (nested != null) {
-      const d = paymentStatusFromUnknown(nested);
-      if (d) return d;
-    }
-  }
-  return '';
-}
 
 export const publicRouter = Router();
 
@@ -249,12 +178,12 @@ publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   }
 });
 
-/** Public: which gateway new checkouts use (admin toggle in SupaAdmin). */
+/** Public: SonicPesa gateway health for the mobile app. */
 publicRouter.get('/settings/payment-provider', async (_req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    const paymentProvider = await getSelectedPaymentProvider();
-    res.json({ ok: true, ...providerHealthSnapshot(paymentProvider) });
+    await getSelectedPaymentProvider();
+    res.json({ ok: true, ...providerHealthSnapshot() });
   } catch (e) {
     next(e);
   }
@@ -288,11 +217,11 @@ async function handleConfirmPremium(req: import('express').Request, res: import(
 }
 
 /**
- * Viewer app: verify payment on the server (Zeno or SonicPesa), then activate premium.
+ * Viewer app: verify SonicPesa payment on the server, then activate premium.
  */
 publicRouter.post('/confirm-premium', handleConfirmPremium);
 
-/** Backward-compatible alias. */
+/** Backward-compatible alias for older app builds. */
 publicRouter.post('/confirm-zeno-premium', handleConfirmPremium);
 
 async function handleUnifiedPaymentStart(
@@ -319,10 +248,10 @@ async function handleUnifiedPaymentStart(
   }
 }
 
-/** Unified checkout — only active admin gateway (SonicPesa or ZenoPay). */
+/** SonicPesa checkout — all mobile money networks (M-Pesa, Tigo/Yas, Airtel, Halopesa). */
 publicRouter.post('/payments/start', handleUnifiedPaymentStart);
 
-/** Legacy Zeno path names — same unified checkout (never bypasses admin gateway). */
+/** Legacy path aliases — all route to SonicPesa checkout. */
 publicRouter.post('/zeno/create-order', handleUnifiedPaymentStart);
 publicRouter.post('/create-order', handleUnifiedPaymentStart);
 publicRouter.post('/payments/mobile_money_tanzania', handleUnifiedPaymentStart);
@@ -355,65 +284,11 @@ async function handleUnifiedPaymentStatus(
   }
 }
 
-/** Unified status poll — active admin gateway only. */
+/** Payment status poll — SonicPesa order status. */
 publicRouter.get('/payments/status', handleUnifiedPaymentStatus);
 publicRouter.get('/payments/order-status', handleUnifiedPaymentStatus);
 publicRouter.get('/order-status', handleUnifiedPaymentStatus);
-
-/** Legacy alias — same handler (no direct zenoapi.com from server when Sonic active). */
 publicRouter.get('/zeno/order-status', handleUnifiedPaymentStatus);
-
-/** Optional provider webhook callback. Activates premium server-side without waiting for client polling. */
-publicRouter.post('/zeno/webhook', async (req, res, next) => {
-  try {
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const orderId = String(b.order_id ?? b.orderId ?? b.reference ?? '').trim();
-    if (!orderId) {
-      res.status(400).json({ ok: false, error: 'Missing order id' });
-      return;
-    }
-    const ps = paymentStatusFromUnknown(b);
-    if (ps) {
-      await updateIntentStatus({
-        orderId,
-        providerStatus: ps,
-        providerPayload: b,
-      });
-    }
-
-    if (!isPaymentCompletedStatus(ps)) {
-      logger.info({ orderId, paymentStatus: ps || null }, 'payment_webhook_not_completed');
-      res.json({ ok: true, received: true, activated: false, paymentStatus: ps || null });
-      return;
-    }
-
-    const meta = (b.metadata ?? {}) as Record<string, unknown>;
-    const publicId = String(meta.external_id ?? meta.public_id ?? b.public_id ?? '').trim();
-    const planId = String(meta.plan_id ?? b.plan_id ?? '').trim();
-    const phone = String(b.buyer_phone ?? meta.buyer_phone ?? '').trim();
-    if (publicId && planId) {
-      await upsertPendingIntent({
-        orderId,
-        publicId,
-        planId,
-        buyerPhone: phone,
-        provider: PAYMENT_PROVIDERS.ZENO,
-        providerPayload: b,
-      });
-    }
-
-    const act = await ensurePremiumActivatedForPaidOrder(orderId, { publicId, planId, phone });
-    if (!act.activated) {
-      logger.warn({ orderId }, 'payment_webhook_activate_failed');
-      res.json({ ok: true, received: true, activated: false, reason: 'Activation failed' });
-      return;
-    }
-    logger.info({ orderId, publicId, planId, premiumUntilMs: act.premiumUntilMs }, 'payment_webhook_activated');
-    res.json({ ok: true, received: true, activated: true, premiumUntilMs: act.premiumUntilMs ?? null });
-  } catch (e) {
-    next(e);
-  }
-});
 
 /** SonicPesa webhook — configure in SonicPesa dashboard (same account as EaMax). */
 publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {

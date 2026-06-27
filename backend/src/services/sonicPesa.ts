@@ -7,7 +7,7 @@ import {
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
-import { formatPhoneToIntl255, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
+import { detectTzMobileNetwork, formatPhoneToIntl255, isHalotelLocalPhone, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 28_000;
@@ -169,6 +169,42 @@ export function isSonicStkSendFailure(rawMessage: string, rawCode: string): bool
 
 function isSonicCreateRetryable(errorMessage: string, errorCode: string): boolean {
   return isPaymentCreateRetryable(errorMessage, errorCode);
+}
+
+/** Swahili user-facing message for SonicPesa checkout failures. */
+export function mapSonicInitiateUserError(
+  localPhone: string,
+  rawMessage: string,
+  rawCode: string,
+): string {
+  const code = String(rawCode ?? '').trim();
+  const msg = String(rawMessage || '').trim();
+  if (code === '103' || /ongoing ussd/i.test(msg)) {
+    return 'Simu yako ina USSD nyingine zinazoendelea. Funga dirisha la malipo/USSD kwenye simu, subiri sekunde 30, kisha jaribu tena.';
+  }
+  if (isPaymentRateLimitError(msg, code)) {
+    return paymentRateLimitUserMessage();
+  }
+  if (isSonicStkSendFailure(msg, code)) {
+    if (isHalotelLocalPhone(localPhone)) {
+      return 'Halopesa (061–063) haikupokea ombi. Hakikisha nambari ni sahihi, una salio, na mtandao wa Halopesa unafanya kazi, kisha jaribu tena.';
+    }
+    const network = detectTzMobileNetwork(localPhone);
+    if (network === 'airtel') {
+      return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
+    }
+    if (network === 'tigo_yas') {
+      return 'Hatukuweza kutuma ombi la Tigo/Yas kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na TigoPesa/Mixx inafanya kazi, kisha jaribu tena.';
+    }
+    if (network === 'vodacom') {
+      return 'Hatukuweza kutuma ombi la M-Pesa kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na M-Pesa inafanya kazi, kisha jaribu tena.';
+    }
+    return 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi na mtandao wa pesa unafanya kazi, kisha jaribu tena.';
+  }
+  if (/invalid phone|invalid msisdn|wrong number|nambari/i.test(`${msg} ${code}`)) {
+    return 'Nambari ya simu si sahihi kwa malipo ya simu. Tumia nambari 10 za Tanzania (mfano 0712345678).';
+  }
+  return msg || 'Malipo hayajatumika. Jaribu tena baada ya muda mfupi.';
 }
 
 export type SonicCreateResult = {

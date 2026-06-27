@@ -33,7 +33,7 @@ const _payLine = Color(0x14FFFFFF);
 const _payMuted = Color(0xFF8B9CAF);
 const _scaffold = Color(0xFF02040A);
 
-/// USSD / wallet confirmation often takes 1–3+ minutes; 60s caused false “Anza upya” while Zeno was still pending.
+/// USSD / wallet confirmation often takes 1–3+ minutes; 60s caused false “Anza upya” while payment was still pending.
 const int _kPaymentWaitSeconds = 300;
 
 /// Shown only after the server has activated premium (same moment admin sees it).
@@ -248,7 +248,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     unawaited(_adaptivePaymentPollLoop(orderId, gen));
   }
 
-  /// Fast status checks first (like [ZenoPayService.waitForCompleted]), then ~2s — detects paid sooner than fixed 3s polling.
+  /// Fast status checks first, then ~2s — detects paid sooner than fixed 3s polling.
   Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
     const warmDelaysMs = <int>[0, 650, 950, 1300, 1700, 2100, 2500];
     var warmIdx = 0;
@@ -369,7 +369,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     unawaited(_handleWaitWindowExpiredAsync());
   }
 
-  /// Last chance: Zeno may flip to completed right as the countdown hits zero.
+  /// Last chance: gateway may flip to completed right as the countdown hits zero.
   Future<void> _handleWaitWindowExpiredAsync() async {
     if (_paymentCompletionInProgress || !mounted) return;
     final id = _pollingOrderId?.trim();
@@ -548,7 +548,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final versionHeaders = await appVersionHeaders();
     final uris = [
       Uri.parse('$origin/api/v1/public/confirm-premium'),
-      Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
     ];
 
     http.Response? res;

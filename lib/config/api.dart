@@ -21,16 +21,16 @@ class _SettingsApi {
     final uri = Uri.parse('$origin/api/v1/public/settings/payment-provider');
     final res = await http.get(uri, headers: const {'Accept': 'application/json'});
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      return 'zeno';
+      return 'sonicpesa';
     }
     final j = jsonDecode(res.body) as Map<String, dynamic>;
-    final p = (j['paymentProvider'] ?? 'zeno').toString().toLowerCase();
-    return p == 'sonicpesa' ? 'sonicpesa' : 'zeno';
+    final p = (j['paymentProvider'] ?? 'sonicpesa').toString().toLowerCase();
+    return 'sonicpesa';
   }
 }
 
 class _PaymentsApi {
-  /// Starts checkout via backend — admin picks SonicPesa or ZenoPay on SupaAdmin.
+  /// Starts checkout via backend — SonicPesa mobile money (all TZ networks).
   Future<Map<String, dynamic>> startPayment({
     required String externalId,
     required String bundle,
@@ -117,15 +117,10 @@ class _PaymentsApi {
     if (orderId.isEmpty) {
       throw Exception('Seva haikurudisha order id.');
     }
-    final provider = (j['provider'] ?? j['paymentProvider'] ?? 'zeno').toString().toLowerCase();
+    final provider = (j['provider'] ?? j['paymentProvider'] ?? 'sonicpesa').toString().toLowerCase();
     if (expectedProvider == 'sonicpesa' && provider != 'sonicpesa') {
       throw Exception(
         'Seva imerudisha $provider lakini SonicPesa imewashwa. Hakikisha backend imedeploy na jaribu tena.',
-      );
-    }
-    if (expectedProvider == 'zeno' && provider == 'sonicpesa') {
-      throw Exception(
-        'Seva imerudisha SonicPesa lakini ZenoPay imewashwa kwenye admin. Sasisha mipangilio.',
       );
     }
     return {

@@ -121,14 +121,13 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
-    final isSonic = store.paymentProvider == 'sonicpesa';
-    final activeColor = isSonic ? const Color(0xFF22c55e) : const Color(0xFF3b82f6);
-    final apiReady = store.paymentProviderApiReady;
-    final zenoReady = store.zenoConfigured;
     final sonicReady = store.sonicConfigured;
+    final apiReady = store.paymentProviderApiReady;
+    final configured = store.paymentProviderConfigured;
     final saving = store.savingPaymentProvider;
     final loading = store.loadingPaymentProvider;
     final loggedIn = store.hasAdminSession;
+    const activeColor = Color(0xFF22c55e);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -167,7 +166,7 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
                   borderRadius: BorderRadius.circular(14),
                   color: activeColor.withValues(alpha: 0.22),
                 ),
-                child: Icon(Icons.account_balance_wallet_rounded, color: activeColor, size: 26),
+                child: const Icon(Icons.account_balance_wallet_rounded, color: activeColor, size: 26),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -178,11 +177,18 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
                       'Payment gateway',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                     ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'SonicPesa — M-Pesa, Tigo/Yas, Airtel, Halopesa',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.72),
+                          ),
+                    ),
                   ],
                 ),
               ),
               if (loading || saving)
-                SizedBox(
+                const SizedBox(
                   width: 22,
                   height: 22,
                   child: CircularProgressIndicator(strokeWidth: 2, color: activeColor),
@@ -190,86 +196,54 @@ class _PaymentProviderCardState extends State<_PaymentProviderCard> {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              _ProviderChip(
-                label: 'ZenoPay',
-                icon: Icons.flash_on_rounded,
-                color: const Color(0xFF3b82f6),
-                selected: !isSonic,
-                enabled: !loading && !saving && loggedIn && apiReady && zenoReady,
-                onTap: () => store.updatePaymentProvider('zeno'),
+              _StatusChip(
+                label: configured && sonicReady ? 'Ready' : 'Not configured',
+                color: configured && sonicReady ? activeColor : const Color(0xFFef4444),
               ),
-              const SizedBox(width: 10),
-              _ProviderChip(
-                label: 'SonicPesa',
-                icon: Icons.speed_rounded,
-                color: const Color(0xFF22c55e),
-                selected: isSonic,
-                enabled: !loading && !saving && loggedIn && apiReady && sonicReady,
-                onTap: () => store.updatePaymentProvider('sonicpesa'),
-              ),
+              if (store.paymentProviderStatusHint != null)
+                _StatusChip(
+                  label: 'API issue',
+                  color: const Color(0xFFf59e0b),
+                ),
             ],
           ),
+          if (!sonicReady && loggedIn && apiReady) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Weka SONICPESA_API_KEY kwenye Railway (nakili kutoka EaMax), kisha Redeploy.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFFfca5a5),
+                  ),
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _ProviderChip extends StatelessWidget {
-  const _ProviderChip({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.selected,
-    required this.enabled,
-    required this.onTap,
-  });
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.label, required this.color});
 
   final String label;
-  final IconData icon;
   final Color color;
-  final bool selected;
-  final bool enabled;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: (enabled == true) ? onTap : null,
-          borderRadius: BorderRadius.circular(16),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              color: selected ? color.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.04),
-              border: Border.all(
-                color: selected ? color.withValues(alpha: 0.7) : Colors.white.withValues(alpha: 0.08),
-                width: selected ? 1.5 : 1,
-              ),
-            ),
-            child: Column(
-              children: [
-                Icon(icon, color: selected ? color : Colors.white54, size: 22),
-                const SizedBox(height: 8),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13,
-                    color: selected ? Colors.white : Colors.white70,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: color.withValues(alpha: 0.18),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12),
       ),
     );
   }

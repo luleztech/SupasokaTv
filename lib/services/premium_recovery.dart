@@ -33,10 +33,9 @@ class PremiumRecovery {
     final versionHeaders = await appVersionHeaders();
     final uris = [
       Uri.parse('$origin/api/v1/public/confirm-premium'),
-      Uri.parse('$origin/api/v1/public/confirm-zeno-premium'),
     ];
     for (var attempt = 0; attempt < 5; attempt++) {
-      final uri = uris[attempt % uris.length];
+      final uri = uris[0];
       try {
         final res = await http
             .post(
