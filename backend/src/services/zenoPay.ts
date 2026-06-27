@@ -1,14 +1,12 @@
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
 import {
+  isMobileMoneyStkSendFailure,
+  isPaymentCreateRetryable,
   isPaymentRateLimitError,
-  isRecoverablePaymentCreateError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
-import {
-  phoneCandidatesForPaymentApi,
-  zenoWalletProviderCandidates,
-} from '../lib/tzPhone';
+import { buildZenoPaymentAttempts, toLocal0Digits, zenoWalletProviderForLocalPhone } from '../lib/tzPhone';
 import { assertZenoPayAllowed } from './paymentProviderSettings';
 
 export type ZenoOrderStatusRow = {
@@ -43,21 +41,21 @@ function zenoCreateUrl(): string {
 function isZenoCreateSuccess(j: Record<string, unknown>, httpOk: boolean): boolean {
   const status = String(j.status ?? '').toLowerCase().trim();
   if (status === 'error' || status === 'failed') return false;
-  const rc = String(j.resultcode ?? j.result_code ?? j.code ?? '').trim();
-  if (rc && !['000', '0', '200', '201'].includes(rc)) return false;
   const oid = String(j.order_id ?? j.orderId ?? '').trim();
   if (oid && (httpOk || status === 'success' || j.success === true)) return true;
+  const rc = String(j.resultcode ?? j.result_code ?? j.code ?? '').trim();
+  if (rc && !['000', '0', '200', '201'].includes(rc)) return false;
   return httpOk && (status === 'success' || j.success === true || rc === '000' || rc === '0');
 }
 
-/** Route STK to the correct Tanzanian wallet (Vodacom, Tigo/Yas, Airtel, Halotel, …). */
+/** Legacy single-shot proxy: omit provider so Zeno auto-routes by MSISDN prefix. */
 export function applyZenoWalletProviderForPayload(
   payload: Record<string, unknown>,
   localPhone0: string,
 ): void {
   if (process.env.ZENO_SEND_PROVIDER === '0') return;
-  const candidates = zenoWalletProviderCandidates(localPhone0);
-  const provider = candidates.find((c) => c != null && c.trim().length > 0);
+  if (process.env.ZENO_FORCE_WALLET_PROVIDER !== '1') return;
+  const provider = zenoWalletProviderForLocalPhone(toLocal0Digits(localPhone0));
   if (provider) payload.provider = provider;
 }
 
@@ -81,87 +79,93 @@ export async function tryCreateZenoOrder(args: {
     };
   }
 
-  const phones = phoneCandidatesForPaymentApi(args.localPhone);
-  const providers = zenoWalletProviderCandidates(args.localPhone);
+  const attempts = buildZenoPaymentAttempts(args.localPhone);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start ZenoPay payment' },
   };
 
-  for (const phoneForApi of phones) {
-    for (const provider of providers) {
-      const requestBody: Record<string, unknown> = {
-        order_id: args.orderId,
-        buyer_email: args.buyerEmail,
-        buyer_name: args.buyerName,
-        buyer_phone: phoneForApi,
-        amount: args.amountTzs,
-        metadata: args.metadata ?? {},
-      };
-      if (provider) {
-        requestBody.provider = provider;
-      }
-      if (env.zenoWebhookUrl.trim()) {
-        requestBody.webhook_url = env.zenoWebhookUrl.trim();
-      }
+  for (const attempt of attempts) {
+    const requestBody: Record<string, unknown> = {
+      order_id: args.orderId,
+      buyer_email: args.buyerEmail,
+      buyer_name: args.buyerName,
+      buyer_phone: attempt.phone,
+      amount: args.amountTzs,
+      metadata: args.metadata ?? {},
+    };
+    if (attempt.provider) {
+      requestBody.provider = attempt.provider;
+    }
+    if (env.zenoWebhookUrl.trim()) {
+      requestBody.webhook_url = env.zenoWebhookUrl.trim();
+    }
 
+    try {
+      const res = await fetch(zenoCreateUrl(), {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json; charset=utf-8',
+          'x-api-key': key,
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const text = await res.text();
+      let data: Record<string, unknown> = {};
       try {
-        const res = await fetch(zenoCreateUrl(), {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json; charset=utf-8',
-            'x-api-key': key,
-          },
-          body: JSON.stringify(requestBody),
-        });
-        const text = await res.text();
-        let data: Record<string, unknown> = {};
-        try {
-          data = (JSON.parse(text) as Record<string, unknown>) ?? {};
-        } catch {
-          data = { status: 'error', message: text.slice(0, 200) };
-        }
+        data = (JSON.parse(text) as Record<string, unknown>) ?? {};
+      } catch {
+        data = { status: 'error', message: text.slice(0, 200) };
+      }
 
-        if (isZenoCreateSuccess(data, res.ok)) {
-          const pollId = String(data.order_id ?? data.orderId ?? args.orderId).trim() || args.orderId;
+      const responseMessage = String(data.message ?? data.error ?? '');
+      const errorCode = String(data.resultcode ?? data.result_code ?? data.code ?? '').trim();
+
+      if (isZenoCreateSuccess(data, res.ok)) {
+        const pollId = String(data.order_id ?? data.orderId ?? args.orderId).trim() || args.orderId;
+        if (pollId && !isMobileMoneyStkSendFailure(responseMessage, errorCode)) {
           return {
             ok: true,
             orderId: pollId,
             message: String(
-              data.message ?? 'Request in progress. You will receive a prompt on your phone.',
+              responseMessage || 'Request in progress. You will receive a prompt on your phone.',
             ),
             raw: data,
           };
         }
-
-        const errorMessage = String(data.message ?? data.error ?? 'Failed to start ZenoPay payment');
-        const errorCode = String(data.resultcode ?? data.result_code ?? data.code ?? '').trim();
         last = { response: res, data };
-
-        if (isPaymentRateLimitError(errorMessage, errorCode)) {
-          return {
-            ok: false,
-            orderId: '',
-            message: paymentRateLimitUserMessage(),
-            raw: data,
-            errorMessage: paymentRateLimitUserMessage(),
-            errorCode,
-          };
-        }
-
-        if (!isRecoverablePaymentCreateError(errorMessage, errorCode)) {
+        if (!isPaymentCreateRetryable(responseMessage, errorCode)) {
           break;
         }
-      } catch (e) {
-        last = {
-          response: new Response(null, { status: 502 }),
-          data: {
-            status: 'error',
-            message: e instanceof Error ? e.message : String(e),
-          },
+        continue;
+      }
+
+      const errorMessage = responseMessage || 'Failed to start ZenoPay payment';
+      last = { response: res, data };
+
+      if (isPaymentRateLimitError(errorMessage, errorCode)) {
+        return {
+          ok: false,
+          orderId: '',
+          message: paymentRateLimitUserMessage(),
+          raw: data,
+          errorMessage: paymentRateLimitUserMessage(),
+          errorCode,
         };
       }
+
+      if (!isPaymentCreateRetryable(errorMessage, errorCode)) {
+        break;
+      }
+    } catch (e) {
+      last = {
+        response: new Response(null, { status: 502 }),
+        data: {
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        },
+      };
     }
   }
 

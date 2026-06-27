@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/channel_playback.dart';
 import '../models/remote_player_config.dart';
 import '../player/core/playback_orchestrator.dart';
-import 'player_config_service.dart';
 import 'player_engine.dart';
+import 'player_config_service.dart';
 
 /// Opens playback using admin global + per-channel player engine settings.
 /// Delegates to [PlaybackOrchestrator] — the unified playback entry point.

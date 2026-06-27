@@ -2,8 +2,9 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
 import {
+  isMobileMoneyStkSendFailure,
+  isPaymentCreateRetryable,
   isPaymentRateLimitError,
-  isRecoverablePaymentCreateError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
 import { formatPhoneToIntl255, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
@@ -161,38 +162,13 @@ export function sonicPhoneCandidatesForApi(local0: string): string[] {
   return phoneCandidatesForSonicPesaApi(local0);
 }
 
-const SONIC_STK_FAILURE_CODES = new Set([
-  '9012', '999', '103', '9009', '90009', '500', '502', '503', '504', '408', '429',
-]);
 
 export function isSonicStkSendFailure(rawMessage: string, rawCode: string): boolean {
-  const msg = String(rawMessage || '').trim();
-  const code = String(rawCode ?? '').trim();
-  const combined = `${msg} ${code}`.toLowerCase();
-  if (code && SONIC_STK_FAILURE_CODES.has(code)) return true;
-  if (/^general system error/i.test(msg)) return true;
-  if (/\b9012\b|\b999\b/.test(combined)) return true;
-  if (
-    /\bambiguous\b|\bfail\b|\berror\b/.test(combined) &&
-    /upstream|system|ussd|push|send|reponse|response/i.test(combined)
-  ) {
-    return true;
-  }
-  return (
-    /hayajatumika|malipo hayajatumika|hayajaweza kutumika|malipo hayajaweza kutumika|hayajaweza kutuma/i.test(
-      combined,
-    ) ||
-    /not sent|could not send|push failed|failed to send|unable to send|cannot send|was not sent/i.test(
-      combined,
-    ) ||
-    /no reponse from upstream|no response from upstream|upstream system|upstream/i.test(combined) ||
-    /rejecting.*ussd|ongoing ussd|ussd session/i.test(combined)
-  );
+  return isMobileMoneyStkSendFailure(rawMessage, rawCode);
 }
 
 function isSonicCreateRetryable(errorMessage: string, errorCode: string): boolean {
-  if (isPaymentRateLimitError(errorMessage, errorCode)) return false;
-  return isRecoverablePaymentCreateError(errorMessage, errorCode) || isSonicStkSendFailure(errorMessage, errorCode);
+  return isPaymentCreateRetryable(errorMessage, errorCode);
 }
 
 export type SonicCreateResult = {

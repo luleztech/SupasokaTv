@@ -83,7 +83,7 @@ class PlayerEngine {
     return e;
   }
 
-  /// Kotlin [PlayerManager] / [SupasokaNativePlayerActivity].
+  /// Kotlin [PlayerManager] / [EaMaxNativePlayerActivity].
   static bool usesNativeStack(String engine) {
     final e = normalize(engine);
     return e == auto ||

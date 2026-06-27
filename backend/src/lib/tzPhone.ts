@@ -30,12 +30,28 @@ export type TzMobileNetwork =
 export type NormalizePhoneResult = { local?: string; error?: string };
 
 export function isValidTzMobileLocal0(local0: string): boolean {
-  const s = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  const s = toLocal0Digits(local0);
   return TZ_MOBILE_LOCAL_RE.test(s);
 }
 
+/** Normalize any TZ MSISDN shape to national `0XXXXXXXXX` for routing (best effort). */
+export function toLocal0Digits(raw: string): string {
+  let s = String(raw ?? '').replace(/\D/g, '');
+  if (s.startsWith('255') && s.length >= 12) {
+    return `0${s.slice(3, 12)}`;
+  }
+  if (s.startsWith('255') && s.length > 9) {
+    return `0${s.slice(3)}`.slice(0, 10);
+  }
+  if (s.length === 9 && /^[1-9]/.test(s)) {
+    s = `0${s}`;
+  }
+  if (s.startsWith('0')) return s.slice(0, 10);
+  return s.slice(0, 10);
+}
+
 export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
-  const p = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  const p = toLocal0Digits(local0);
   if (/^06[123]/.test(p)) return 'halotel';
   if (p.startsWith('064')) return 'cootel';
   if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) return 'tigo_yas';
@@ -113,14 +129,15 @@ export function formatPhoneToIntl255(local0: string): string {
  * Avoids sending duplicate STK when the first attempt already succeeded upstream.
  */
 export function phoneCandidatesForPaymentApi(local0: string): string[] {
-  const local0fmt = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
   const network = detectTzMobileNetwork(local0fmt);
 
   let ordered: string[];
   if (network === 'vodacom') ordered = [intl255, local0fmt];
-  else if (network === 'halotel' || network === 'airtel') ordered = [local0fmt, intl255];
+  else if (network === 'halotel') ordered = [local0fmt, intl255];
+  else if (network === 'airtel' || network === 'tigo_yas') ordered = [local0fmt, intl255];
   else ordered = [local0fmt, intl255];
 
   return [...new Set(ordered.filter((p) => p.length > 0))];
@@ -131,7 +148,7 @@ export function phoneCandidatesForPaymentApi(local0: string): string[] {
  * Halopesa (061–063) often rejects `255…`; Airtel/Vodacom/Tigo expect `255…` per Sonic docs.
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
-  const local0fmt = String(local0 ?? '').replace(/\D/g, '').slice(0, 10);
+  const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
   if (detectTzMobileNetwork(local0fmt) === 'halotel') {
@@ -140,16 +157,53 @@ export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   return [...new Set([intl255, local0fmt].filter((p) => p.length > 0))];
 }
 
-/** Wallet providers to try (primary first, then auto-detect). */
-export function zenoWalletProviderCandidates(localPhone0: string): (string | undefined)[] {
-  if (process.env.ZENO_SEND_PROVIDER === '0') return [undefined];
-  const p = String(localPhone0 ?? '').replace(/\D/g, '').slice(0, 10);
-  const out: (string | undefined)[] = [];
+export type ZenoPaymentAttempt = { phone: string; provider?: string };
+
+/**
+ * Ordered ZenoPay create attempts — auto-routing first (best for Tigo/Airtel),
+ * then explicit wallet hints, then alternate MSISDN format.
+ */
+export function buildZenoPaymentAttempts(localPhone0: string): ZenoPaymentAttempt[] {
+  const local = toLocal0Digits(localPhone0);
+  const phones = isValidTzMobileLocal0(local)
+    ? phoneCandidatesForPaymentApi(local)
+    : [local].filter(Boolean);
+  const explicitProviders = zenoWalletProviderCandidates(local);
+  const out: ZenoPaymentAttempt[] = [];
+  const seen = new Set<string>();
+  const add = (phone: string, provider?: string) => {
+    const key = `${phone}\0${provider ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(provider ? { phone, provider } : { phone });
+  };
+
+  if (process.env.ZENO_SEND_PROVIDER !== '0') {
+    for (const phone of phones) add(phone);
+  }
+
+  const primary = phones[0];
+  if (primary) {
+    for (const provider of explicitProviders) add(primary, provider);
+  }
+
+  const alt = phones[1];
+  if (alt) {
+    if (process.env.ZENO_SEND_PROVIDER !== '0') add(alt);
+    const hint = zenoWalletProviderForLocalPhone(local);
+    if (hint) add(alt, hint);
+  }
+
+  return out.length > 0 ? out : phones.map((phone) => ({ phone }));
+}
+
+/** Explicit ZenoPay wallet provider strings to try after auto-routing. */
+export function zenoWalletProviderCandidates(localPhone0: string): string[] {
+  if (process.env.ZENO_SEND_PROVIDER === '0') return [];
+  const p = toLocal0Digits(localPhone0);
+  const out: string[] = [];
   const add = (v?: string) => {
-    if (v == null) {
-      if (!out.some((x) => x === undefined)) out.push(undefined);
-      return;
-    }
+    if (!v) return;
     const s = v.trim();
     if (!s || out.includes(s)) return;
     out.push(s);
@@ -168,15 +222,18 @@ export function zenoWalletProviderCandidates(localPhone0: string): (string | und
       add('VODACOM');
       break;
     case 'airtel':
-      add('AIRTEL MONEY');
       add('AIRTELMONEY');
+      add('AIRTEL MONEY');
       add('AIRTEL');
       break;
     case 'tigo_yas':
       add('TIGOPESA');
       add('TIGO PESA');
-      add('TIGO');
+      add('MIXX BY YAS');
+      add('MIXX');
+      add('YAS PESA');
       add('YAS');
+      add('TIGO');
       break;
     case 'cootel':
     case 'smile':
@@ -185,17 +242,16 @@ export function zenoWalletProviderCandidates(localPhone0: string): (string | und
     case 'unknown':
       add('TIGOPESA');
       add('M-PESA');
+      add('AIRTELMONEY');
       add('AIRTEL MONEY');
-      add('HALOPESA');
       break;
   }
-  add(undefined);
   return out;
 }
 
 /** ZenoPay wallet provider hint from local `0…` number. */
 export function zenoWalletProviderForLocalPhone(localPhone0: string): string | undefined {
-  const p = String(localPhone0 ?? '').replace(/\D/g, '').slice(0, 10);
+  const p = toLocal0Digits(localPhone0);
   switch (detectTzMobileNetwork(p)) {
     case 'halotel': {
       const v = process.env.ZENO_HALOTEL_WALLET_PROVIDER;
@@ -212,7 +268,7 @@ export function zenoWalletProviderForLocalPhone(localPhone0: string): string | u
     }
     case 'airtel': {
       const v = process.env.ZENO_AIRTEL_WALLET_PROVIDER;
-      return typeof v === 'string' && v.trim() ? v.trim() : 'AIRTEL MONEY';
+      return typeof v === 'string' && v.trim() ? v.trim() : 'AIRTELMONEY';
     }
     case 'cootel':
     case 'smile':
