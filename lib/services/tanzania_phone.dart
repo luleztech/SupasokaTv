@@ -55,5 +55,5 @@ class TanzaniaPhone {
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Nambari zote za Tanzania zinakubalika: 061, 062, 063, 065, 068, 071, 075, 076, 077, 078, 079, na zingine 061–079.';
+      'Nambari zote za Tanzania zinakubalika: 061, 062, 063, 065, 068, 071, 072, 075, 076, 077, 078, 079, na zingine 061–079.';
 }

@@ -7,7 +7,7 @@ import {
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
-import { detectTzMobileNetwork, formatPhoneToIntl255, isHalotelLocalPhone, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
+import { detectTzMobileNetwork, formatPhoneToIntl255, isHalotelLocalPhone, isVodacomMpesaLocalPhone, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 28_000;
@@ -162,6 +162,37 @@ export function sonicPhoneCandidatesForApi(local0: string): string[] {
   return phoneCandidatesForSonicPesaApi(local0);
 }
 
+type SonicCreateAttempt = {
+  buyer_phone: string;
+  channel?: string;
+};
+
+/** Phone formats (+ optional M-Pesa channel hint for 072 / Vodacom). */
+function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
+  const phones = sonicPhoneCandidatesForApi(localPhone);
+  const out: SonicCreateAttempt[] = [];
+  const seen = new Set<string>();
+  const add = (buyer_phone: string, channel?: string) => {
+    const key = `${buyer_phone}\0${channel ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(channel ? { buyer_phone, channel } : { buyer_phone });
+  };
+
+  for (const phone of phones) add(phone);
+
+  // 072 is often used with Vodacom M-Pesa; Sonic may need an explicit M-Pesa channel hint.
+  if (isVodacomMpesaLocalPhone(localPhone)) {
+    for (const phone of phones) {
+      add(phone, 'MPESA');
+      add(phone, 'M-PESA');
+      add(phone, 'VODACOM MPESA');
+    }
+  }
+
+  return out;
+}
+
 
 export function isSonicStkSendFailure(rawMessage: string, rawCode: string): boolean {
   return isMobileMoneyStkSendFailure(rawMessage, rawCode);
@@ -223,20 +254,21 @@ export async function tryCreateSonicOrder(args: {
   amountTzs: number;
 }): Promise<SonicCreateResult> {
   ensureSonicPesaConfigured();
-  const candidates = sonicPhoneCandidatesForApi(args.localPhone);
+  const attempts = buildSonicCreateAttempts(args.localPhone);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
   };
 
-  for (const phoneForApi of candidates) {
-    const payload = {
+  for (const attempt of attempts) {
+    const payload: Record<string, unknown> = {
       buyer_email: args.buyerEmail,
       buyer_name: args.buyerName,
-      buyer_phone: phoneForApi,
+      buyer_phone: attempt.buyer_phone,
       amount: args.amountTzs,
       currency: 'TZS',
     };
+    if (attempt.channel) payload.channel = attempt.channel;
     try {
       last = await gatewayFetchJson(`${SONIC_API_BASE}/payment/create_order`, {
         method: 'POST',

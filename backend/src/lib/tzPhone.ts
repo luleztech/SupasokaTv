@@ -8,7 +8,7 @@ export const TZ_MOBILE_PREFIXES = [
   '065', '067', '070', '071', '077', // Yas / tiGo (MIC)
   '066', // Smile
   '068', '069', '078', // Airtel
-  '072', // MO Mobile Holding
+  '072', // M-Pesa / Vodacom (legacy MO Mobile range; STK via M-Pesa)
   '073', // TTCL
   '074', '075', '076', '079', // Vodacom
 ] as const;
@@ -50,6 +50,13 @@ export function toLocal0Digits(raw: string): string {
   return s.slice(0, 10);
 }
 
+/** Vodacom M-Pesa numbers: 072 (legacy/portability) and 074–076, 079. */
+export function isVodacomMpesaLocalPhone(local0: string): boolean {
+  const p = toLocal0Digits(local0);
+  if (p.startsWith('072')) return true;
+  return /^07[45679]/.test(p) && !p.startsWith('078');
+}
+
 export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
   const p = toLocal0Digits(local0);
   if (/^06[123]/.test(p)) return 'halotel';
@@ -57,9 +64,8 @@ export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
   if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) return 'tigo_yas';
   if (p.startsWith('066')) return 'smile';
   if (/^06[89]/.test(p) || p.startsWith('078')) return 'airtel';
-  if (p.startsWith('072')) return 'mo_mobile';
+  if (isVodacomMpesaLocalPhone(p)) return 'vodacom';
   if (p.startsWith('073')) return 'ttcl';
-  if (/^07[45679]/.test(p) && !p.startsWith('078')) return 'vodacom';
   if (isValidTzMobileLocal0(p)) return 'unknown';
   return 'unknown';
 }
@@ -126,16 +132,21 @@ export function formatPhoneToIntl255(local0: string): string {
 
 /**
  * SonicPesa create_order phone formats (order matters by network).
- * Halopesa (061–063) often rejects `255…`; Airtel/Vodacom/Tigo expect `255…` per Sonic docs.
+ * Halopesa (061–063) often rejects `255…`; Vodacom M-Pesa (incl. 072) expects `255…` first.
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-  if (detectTzMobileNetwork(local0fmt) === 'halotel') {
-    return [...new Set([local0fmt, intl255].filter((p) => p.length > 0))];
-  }
-  return [...new Set([intl255, local0fmt].filter((p) => p.length > 0))];
+  const network = detectTzMobileNetwork(local0fmt);
+
+  let ordered: string[];
+  if (network === 'halotel') ordered = [local0fmt, intl255];
+  else if (network === 'vodacom') ordered = [intl255, local0fmt];
+  else if (network === 'airtel' || network === 'tigo_yas') ordered = [local0fmt, intl255];
+  else ordered = [intl255, local0fmt];
+
+  return [...new Set(ordered.filter((p) => p.length > 0))];
 }
 
 export function isHalotelLocalPhone(local0: string): boolean {
