@@ -14,18 +14,40 @@ final _localNotifications = FlutterLocalNotificationsPlugin();
 const _prefsNotifPrompted = 'supasoka_notif_prompted_v1';
 const _prefsDirectTopic = 'supasoka_direct_user_topic_v1';
 
+bool _firebaseReady = false;
+
+/// FCM is only wired for Android/iOS — desktop & web skip push entirely.
+bool get _pushSupported =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
+
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (!_pushSupported) return;
   await Firebase.initializeApp();
 }
 
 class PushNotificationService {
   PushNotificationService._();
 
-  static Future<void> initialize() async {
-    if (kIsWeb) return;
+  static bool get isSupported => _pushSupported;
 
-    await Firebase.initializeApp();
+  static bool get isReady => _firebaseReady;
+
+  static Future<void> initialize() async {
+    if (!_pushSupported) return;
+
+    try {
+      await Firebase.initializeApp();
+      _firebaseReady = true;
+    } catch (e, st) {
+      _firebaseReady = false;
+      if (kDebugMode) {
+        debugPrint('Firebase.initializeApp failed: $e\n$st');
+      }
+      return;
+    }
 
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
@@ -55,7 +77,6 @@ class PushNotificationService {
       debugPrint('FCM token: $token');
     }
 
-    // Optional global topic.
     await messaging.subscribeToTopic('all_users');
 
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
@@ -68,18 +89,16 @@ class PushNotificationService {
   }
 
   static Future<bool> shouldShowPermissionPrompt() async {
-    if (kIsWeb) return false;
+    if (!_firebaseReady) return false;
     final settings = await FirebaseMessaging.instance.getNotificationSettings();
     final alreadyAllowed = settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
-    // Keep asking (via in-app dialog) until OS notification permission is granted.
-    // Some users skip once, then never get asked again with the old one-shot flag.
     if (alreadyAllowed) return false;
     return true;
   }
 
   static Future<bool> requestPermissionFromPrompt() async {
-    if (kIsWeb) return false;
+    if (!_firebaseReady) return false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefsNotifPrompted, true);
     final settings = await FirebaseMessaging.instance.requestPermission(
@@ -99,7 +118,7 @@ class PushNotificationService {
   }
 
   static Future<void> markPermissionPromptSeen() async {
-    if (kIsWeb) return;
+    if (!_pushSupported) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefsNotifPrompted, true);
   }
@@ -134,7 +153,7 @@ class PushNotificationService {
   }
 
   static Future<void> syncAudienceTopics({required bool isPremium}) async {
-    if (kIsWeb) return;
+    if (!_firebaseReady) return;
     final messaging = FirebaseMessaging.instance;
     if (isPremium) {
       await messaging.subscribeToTopic('premium_users');
@@ -146,7 +165,7 @@ class PushNotificationService {
   }
 
   static Future<void> syncDirectUserTopic(String publicId) async {
-    if (kIsWeb) return;
+    if (!_firebaseReady) return;
     final raw = publicId.trim();
     if (raw.isEmpty) return;
     final topic = 'user_${raw.replaceAll(RegExp(r'[^a-zA-Z0-9\\-_.~%]'), '_')}';

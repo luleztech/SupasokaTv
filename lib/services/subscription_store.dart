@@ -151,11 +151,15 @@ class SubscriptionStore {
         return;
       }
 
-      if (userExists) {
-        await PremiumRecovery.clearPendingPaymentState();
+      final hasPending = await PremiumRecovery.hasRecentPendingPayment();
+      if (hasPending) {
+        return;
       }
-      invalidatePlaybackCache();
-      await clearLocalPremium();
+
+      if (userExists) {
+        invalidatePlaybackCache();
+        await clearLocalPremium();
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');

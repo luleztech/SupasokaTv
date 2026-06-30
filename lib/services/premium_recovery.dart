@@ -65,7 +65,7 @@ class PremiumRecovery {
               if (raw is num && raw.toInt() > nowMs) return raw.toInt();
             }
           } catch (_) {}
-        } else if ((res.statusCode == 402 || res.statusCode == 500) && attempt < 4) {
+        } else if ((res.statusCode == 402 || res.statusCode == 409 || res.statusCode == 500) && attempt < 4) {
           await Future<void>.delayed(Duration(milliseconds: 1200 + (attempt * 900)));
           continue;
         }
@@ -167,7 +167,7 @@ class PremiumRecovery {
 
   /// Returns true while a pending payment is still fresh enough to trust local fallback premium.
   static Future<bool> hasRecentPendingPayment({
-    Duration maxAge = const Duration(hours: 6),
+    Duration maxAge = const Duration(hours: 72),
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final orderId = prefs.getString(_pendingOrderKey)?.trim();
@@ -192,9 +192,8 @@ class PremiumRecovery {
     final orderId = prefs.getString(_pendingOrderKey)?.trim();
     if (orderId == null || orderId.isEmpty) return false;
 
-    final planId = prefs.getString(_pendingPlanKey)?.trim() ?? '';
+    var planId = prefs.getString(_pendingPlanKey)?.trim() ?? '';
     final phone = prefs.getString(_pendingPhoneKey)?.trim() ?? '';
-    if (planId.isEmpty) return false;
 
     try {
       final response = await paymentsApi.checkPaymentStatus(orderId);
@@ -206,6 +205,15 @@ class PremiumRecovery {
 
       if (!isPaymentCompleted(paymentStatus)) return false;
 
+      if (planId.isEmpty) {
+        final fromStatus = response['intentPlanId'] ?? response['planId'];
+        if (fromStatus is String && fromStatus.trim().isNotEmpty) {
+          planId = fromStatus.trim();
+          await prefs.setString(_pendingPlanKey, planId);
+        }
+      }
+      if (planId.isEmpty) return false;
+
       final publicId = await UserIdentity.getOrCreatePublicId();
       var serverUntil = response['premiumUntilMs'];
       int? serverUntilMs;
@@ -215,13 +223,14 @@ class PremiumRecovery {
         serverUntilMs = serverUntil.toInt();
       }
 
-      if (serverUntilMs == null && response['activated'] != true) {
-        serverUntilMs = await confirmPremiumOnBackend(
+      if (serverUntilMs == null || serverUntilMs <= DateTime.now().millisecondsSinceEpoch) {
+        final confirmed = await confirmPremiumOnBackend(
           orderId: orderId,
           publicId: publicId,
           planId: planId,
           phone: phone,
         );
+        if (confirmed != null) serverUntilMs = confirmed;
       }
 
       if (serverUntilMs == null) {

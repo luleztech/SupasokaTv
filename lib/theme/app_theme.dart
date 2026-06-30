@@ -177,7 +177,7 @@ class ThemeController extends ChangeNotifier {
 }
 
 class AppNav extends ChangeNotifier {
-  int _tab = 0;
+  int _tab = AppTab.home;
 
   int get currentTab => _tab;
 
@@ -188,4 +188,11 @@ class AppNav extends ChangeNotifier {
     notifyListeners();
     return true;
   }
+}
+
+/// Bottom navigation indices (Home · Unlock · Profile).
+abstract final class AppTab {
+  static const home = 0;
+  static const unlock = 1;
+  static const profile = 2;
 }

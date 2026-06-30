@@ -4,14 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
-import 'package:supasoka/screens/settings_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/subscription_store.dart';
-import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
-import 'package:supasoka/widgets/app_header.dart';
-import 'package:supasoka/widgets/premium_ui.dart';
+import 'package:supasoka/theme/brand_palette.dart';
 
 String _avatarLetters(String publicId) {
   final tail =
@@ -108,6 +105,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       SnackBar(
         content: Text('Jina lako limenakiliwa: $id', style: rajdhani(14, weight: FontWeight.w600)),
         behavior: SnackBarBehavior.floating,
+        backgroundColor: BrandPalette.bgMid,
         duration: const Duration(seconds: 2),
       ),
     );
@@ -115,142 +113,122 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final t = context.watch<ThemeController>().colors;
     final username = _username;
     final displayName = username ?? '...';
     final letters = username != null ? _avatarLetters(username) : 'SK';
+    final top = MediaQuery.paddingOf(context).top;
 
     final until = SubscriptionStore.premiumUntilNotifier.value;
     final now = DateTime.now();
     final isPremium = until != null && until.isAfter(now);
     final remaining = until != null ? until.difference(now) : Duration.zero;
 
-    return Stack(
-      children: [
-        const PremiumAmbientBackground(),
-        ColoredBox(
-          color: Colors.transparent,
-          child: RefreshIndicator(
-            color: t.accent,
-            onRefresh: () => context.read<ContentStore>().refresh(),
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(bottom: 100),
-              children: [
-                const AppHeader(title: 'Akaunti', subtitle: 'AKAUNTI YAKO'),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
-            child: Column(
+    return ColoredBox(
+      color: BrandPalette.bgDeep,
+      child: RefreshIndicator(
+        color: BrandPalette.accent,
+        backgroundColor: BrandPalette.bgMid,
+        onRefresh: () => context.read<ContentStore>().refresh(),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(20, top + 16, 20, 100),
+          children: [
+            Row(
               children: [
                 Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(colors: [t.accent, t.accent2]),
-                    boxShadow: [BoxShadow(color: t.accent.withValues(alpha: 0.4), blurRadius: 20)],
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(letters, style: orbitron(28, weight: FontWeight.w900).copyWith(color: Colors.black)),
+                  width: 3,
+                  height: 24,
+                  decoration: const BoxDecoration(gradient: BrandPalette.activeGradient),
                 ),
-                const SizedBox(height: 16),
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: username != null ? _copyUsername : null,
-                    borderRadius: BorderRadius.circular(10),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              displayName,
-                              style: orbitron(18).copyWith(color: t.text, letterSpacing: 0.6),
-                            ),
-                          ),
-                          if (username != null) ...[
-                            const SizedBox(width: 8),
-                            Icon(Ionicons.copy_outline, size: 18, color: t.text2),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
+                const SizedBox(width: 10),
+                Text(
+                  'Akaunti yako',
+                  style: rajdhani(18, weight: FontWeight.w800).copyWith(color: BrandPalette.white),
                 ),
-                if (username != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Gusa kunakili jina lako',
-                      style: rajdhani(11, weight: FontWeight.w600).copyWith(color: t.text2),
-                    ),
-                  ),
               ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: _SubscriptionCard(
-              t: t,
+            const SizedBox(height: 28),
+            Center(
+              child: Container(
+                width: 88,
+                height: 88,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: BrandPalette.activeGradient,
+                  boxShadow: [
+                    BoxShadow(
+                      color: BrandPalette.accent.withValues(alpha: 0.35),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  letters,
+                  style: orbitron(26, weight: FontWeight.w900).copyWith(color: BrandPalette.bgDeep),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Center(
+              child: InkWell(
+                onTap: username != null ? _copyUsername : null,
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          style: orbitron(16).copyWith(color: BrandPalette.white, letterSpacing: 0.5),
+                        ),
+                      ),
+                      if (username != null) ...[
+                        const SizedBox(width: 8),
+                        const Icon(Ionicons.copy_outline, size: 16, color: BrandPalette.accent),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            _SubscriptionCard(
               isPremium: isPremium,
               remaining: remaining,
               expiryLabel: until != null ? _formatExpiryDate(until) : '',
             ),
-          ),
-          const SizedBox(height: 32),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              children: [
-                _MenuTile(
-                  t: t,
-                  g: [t.accent, t.accent2],
-                  icon: Ionicons.settings_outline,
-                  title: 'Settings',
-                  subtitle: 'Themes, preferences',
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen())),
-                ),
-                const SizedBox(height: 10),
-                _MenuTile(
-                  t: t,
-                  g: [t.free, const Color(0xFF34d399)],
-                  icon: Ionicons.share_social_outline,
-                  title: 'Share App',
-                  subtitle: 'Invite your friends',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 10),
-                _MenuTile(
-                  t: t,
-                  g: [t.red, t.accent2],
-                  icon: Ionicons.call_outline,
-                  title: 'Support',
-                  subtitle: 'Help & contact',
-                  onTap: () {},
-                ),
-              ],
+            const SizedBox(height: 20),
+            _MenuTile(
+              icon: Ionicons.share_social_outline,
+              title: 'Share App',
+              subtitle: 'Invite your friends',
+              onTap: () {},
             ),
-          ),
-              ],
+            const SizedBox(height: 10),
+            _MenuTile(
+              icon: Ionicons.call_outline,
+              title: 'Support',
+              subtitle: 'Help & contact',
+              onTap: () {},
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
 class _SubscriptionCard extends StatelessWidget {
   const _SubscriptionCard({
-    required this.t,
     required this.isPremium,
     required this.remaining,
     required this.expiryLabel,
   });
 
-  final AppThemeColors t;
   final bool isPremium;
   final Duration remaining;
   final String expiryLabel;
@@ -259,82 +237,44 @@ class _SubscriptionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: t.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(18),
+        color: BrandPalette.bgMid.withValues(alpha: 0.85),
+        border: Border.all(
+          color: isPremium
+              ? BrandPalette.accentWarm.withValues(alpha: 0.45)
+              : BrandPalette.white.withValues(alpha: 0.08),
+        ),
       ),
-      clipBehavior: Clip.antiAlias,
+      padding: const EdgeInsets.all(18),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            color: t.card,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (isPremium) ...[
-                  Icon(Ionicons.star, size: 18, color: t.premium),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Premium User',
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    style: orbitron(11, weight: FontWeight.w800).copyWith(
-                      color: t.premium,
-                      height: 1.15,
-                    ),
-                  ),
-                ] else ...[
-                  Text(
-                    'Free user only',
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    style: orbitron(11, weight: FontWeight.w800).copyWith(
-                      color: t.text2,
-                      height: 1.15,
-                    ),
-                  ),
-                ],
-              ],
-            ),
+          Row(
+            children: [
+              Icon(
+                isPremium ? Ionicons.star : Ionicons.person_outline,
+                size: 18,
+                color: isPremium ? BrandPalette.accentWarm : BrandPalette.white.withValues(alpha: 0.5),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isPremium ? 'Premium User' : 'Free User',
+                style: orbitron(12, weight: FontWeight.w800).copyWith(
+                  color: isPremium ? BrandPalette.accentWarm : BrandPalette.white.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
           ),
           if (isPremium) ...[
-            Divider(height: 1, thickness: 1, color: t.border),
-            Container(
-              color: t.card.withValues(alpha: 0.92),
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Ionicons.calendar_outline, size: 16, color: t.accent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Kifurushi chako kitaisha $expiryLabel',
-                          style: rajdhani(13, weight: FontWeight.w600).copyWith(color: t.text, height: 1.3),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    _countdownSwahili(remaining),
-                    style: rajdhani(16, weight: FontWeight.w600).copyWith(
-                      color: t.text,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ),
+            const SizedBox(height: 14),
+            Text(
+              'Kifurushi kitaisha $expiryLabel',
+              style: rajdhani(13, weight: FontWeight.w600).copyWith(color: BrandPalette.white.withValues(alpha: 0.8)),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _countdownSwahili(remaining),
+              style: rajdhani(14, weight: FontWeight.w600).copyWith(color: BrandPalette.accent),
             ),
           ],
         ],
@@ -345,16 +285,12 @@ class _SubscriptionCard extends StatelessWidget {
 
 class _MenuTile extends StatelessWidget {
   const _MenuTile({
-    required this.t,
-    required this.g,
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
 
-  final AppThemeColors t;
-  final List<Color> g;
   final IconData icon;
   final String title;
   final String subtitle;
@@ -363,21 +299,42 @@ class _MenuTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: t.card,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: t.border)),
+      color: BrandPalette.bgMid.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(14),
       clipBehavior: Clip.antiAlias,
-      child: ListTile(
+      child: InkWell(
         onTap: onTap,
-        leading: Container(
-          width: 38,
-          height: 38,
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), gradient: LinearGradient(colors: g)),
-          alignment: Alignment.center,
-          child: Icon(icon, size: 18, color: Colors.black),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  gradient: BrandPalette.activeGradient,
+                ),
+                alignment: Alignment.center,
+                child: Icon(icon, size: 18, color: BrandPalette.bgDeep),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: rajdhani(14, weight: FontWeight.w700).copyWith(color: BrandPalette.white)),
+                    Text(
+                      subtitle,
+                      style: rajdhani(11).copyWith(color: BrandPalette.white.withValues(alpha: 0.45)),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Ionicons.chevron_forward, size: 16, color: BrandPalette.white.withValues(alpha: 0.35)),
+            ],
+          ),
         ),
-        title: Text(title, style: rajdhani(15, weight: FontWeight.w600).copyWith(color: t.text)),
-        subtitle: Text(subtitle, style: rajdhani(12).copyWith(color: t.text2)),
-        trailing: Text('›', style: TextStyle(color: t.text2, fontSize: 20)),
       ),
     );
   }

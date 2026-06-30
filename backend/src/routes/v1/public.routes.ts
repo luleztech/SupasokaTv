@@ -11,12 +11,15 @@ import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../servi
 import { registerPublicUser, getUserPremiumRecord } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
+  ensurePaymentIntentsTable,
   getIntent,
+  upsertPendingIntent,
 } from '../../services/paymentIntents';
-import { getSelectedPaymentProvider } from '../../services/paymentProviderSettings';
+import { getSelectedPaymentProvider, PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
 import {
   confirmPremiumForOrder,
   ensurePremiumActivatedForPaidOrder,
+  metadataFromProviderPayload,
   parseStartPaymentFromLegacyBody,
   pollUnifiedPaymentStatus,
   providerHealthSnapshot,
@@ -164,15 +167,17 @@ publicRouter.post('/register-user', async (req, res, next) => {
   }
 });
 
-/** Viewer app: get premium status for a user (read-only — never re-grant here). */
+/** Viewer app: get premium status for a user (reconciles paid orders before read). */
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
     const userId = String(req.params.userId ?? '').trim();
+    const reconciled = await reconcilePremiumForUser(userId);
     const out = await getUserPremiumRecord(userId);
+    const premiumUntilMs = reconciled ?? out.premiumUntilMs;
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ ok: true, premiumUntilMs: out.premiumUntilMs, userExists: out.userExists });
+    res.json({ ok: true, premiumUntilMs, userExists: out.userExists });
   } catch (e) {
     next(e);
   }
@@ -277,6 +282,8 @@ async function handleUnifiedPaymentStatus(
       status: out.status === 'COMPLETED' ? 'success' : 'success',
       data: row != null ? (Array.isArray((out.raw as { data?: unknown[] })?.data) ? (out.raw as { data: unknown[] }).data : [row]) : [],
       paymentStatus: out.status,
+      ...(out.intentPublicId ? { intentPublicId: out.intentPublicId } : {}),
+      ...(out.intentPlanId ? { intentPlanId: out.intentPlanId, planId: out.intentPlanId } : {}),
       ...(out.activated ? { activated: true, premiumUntilMs: out.premiumUntilMs ?? null } : {}),
     });
   } catch (e) {
@@ -294,7 +301,9 @@ publicRouter.get('/zeno/order-status', handleUnifiedPaymentStatus);
 publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
   try {
     ensureSonicPesaConfigured();
-    const rawBodyString = JSON.stringify(req.body ?? {});
+    const rawBodyString =
+      (req as import('express').Request & { rawBody?: string }).rawBody ??
+      JSON.stringify(req.body ?? {});
     const sigHeader =
       (req.headers['x-sonicpesa-signature'] as string | undefined) ??
       (req.headers['x-webhook-signature'] as string | undefined) ??
@@ -308,16 +317,26 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
-    const tracked = await getIntent(orderId);
-
-    if (process.env.SONICPESA_WEBHOOK_SECRET?.trim()) {
-      if (!signatureValid) {
-        res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
-        return;
-      }
-    } else if (tracked == null || tracked.activated_at_ms != null) {
-      res.status(401).json({ ok: false, error: 'Webhook not verified' });
+    if (process.env.SONICPESA_WEBHOOK_SECRET?.trim() && !signatureValid) {
+      res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
       return;
+    }
+
+    let tracked = await getIntent(orderId);
+
+    if (!tracked && paid) {
+      const meta = metadataFromProviderPayload(payload);
+      if (meta.publicId && meta.planId) {
+        await ensurePaymentIntentsTable();
+        await upsertPendingIntent({
+          orderId,
+          publicId: meta.publicId,
+          planId: meta.planId,
+          provider: PAYMENT_PROVIDERS.SONICPESA,
+          providerPayload: payload,
+        });
+        tracked = await getIntent(orderId);
+      }
     }
 
     if (!paid) {
@@ -325,9 +344,10 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
+    const meta = metadataFromProviderPayload(payload);
     const act = await ensurePremiumActivatedForPaidOrder(orderId, {
-      publicId: tracked?.public_id ?? undefined,
-      planId: tracked?.plan_id ?? undefined,
+      publicId: tracked?.public_id ?? (meta.publicId || undefined),
+      planId: tracked?.plan_id ?? (meta.planId || undefined),
       phone: tracked?.buyer_phone ?? undefined,
     });
     if (!act.activated) {

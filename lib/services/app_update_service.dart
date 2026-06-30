@@ -136,11 +136,18 @@ Future<AppUpdateStatus> evaluateAppUpdateFromConfig(Map<String, dynamic> j) asyn
   );
 }
 
+/// Fallbacks when [PackageInfo] omits build on desktop (Linux needs `appBuild` for catalog).
+const kPackageVersionFallback = '1.2.7';
+const kPackageBuildFallback = '22';
+
 Future<Map<String, String>> appVersionQueryParams() async {
   final info = await PackageInfo.fromPlatform();
+  final version = info.version.trim().isNotEmpty ? info.version.trim() : kPackageVersionFallback;
+  final rawBuild = info.buildNumber.trim();
+  final build = rawBuild.isNotEmpty && rawBuild != '0' ? rawBuild : kPackageBuildFallback;
   return {
-    'appBuild': info.buildNumber,
-    'appVersion': info.version,
+    'appBuild': build,
+    'appVersion': version,
   };
 }
 

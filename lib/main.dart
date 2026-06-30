@@ -14,6 +14,7 @@ import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/theme/app_theme.dart';
+import 'package:supasoka/theme/brand_palette.dart';
 
 /// Hides the Material scrollbar thumb (Common on web/desktop; keeps scrolling unchanged).
 class _NoScrollbarScrollBehavior extends MaterialScrollBehavior {
@@ -83,12 +84,12 @@ class SupasokaApp extends StatelessWidget {
       ],
       child: Consumer<ThemeController>(
         builder: (context, tc, _) {
-          final bg = tc.colors.bg1;
+          final bg = BrandPalette.bgDeep;
           final baseTheme = ThemeData(
             useMaterial3: true,
             brightness: Brightness.dark,
             scaffoldBackgroundColor: bg,
-            colorScheme: ColorScheme.dark(primary: tc.colors.accent, surface: bg),
+            colorScheme: ColorScheme.dark(primary: BrandPalette.accent, surface: bg),
           );
           return MaterialApp(
             title: 'Supasoka',
@@ -163,6 +164,7 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
         }());
         unawaited(
           UserIdentity.registerWithBackend().then((_) async {
+            if (!PushNotificationService.isReady) return;
             final pid = await UserIdentity.getOrCreatePublicId();
             return PushNotificationService.syncDirectUserTopic(pid);
           }),
@@ -174,6 +176,7 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
 
   Future<void> _syncPremiumAndTopics() async {
     await SubscriptionStore.syncPremiumFromBackend();
+    if (!PushNotificationService.isReady) return;
     final isPremium = SubscriptionStore.isPremiumActiveLocal();
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
   }
@@ -209,7 +212,7 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
   }
 
   Future<void> _maybeAskNotificationPermission() async {
-    if (!mounted) return;
+    if (!mounted || !PushNotificationService.isSupported) return;
     final shouldAsk = await PushNotificationService.shouldShowPermissionPrompt();
     if (!mounted || !shouldAsk) return;
 

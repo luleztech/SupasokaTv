@@ -265,10 +265,44 @@ class ContentStore extends ChangeNotifier {
     return false;
   }
 
+  Future<bool> _applyCachedFromPrefs(SharedPreferences prefs) async {
+    final raw = prefs.getString(_prefsKey);
+    if (raw == null || raw.isEmpty) return false;
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      _applyConfig(j);
+      await _persistSyncSignature(j);
+      return true;
+    } catch (_) {
+      await prefs.remove(_prefsKey);
+      return false;
+    }
+  }
+
+  /// Cold start: hydrate from disk immediately, then refresh from network without blocking navigation.
+  Future<void> bootstrapForSplash() async {
+    _loadError = null;
+    final prefs = await SharedPreferences.getInstance();
+    final hadCache = await _applyCachedFromPrefs(prefs);
+    if (hadCache && _channels.isNotEmpty) {
+      _ready = true;
+      notifyListeners();
+      unawaited(bootstrap(silent: true));
+      return;
+    }
+    _ready = false;
+    _refreshing = true;
+    notifyListeners();
+    unawaited(bootstrap(silent: false));
+  }
+
   /// [silent]: keep current UI visible while fetching (used for pull-to-refresh and tab changes).
   Future<void> bootstrap({bool silent = false}) async {
     if (!silent) {
-      _ready = false;
+      if (_channels.isEmpty) {
+        _ready = false;
+        _refreshing = true;
+      }
       _loadError = null;
     } else {
       _refreshing = true;
@@ -277,6 +311,15 @@ class ContentStore extends ChangeNotifier {
 
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      if (_channels.isEmpty) {
+        await _applyCachedFromPrefs(prefs);
+        if (_channels.isNotEmpty && !silent) {
+          _ready = true;
+          notifyListeners();
+        }
+      }
+
       final base = apiConfigUrl;
 
       // Live server policy always wins — do not rely on stale config cache for update gate.
@@ -297,15 +340,7 @@ class ContentStore extends ChangeNotifier {
       }
 
       Future<void> applyCached() async {
-        final raw = prefs.getString(_prefsKey);
-        if (raw == null || raw.isEmpty) return;
-        try {
-          final j = jsonDecode(raw) as Map<String, dynamic>;
-          _applyConfig(j);
-          await _persistSyncSignature(j);
-        } catch (_) {
-          await prefs.remove(_prefsKey);
-        }
+        await _applyCachedFromPrefs(prefs);
       }
 
       if (base.isEmpty) {
@@ -357,7 +392,14 @@ class ContentStore extends ChangeNotifier {
                 return;
               }
               _applyConfig(j);
-              await prefs.setString(_prefsKey, res.body);
+              final channelCount = _channels.length;
+              if (channelCount > 0) {
+                await prefs.setString(_prefsKey, res.body);
+              } else if (kDebugMode) {
+                debugPrint(
+                  'Supasoka: config ok but 0 channels (check appBuild/appVersion query params).',
+                );
+              }
               await _persistSyncSignature(j);
               _connectionBlocked = false;
               _loadError = null;
@@ -394,10 +436,8 @@ class ContentStore extends ChangeNotifier {
       _ready = true;
       notifyListeners();
     } finally {
-      if (silent) {
-        _refreshing = false;
-        notifyListeners();
-      }
+      _refreshing = false;
+      notifyListeners();
     }
   }
 

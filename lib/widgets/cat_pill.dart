@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
-import 'package:provider/provider.dart';
-import 'package:supasoka/theme/app_theme.dart';
-import 'package:supasoka/widgets/premium_ui.dart';
 import 'package:supasoka/theme/app_typography.dart';
+import 'package:supasoka/theme/brand_palette.dart';
 
 IconData pillIcon(String name) {
   switch (name) {
@@ -26,26 +24,7 @@ IconData pillIcon(String name) {
   }
 }
 
-({String emoji, Color tint}) _categoryAccent(String key, AppThemeColors t) {
-  switch (key) {
-    case 'all':
-      return (emoji: '🔥', tint: t.accent);
-    case 'football':
-    case 'mpira':
-    case 'sports':
-      return (emoji: '⚽', tint: const Color(0xFF4ade80));
-    case 'movies':
-    case 'tamthilia':
-      return (emoji: '🎬', tint: const Color(0xFFc084fc));
-    case 'news':
-    case 'habari':
-      return (emoji: '📰', tint: const Color(0xFF38bdf8));
-    case 'entertainment':
-      return (emoji: '🎵', tint: const Color(0xFFf472b6));
-    default:
-      return (emoji: '📺', tint: t.accent2);
-  }
-}
+HomeSectionStyle _pillStyle(String key) => HomeSectionStyle.forCategoryKey(key);
 
 /// Horizontal category tab strip for the home screen.
 class CatPillStrip extends StatelessWidget {
@@ -58,47 +37,14 @@ class CatPillStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = context.watch<ThemeController>().colors;
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: t.surface.withValues(alpha: 0.55),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.04),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-            ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              scrollDirection: Axis.horizontal,
-              itemCount: children.length,
-              separatorBuilder: (context, _) => const SizedBox(width: 6),
-              itemBuilder: (context, i) => children[i],
-            ),
-          ],
-        ),
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        scrollDirection: Axis.horizontal,
+        itemCount: children.length,
+        separatorBuilder: (context, _) => const SizedBox(width: 8),
+        itemBuilder: (context, i) => children[i],
       ),
     );
   }
@@ -122,44 +68,35 @@ class CatPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = context.watch<ThemeController>().colors;
-    final style = _categoryAccent(categoryKey, t);
-    final tint = style.tint;
+    final style = _pillStyle(categoryKey);
+    final tint = style.primary;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPress,
-        borderRadius: BorderRadius.circular(14),
-        splashColor: tint.withValues(alpha: 0.2),
-        highlightColor: tint.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+        splashColor: tint.withValues(alpha: 0.18),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 280),
           curve: Curves.easeOutCubic,
-          padding: EdgeInsets.fromLTRB(active ? 10 : 8, 6, active ? 14 : 12, 6),
+          padding: EdgeInsets.fromLTRB(active ? 14 : 12, 10, active ? 18 : 16, 10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            gradient: active
-                ? premiumActivePillGradient
-                : LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      t.card.withValues(alpha: 0.85),
-                      t.surface.withValues(alpha: 0.65),
-                    ],
-                  ),
+            borderRadius: BorderRadius.circular(20),
+            gradient: active ? style.accentGradient : null,
+            color: active ? null : BrandPalette.bgMid.withValues(alpha: 0.85),
             border: Border.all(
-              color: active ? Colors.white.withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.08),
+              color: active
+                  ? BrandPalette.white.withValues(alpha: 0.22)
+                  : tint.withValues(alpha: 0.28),
               width: active ? 1.2 : 1,
             ),
             boxShadow: active
                 ? [
                     BoxShadow(
-                      color: const Color(0xFFFF3B30).withValues(alpha: 0.4),
-                      blurRadius: 16,
-                      spreadRadius: -3,
-                      offset: const Offset(0, 6),
+                      color: tint.withValues(alpha: 0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
                     ),
                   ]
                 : null,
@@ -167,68 +104,33 @@ class CatPill extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOutCubic,
-                width: 28,
-                height: 28,
+              Container(
+                width: 26,
+                height: 26,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(9),
-                  gradient: active
-                      ? LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Colors.white.withValues(alpha: 0.28),
-                            Colors.black.withValues(alpha: 0.12),
-                          ],
-                        )
-                      : null,
-                  color: active ? null : tint.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  color: active
+                      ? BrandPalette.white.withValues(alpha: 0.18)
+                      : tint.withValues(alpha: 0.12),
                   border: Border.all(
-                    color: active ? Colors.white.withValues(alpha: 0.22) : tint.withValues(alpha: 0.35),
+                    color: active
+                        ? BrandPalette.white.withValues(alpha: 0.25)
+                        : tint.withValues(alpha: 0.3),
                   ),
                 ),
                 alignment: Alignment.center,
                 child: active
-                    ? Text(style.emoji, style: const TextStyle(fontSize: 14, height: 1))
-                    : Icon(
-                        pillIcon(icon),
-                        size: 13,
-                        color: tint.withValues(alpha: 0.95),
-                      ),
+                    ? Text(style.emoji, style: const TextStyle(fontSize: 13, height: 1))
+                    : Icon(pillIcon(icon), size: 13, color: tint),
               ),
               const SizedBox(width: 8),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: inter(active ? 13 : 12.5, weight: active ? FontWeight.w800 : FontWeight.w600).copyWith(
-                      letterSpacing: active ? 0.2 : 0.05,
-                      color: active ? Colors.white : t.text.withValues(alpha: 0.88),
-                      height: 1,
-                    ),
-                  ),
-                  if (active) ...[
-                    const SizedBox(height: 4),
-                    Container(
-                      width: 18,
-                      height: 2.5,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(99),
-                        color: Colors.white.withValues(alpha: 0.85),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.white.withValues(alpha: 0.35),
-                            blurRadius: 4,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
+              Text(
+                label,
+                style: inter(active ? 12.5 : 12, weight: active ? FontWeight.w800 : FontWeight.w600).copyWith(
+                  color: active ? BrandPalette.white : BrandPalette.white.withValues(alpha: 0.82),
+                  letterSpacing: 0.2,
+                  height: 1,
+                ),
               ),
             ],
           ),

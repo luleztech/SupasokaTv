@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ionicons/ionicons.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -11,7 +10,6 @@ class AppHeader extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.logoLetter = 'S',
-    this.onSettings,
     this.rightSlot,
     this.leftSlot,
   });
@@ -19,7 +17,6 @@ class AppHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
   final String logoLetter;
-  final VoidCallback? onSettings;
   final Widget? rightSlot;
   final Widget? leftSlot;
 
@@ -109,47 +106,13 @@ class AppHeader extends StatelessWidget {
                 Expanded(
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ...?(rightSlot == null ? null : <Widget>[rightSlot as Widget]),
-                        if (onSettings != null)
-                          _IconBtn(
-                            onTap: onSettings!,
-                            child: Icon(Ionicons.settings_outline, size: 18, color: const Color(0xFFd4d4d8)),
-                          ),
-                      ],
-                    ),
+                    child: rightSlot,
                   ),
                 ),
               ],
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _IconBtn extends StatelessWidget {
-  const _IconBtn({required this.onTap, required this.child});
-
-  final VoidCallback onTap;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.watch<ThemeController>().colors;
-    return Material(
-      color: const Color(0xCC18181b),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: t.border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(width: 38, height: 38, child: Center(child: child)),
       ),
     );
   }

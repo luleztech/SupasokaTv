@@ -1,30 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:ionicons/ionicons.dart';
-import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
-import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
-import 'package:supasoka/widgets/premium_ui.dart';
+import 'package:supasoka/theme/brand_palette.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 
-/// Portrait thumb (3:4) + centered title — must match [AspectRatio] below.
-double channelCardCellHeight(double cellWidth) => cellWidth * 4 / 3 + 76;
+/// 16:9 poster + title row below.
+double channelCardCellHeight(double cellWidth) => cellWidth * 9 / 16 + 44;
 
-/// Poster trimmed vs 3:4 — title overlays inside poster; keep in sync with [ChannelCard] `compactGrid`.
-const double _kChannelGridPosterTrim = 52;
+double _channelGridPosterHeight(double cellWidth) => cellWidth * 9 / 16;
 
-/// Same computation as [ChannelCard] grid [LayoutBuilder] (must stay in sync).
-double _channelGridPosterHeight(double cellWidth) =>
-    (cellWidth * 4 / 3 - _kChannelGridPosterTrim).clamp(96.0, double.infinity);
+double channelGridCellHeight(double cellWidth) => _channelGridPosterHeight(cellWidth) + 52;
 
-/// Channels tab grid cell height — poster + tiny slack for float / title shadow paint.
-double channelGridCellHeight(double cellWidth) => _channelGridPosterHeight(cellWidth) + 1.5;
+double channelRailCellHeight(double tileWidth) => tileWidth * 9 / 16 + 44;
 
-/// Home horizontal rails — poster + slack (name overlay inside thumb).
-double channelRailCellHeight(double tileWidth) => tileWidth * 4 / 3 + 1.5;
-
-/// Home discovery: slightly shorter tiles (tighter rail, modern density).
-double channelHomeRailCellHeight(double tileWidth) => channelRailCellHeight(tileWidth) - 20;
+double channelHomeRailCellHeight(double tileWidth) => channelRailCellHeight(tileWidth);
 
 const Map<String, String> kCatLabel = {
   'football': 'Football',
@@ -97,7 +87,6 @@ IconData catIconFor(String cat) {
   }
 }
 
-/// Supastream-style channel tile: 16:9 art, meta below, zinc border, brand-red LIVE.
 class ChannelCard extends StatefulWidget {
   const ChannelCard({
     super.key,
@@ -105,17 +94,16 @@ class ChannelCard extends StatefulWidget {
     required this.onPress,
     this.locked = false,
     this.width,
+    this.posterHeight,
     this.compactGrid = false,
-    /// Rail mode only: shifts poster height (e.g. `-20` on home for shorter tiles).
     this.railPosterHeightDelta = 0,
   });
 
   final Channel channel;
   final VoidCallback onPress;
   final bool locked;
-  /// When set (e.g. horizontal rails), fixes tile width like `w-44` / `w-56`.
   final double? width;
-  /// Channels grid: trimmed poster + title overlay inside thumb ([compactGrid]).
+  final double? posterHeight;
   final bool compactGrid;
   final double railPosterHeightDelta;
 
@@ -123,73 +111,107 @@ class ChannelCard extends StatefulWidget {
   State<ChannelCard> createState() => _ChannelCardState();
 }
 
-class _ChannelPoster extends StatelessWidget {
-  const _ChannelPoster({
-    required this.t,
-    required this.ch,
-    required this.locked,
-    this.titleOverlay = false,
-    this.titleOverlayCompact = false,
-  });
+class _ChannelCardState extends State<ChannelCard> {
+  double _scale = 1;
 
-  final AppThemeColors t;
+  @override
+  Widget build(BuildContext context) {
+    final ch = widget.channel;
+    final w = widget.width;
+    final resolvedPosterHeight = widget.posterHeight ??
+        (w != null ? w * 9 / 16 + widget.railPosterHeightDelta : null);
+
+    final core = GestureDetector(
+      onTapDown: (_) => setState(() => _scale = 0.97),
+      onTapUp: (_) => setState(() => _scale = 1),
+      onTapCancel: () => setState(() => _scale = 1),
+      onTap: widget.onPress,
+      child: AnimatedScale(
+        scale: _scale,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (resolvedPosterHeight != null)
+              SizedBox(
+                height: resolvedPosterHeight,
+                child: _ChannelPoster(ch: ch, locked: widget.locked),
+              )
+            else
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: _ChannelPoster(ch: ch, locked: widget.locked),
+              ),
+            const SizedBox(height: 6),
+            Text(
+              ch.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: rajdhani(11, weight: FontWeight.w700).copyWith(
+                color: BrandPalette.white.withValues(alpha: 0.88),
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (w != null) return SizedBox(width: w, child: core);
+    return core;
+  }
+}
+
+class _ChannelPoster extends StatelessWidget {
+  const _ChannelPoster({required this.ch, required this.locked});
+
   final Channel ch;
   final bool locked;
-  final bool titleOverlay;
-  final bool titleOverlayCompact;
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(14),
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ColoredBox(color: t.surface),
-          SafeNetworkImage(imageUrl: ch.img, fit: BoxFit.cover, placeholderColor: t.card),
+          const ColoredBox(color: BrandPalette.bgMid),
           Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.08),
-                    Colors.black.withValues(alpha: 0.35),
-                  ],
-                  stops: const [0.0, 0.55, 1.0],
-                ),
-              ),
+            child: SafeNetworkImage(
+              imageUrl: ch.img,
+              fit: BoxFit.contain,
+              alignment: Alignment.center,
+              placeholderColor: BrandPalette.bgMid,
             ),
           ),
-          if (titleOverlay)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: ClipRect(
-                child: _ChannelNameOverlay(
-                  name: ch.name,
-                  compact: titleOverlayCompact,
-                ),
-              ),
-            ),
           Positioned(
-            top: 8,
-            left: 8,
-            child: PremiumLiveBadge(compact: titleOverlayCompact),
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            child: const DecoratedBox(decoration: BoxDecoration(gradient: BrandPalette.activeGradient)),
           ),
           Positioned(
             top: 6,
             right: 6,
-            child: _AccessBadge(colors: t, channel: ch, lockedForViewer: locked),
+            child: _AccessBadge(channel: ch, lockedForViewer: locked),
           ),
+          if (locked)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(color: BrandPalette.bgDeep.withValues(alpha: 0.45)),
+                child: const Center(
+                  child: Icon(Ionicons.lock_closed, color: BrandPalette.white, size: 22),
+                ),
+              ),
+            ),
           Positioned.fill(
             child: DecoratedBox(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: BrandPalette.white.withValues(alpha: 0.1)),
               ),
             ),
           ),
@@ -199,215 +221,27 @@ class _ChannelPoster extends StatelessWidget {
   }
 }
 
-/// Bottom gradient scrim + channel title (grid/rail).
-class _ChannelNameOverlay extends StatelessWidget {
-  const _ChannelNameOverlay({required this.name, required this.compact});
-
-  final String name;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final fs = compact ? 10.0 : 12.0;
-    final lines = compact ? 1 : 2;
-    final pad = compact
-        ? const EdgeInsets.fromLTRB(8, 18, 8, 8)
-        : const EdgeInsets.fromLTRB(10, 22, 10, 10);
-
-    return Container(
-      width: double.infinity,
-      padding: pad,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          stops: const [0.0, 0.2, 0.55, 1.0],
-          colors: [
-            Colors.transparent,
-            Colors.black.withValues(alpha: 0.0),
-            Colors.black.withValues(alpha: 0.42),
-            Colors.black.withValues(alpha: 0.78),
-          ],
-        ),
-      ),
-      child: Text(
-        name.toUpperCase(),
-        textAlign: TextAlign.center,
-        maxLines: lines,
-        overflow: TextOverflow.ellipsis,
-        style: orbitron(fs, weight: FontWeight.w800).copyWith(
-          color: Colors.white,
-          height: 1.08,
-          letterSpacing: compact ? 0.45 : 0.55,
-          shadows: [
-            Shadow(color: Colors.black.withValues(alpha: 0.88), blurRadius: 12, offset: const Offset(0, 1)),
-            Shadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 6, offset: const Offset(0, 1)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ChannelCardState extends State<ChannelCard> {
-  double _scale = 1;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.watch<ThemeController>().colors;
-    final ch = widget.channel;
-    final w = widget.width;
-    final rail = w != null;
-    final grid = widget.compactGrid;
-    final titleInsidePoster = grid || rail;
-    final gapPoster = rail ? 6.0 : (grid ? 2.0 : 10.0);
-    final titleSize = rail ? 13.0 : (grid ? 10.0 : 14.0);
-    final titleLines = rail ? 2 : (grid ? 1 : 3);
-    final titleHeight = rail ? 1.12 : (grid ? 1.0 : 1.2);
-    final titleLetter = rail ? 0.5 : (grid ? 0.5 : 0.6);
-    final padH = rail ? 6.0 : 8.0;
-
-    final core = GestureDetector(
-      onTapDown: (_) => setState(() => _scale = 0.96),
-      onTapUp: (_) => setState(() => _scale = 1),
-      onTapCancel: () => setState(() => _scale = 1),
-      onTap: widget.onPress,
-      child: AnimatedScale(
-        scale: _scale,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.5),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-              BoxShadow(
-                color: t.accent.withValues(alpha: 0.06),
-                blurRadius: 24,
-                spreadRadius: -8,
-              ),
-            ],
-          ),
-          child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (grid)
-              LayoutBuilder(
-                builder: (context, c) {
-                  final cw = c.maxWidth;
-                  final posterH = _channelGridPosterHeight(cw);
-                  return AspectRatio(
-                    aspectRatio: cw / posterH,
-                    child: _ChannelPoster(
-                      t: t,
-                      ch: ch,
-                      locked: widget.locked,
-                      titleOverlay: true,
-                      titleOverlayCompact: true,
-                    ),
-                  );
-                },
-              )
-            else if (rail)
-              LayoutBuilder(
-                builder: (context, c) {
-                  final cw = c.maxWidth;
-                  final baseH = cw * 4 / 3;
-                  final targetH = (baseH + widget.railPosterHeightDelta).clamp(72.0, baseH + 24);
-                  return AspectRatio(
-                    aspectRatio: cw / targetH,
-                    child: _ChannelPoster(
-                      t: t,
-                      ch: ch,
-                      locked: widget.locked,
-                      titleOverlay: true,
-                      titleOverlayCompact: false,
-                    ),
-                  );
-                },
-              )
-            else
-              AspectRatio(
-                aspectRatio: 3 / 4,
-                child: _ChannelPoster(
-                  t: t,
-                  ch: ch,
-                  locked: widget.locked,
-                  titleOverlay: rail,
-                  titleOverlayCompact: false,
-                ),
-              ),
-            if (!titleInsidePoster) ...[
-              SizedBox(height: gapPoster),
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: padH),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      ch.name.toUpperCase(),
-                      textAlign: TextAlign.center,
-                      maxLines: titleLines,
-                      overflow: TextOverflow.ellipsis,
-                      style: orbitron(titleSize, weight: FontWeight.w800).copyWith(
-                        color: t.text,
-                        height: titleHeight,
-                        letterSpacing: titleLetter,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-        ),
-      ),
-    );
-
-    if (w != null) {
-      return SizedBox(width: w, child: core);
-    }
-    return core;
-  }
-}
-
-/// FREE, or premium: lock + **imefungwa** (no sub) / **zimefunguliwa** (subscribed).
 class _AccessBadge extends StatelessWidget {
-  const _AccessBadge({
-    required this.colors,
-    required this.channel,
-    required this.lockedForViewer,
-  });
+  const _AccessBadge({required this.channel, required this.lockedForViewer});
 
-  final AppThemeColors colors;
   final Channel channel;
   final bool lockedForViewer;
 
   @override
   Widget build(BuildContext context) {
-    final t = colors;
-    final ch = channel;
-
-    if (ch.free) {
+    if (channel.free) {
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          color: const Color(0xFF27272a),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          color: BrandPalette.bgDeep.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: BrandPalette.accent.withValues(alpha: 0.5)),
         ),
         child: Text(
           'BURE',
-          style: orbitron(7, weight: FontWeight.w900).copyWith(
-            color: t.free,
-            letterSpacing: 0.8,
+          style: orbitron(6.5, weight: FontWeight.w900).copyWith(
+            color: BrandPalette.accent,
+            letterSpacing: 0.6,
           ),
         ),
       );
@@ -415,25 +249,20 @@ class _AccessBadge extends StatelessWidget {
 
     if (lockedForViewer) {
       return Container(
-        constraints: const BoxConstraints(maxWidth: 118),
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.72),
+          color: BrandPalette.bgDeep.withValues(alpha: 0.88),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: t.accent.withValues(alpha: 0.85)),
+          border: Border.all(color: BrandPalette.accentWarm.withValues(alpha: 0.7)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Ionicons.lock_closed, size: 11, color: t.accent),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                'imefungwa',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: rajdhani(9, weight: FontWeight.w700).copyWith(color: Colors.white, height: 1.05),
-              ),
+            const Icon(Ionicons.lock_closed, size: 10, color: BrandPalette.accentWarm),
+            const SizedBox(width: 3),
+            Text(
+              'FUNGA',
+              style: orbitron(6, weight: FontWeight.w800).copyWith(color: BrandPalette.accentWarm),
             ),
           ],
         ),
@@ -441,18 +270,131 @@ class _AccessBadge extends StatelessWidget {
     }
 
     return Container(
-      constraints: const BoxConstraints(maxWidth: 124),
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFF14532d).withValues(alpha: 0.92),
+        color: BrandPalette.accent.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0xFF22c55e).withValues(alpha: 0.45)),
+        border: Border.all(color: BrandPalette.accent.withValues(alpha: 0.55)),
       ),
       child: Text(
-        'zimefunguliwa',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: rajdhani(8, weight: FontWeight.w700).copyWith(color: const Color(0xFFbbf7d0), height: 1.05),
+        'OPEN',
+        style: orbitron(6, weight: FontWeight.w800).copyWith(color: BrandPalette.accent),
+      ),
+    );
+  }
+}
+
+/// Vertical poster card for horizontal "newly added" rails.
+class ChannelPosterCard extends StatefulWidget {
+  const ChannelPosterCard({
+    super.key,
+    required this.channel,
+    required this.onPress,
+    this.locked = false,
+    required this.width,
+  });
+
+  final Channel channel;
+  final VoidCallback onPress;
+  final bool locked;
+  final double width;
+
+  @override
+  State<ChannelPosterCard> createState() => _ChannelPosterCardState();
+}
+
+class _ChannelPosterCardState extends State<ChannelPosterCard> {
+  double _scale = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    final ch = widget.channel;
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _scale = 0.97),
+      onTapUp: (_) => setState(() => _scale = 1),
+      onTapCancel: () => setState(() => _scale = 1),
+      onTap: widget.onPress,
+      child: AnimatedScale(
+        scale: _scale,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        child: SizedBox(
+          width: widget.width,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Stack(
+              children: [
+                AspectRatio(
+                  aspectRatio: 2 / 3,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      const ColoredBox(color: BrandPalette.bgMid),
+                      Positioned.fill(
+                        child: SafeNetworkImage(
+                          imageUrl: ch.img,
+                          fit: BoxFit.contain,
+                          alignment: Alignment.center,
+                          placeholderColor: BrandPalette.bgMid,
+                        ),
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              BrandPalette.bgDeep.withValues(alpha: 0.75),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (widget.locked)
+                        ColoredBox(color: BrandPalette.bgDeep.withValues(alpha: 0.45)),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  right: 8,
+                  child: Row(
+                    children: [
+                      if (!ch.free)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: BrandPalette.accent.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: BrandPalette.accent.withValues(alpha: 0.5)),
+                          ),
+                          child: Text(
+                            '★ PREMIUM',
+                            style: orbitron(6, weight: FontWeight.w800).copyWith(color: BrandPalette.accent),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 10,
+                  child: Text(
+                    ch.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: rajdhani(11, weight: FontWeight.w700).copyWith(
+                      color: BrandPalette.white,
+                      height: 1.15,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -22,16 +22,17 @@ import 'package:supasoka/services/tanzania_phone.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/user_id.dart';
 import 'package:supasoka/data/pay_plan.dart';
+import 'package:supasoka/theme/brand_palette.dart';
 import 'package:supasoka/widgets/audio_guide_card.dart';
 
-const _accentCta = Color(0xFF22C55E);
-const _accentBlue = Color(0xFF2563EB);
+const _accentCta = BrandPalette.accent;
+const _accentBlue = BrandPalette.accent;
 
-const _paySurface = Color(0xFF0C1222);
-const _paySurface2 = Color(0xFF151B2E);
+const _paySurface = BrandPalette.bgMid;
+const _paySurface2 = BrandPalette.bgDeep;
 const _payLine = Color(0x14FFFFFF);
 const _payMuted = Color(0xFF8B9CAF);
-const _scaffold = Color(0xFF02040A);
+const _scaffold = BrandPalette.bgDeep;
 
 /// USSD / wallet confirmation often takes 1–3+ minutes; 60s caused false “Anza upya” while payment was still pending.
 const int _kPaymentWaitSeconds = 300;
@@ -169,8 +170,18 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       final res = await paymentsApi.checkPaymentStatus(pending);
       final st = paymentStatusFromCheckResponse(res);
       if (isPaymentCompleted(st)) {
-        _stopPaymentTimersOnly();
-        await _markPaymentCompleted();
+        final premiumMs = res['premiumUntilMs'];
+        final serverActivated = res['activated'] == true;
+        if (serverActivated && premiumMs is num) {
+          _stopPaymentTimersOnly();
+          await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
+        } else {
+          setState(() {
+            _pollingOrderId = pending;
+            _paymentUiPhase = _PaymentUiPhase.waiting;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
+        }
       } else if (isPaymentTerminalFailure(st)) {
         await prefs.remove('pendingPaymentOrderId');
         if (mounted) {
@@ -300,12 +311,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
             return;
           }
-          // Provider says paid — unlock locally; background recovery will sync server.
-          if (planId != null && planId.isNotEmpty) {
-            _stopPaymentTimersOnly();
-            await _markPaymentCompleted();
-            return;
-          }
+          // Provider says paid but server has not activated yet — keep polling.
         }
         if (isPaymentTerminalFailure(paymentStatus)) {
           await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
@@ -590,12 +596,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
 
     if (res.statusCode == 409) {
-      try {
-        final j = jsonDecode(res.body) as Map<String, dynamic>;
-        return _ConfirmProbeOutcome.terminalFailure(j['paymentStatus']?.toString());
-      } catch (_) {
-        return _ConfirmProbeOutcome.terminalFailure(null);
-      }
+      return _ConfirmProbeOutcome.pending();
     }
     return _ConfirmProbeOutcome.pending();
   }
@@ -623,12 +624,26 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
       int? serverUntilMs = serverPremiumUntilMs;
       if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
-        serverUntilMs = await PremiumRecovery.confirmPremiumOnBackend(
-          orderId: orderId,
-          publicId: publicId,
-          planId: planId,
-          phone: phone ?? '',
-        );
+        for (var attempt = 0; attempt < 8 && serverUntilMs == null; attempt++) {
+          serverUntilMs = await PremiumRecovery.confirmPremiumOnBackend(
+            orderId: orderId,
+            publicId: publicId,
+            planId: planId,
+            phone: phone ?? '',
+          );
+          if (serverUntilMs == null) {
+            final rec = await PremiumRecovery.fetchUserPremiumRecord(publicId);
+            if (rec.premiumUntilMs != null) {
+              final end = DateTime.fromMillisecondsSinceEpoch(rec.premiumUntilMs!);
+              if (end.isAfter(DateTime.now())) {
+                serverUntilMs = rec.premiumUntilMs;
+              }
+            }
+          }
+          if (serverUntilMs == null && attempt < 7) {
+            await Future<void>.delayed(Duration(milliseconds: 700 + (attempt * 500)));
+          }
+        }
       }
 
       if (serverUntilMs == null && orderId.isNotEmpty) {
@@ -646,24 +661,45 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       }
       await SubscriptionStore.syncPremiumFromBackend();
       await SubscriptionStore.refreshNotifierFromPrefs();
-      if (serverUntilMs != null) {
+      final isActive = SubscriptionStore.isPremiumActiveLocal();
+
+      if (isActive) {
         await _clearPendingOrderPrefs();
       }
 
       if (mounted) {
-        // Clear the waiting modal completely and show success
-        setState(() {
-          _pollingOrderId = null;
-          _paymentUiPhase = _PaymentUiPhase.none;
-          _notFoundStreak = 0;
-          _sessionEndDetail = null;
-          _pendingBundleLabel = null;
-          _waitingSeconds = 0;
-        });
+        if (isActive) {
+          setState(() {
+            _pollingOrderId = null;
+            _paymentUiPhase = _PaymentUiPhase.none;
+            _notFoundStreak = 0;
+            _sessionEndDetail = null;
+            _pendingBundleLabel = null;
+            _waitingSeconds = 0;
+          });
 
-        _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        await widget.onPaymentSuccess?.call();
+          _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          await widget.onPaymentSuccess?.call();
+        } else if (orderId.isNotEmpty) {
+          setState(() {
+            _pollingOrderId = orderId;
+            _paymentUiPhase = _PaymentUiPhase.waiting;
+            _waitingSeconds = _kPaymentWaitSeconds;
+          });
+          _showStatus(
+            'Inathibitisha malipo',
+            'Malipo yamepokelewa. Tunafungua akaunti yako — subiri kidogo.',
+            _PayDialogTone.info,
+          );
+          WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
+        } else {
+          _showStatus(
+            'Malipo yanasubiri uthibitisho',
+            'Malipo yamepokelewa lakini bado hayajathibitishwa kwenye seva. Jaribu tena baada ya dakika chache.',
+            _PayDialogTone.info,
+          );
+        }
       }
     } finally {
       _paymentCompletionInProgress = false;

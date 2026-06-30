@@ -36,6 +36,23 @@ export function createApp(): express.Application {
       },
     }),
   );
+  app.use(
+    '/api/v1/public/sonicpesa/webhook',
+    express.raw({ type: () => true, limit: '1mb' }),
+    (req, _res, next) => {
+      const buf = req.body;
+      if (Buffer.isBuffer(buf)) {
+        const raw = buf.toString('utf8');
+        (req as express.Request & { rawBody?: string }).rawBody = raw;
+        try {
+          req.body = raw.length ? JSON.parse(raw) : {};
+        } catch {
+          req.body = {};
+        }
+      }
+      next();
+    },
+  );
   app.use(express.json({ limit: '5mb' }));
   app.use(
     pinoHttp({
