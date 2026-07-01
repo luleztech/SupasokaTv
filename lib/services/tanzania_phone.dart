@@ -55,6 +55,13 @@ class TanzaniaPhone {
 
   static bool isValid(String raw) => normalize(raw) != null;
 
+  /// Vodacom M-Pesa prefixes: 074, 075, 076, 079.
+  static bool isVodacomMpesa(String raw) {
+    final local = normalize(raw);
+    if (local == null) return false;
+    return vodacomPrefixes.any((pre) => local.startsWith(pre));
+  }
+
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
       'Nambari zote za Tanzania zinakubalika: 061–063, 065, 068, 071, 072, 074–076, 077, 078, 079 (Vodacom: 074, 075, 076, 079).';

@@ -80,6 +80,7 @@ bool isPaymentTerminalFailure(Object? status) {
       s == 'ERROR' ||
       s == 'CANCELLED' ||
       s == 'CANCELED' ||
+      s == 'USERCANCELLED' ||
       s == 'REJECTED' ||
       s == 'DECLINED' ||
       s == 'EXPIRED';

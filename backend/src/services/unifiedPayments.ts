@@ -61,6 +61,7 @@ function isPaymentTerminalFailure(ps: string): boolean {
   const s = String(ps ?? '').trim().toUpperCase();
   return (
     s === 'FAILED' || s === 'ERROR' || s === 'CANCELLED' || s === 'CANCELED' ||
+    s === 'USERCANCELLED' ||
     s === 'REJECTED' || s === 'DECLINED' || s === 'EXPIRED'
   );
 }

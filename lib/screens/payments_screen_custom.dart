@@ -861,6 +861,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         phone: clean,
         email: '$_userId@supasoka.app',
         name: _userId!,
+        onAttempt: (attempt, maxAttempts) {
+          if (!mounted || attempt <= 1) return;
+          setState(() => _submitStatus = 'Inajaribu tena ($attempt/$maxAttempts)…');
+        },
       );
       final orderId = (result['orderId']?.toString() ?? '').trim();
       final serverMsg = (result['message']?.toString() ?? '').trim();

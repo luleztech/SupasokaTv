@@ -12,17 +12,16 @@ import {
   formatPhoneToIntl255,
   isHalotelLocalPhone,
   isVodacomMpesaLocalPhone,
-  phoneCandidatesForSonicPesaApi,
-  sonicChannelHintsForNetwork,
   toLocal0Digits,
 } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
-const SONIC_HTTP_TIMEOUT_MS = 22_000;
-const SONIC_HTTP_RETRY_TIMEOUT_MS = 12_000;
-/** Cap gateway round-trips; Vodacom needs a few more channel variants (074–076, 079). */
-const MAX_SONIC_CREATE_ATTEMPTS = 12;
-const SONIC_RETRY_DELAY_MS = 250;
+/** Docs: Push USSD via create_order — gateway auto-detects wallet from 255… MSISDN. */
+const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
+/** Docs: create_order_simple long-polls up to ~45s — client timeout ≥60s. */
+const SONIC_CREATE_SIMPLE_TIMEOUT_MS = 62_000;
+const SONIC_RETRY_DELAY_MS = 400;
+const SONIC_USSD_BUSY_DELAY_MS = 2_500;
 
 const sonicRetryDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -62,7 +61,7 @@ export function ensureSonicPesaConfigured(): void {
 async function gatewayFetchJson(
   url: string,
   init: RequestInit,
-  timeoutMs = SONIC_HTTP_TIMEOUT_MS,
+  timeoutMs = SONIC_CREATE_ORDER_TIMEOUT_MS,
 ): Promise<{ response: Response; data: Record<string, unknown> }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -119,6 +118,14 @@ export function extractSonicResponseCode(data: Record<string, unknown>): string 
   ).trim();
 }
 
+export function isSonicPushUssdSentMessage(message: string): boolean {
+  const m = String(message ?? '').toLowerCase();
+  return (
+    /push ussd sent|ussd sent|sent to your phone|payment order created successfully/i.test(m) ||
+    /you will receive a prompt/i.test(m)
+  );
+}
+
 export function isSonicInitiateSuccess(
   sonicData: Record<string, unknown> | null | undefined,
   httpResponse: Response,
@@ -126,23 +133,22 @@ export function isSonicInitiateSuccess(
   if (!sonicData || typeof sonicData !== 'object') return false;
   const responseMessage = extractSonicResponseMessage(sonicData);
   const responseCode = extractSonicResponseCode(sonicData);
-  if (isSonicStkSendFailure(responseMessage, responseCode)) return false;
+  const orderId = extractSonicOrderId(sonicData);
+
+  if (orderId && isSonicPushUssdSentMessage(responseMessage)) return true;
+
+  if (isSonicStkSendFailure(responseMessage, responseCode) && !isSonicPushUssdSentMessage(responseMessage)) {
+    return false;
+  }
 
   const st = String(sonicData.status ?? '')
     .toLowerCase()
     .trim();
   if (st === 'error' || st === 'failed') return false;
-  if (st === 'success') return true;
-  if (sonicData.success === true) return true;
-  const nest = sonicData.data;
-  const row =
-    nest && typeof nest === 'object' && !Array.isArray(nest)
-      ? (nest as Record<string, unknown>)
-      : Array.isArray(nest) && nest.length > 0 && typeof nest[0] === 'object'
-        ? (nest[0] as Record<string, unknown>)
-        : sonicData;
-  const orderId = row.order_id ?? row.orderId;
-  if (orderId && httpResponse.ok) return true;
+  if (st === 'success' && orderId) return true;
+  if (sonicData.success === true && orderId) return true;
+  if (orderId && httpResponse.ok && isSonicPushUssdSentMessage(responseMessage)) return true;
+  if (orderId && httpResponse.ok && st !== 'error' && st !== 'failed') return true;
   return false;
 }
 
@@ -214,102 +220,88 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
   return false;
 }
 
-/** Local 0… for DB; Sonic API often wants 255…. */
+/** Docs-compliant MSISDN for buyer_phone: always 255XXXXXXXXX first, national 0… as fallback. */
+export function sonicBuyerPhonesForApi(localPhone: string): string[] {
+  const local0 = toLocal0Digits(localPhone);
+  const intl255 = formatPhoneToIntl255(local0);
+  if (env.sonicSendLocalPhone) return [local0];
+  const out = [intl255];
+  if (local0.startsWith('0') && local0 !== intl255) out.push(local0);
+  return [...new Set(out.filter(Boolean))];
+}
+
+/** Local 0… for DB. */
 export function formatPhoneForSonicPesaApi(local0: string): string {
-  if (env.sonicSendLocalPhone) return local0;
+  if (env.sonicSendLocalPhone) return toLocal0Digits(local0);
   return formatPhoneToIntl255(local0);
 }
 
 export function sonicPhoneCandidatesForApi(local0: string): string[] {
-  if (env.sonicSendLocalPhone) return [local0];
-  return phoneCandidatesForSonicPesaApi(local0);
+  return sonicBuyerPhonesForApi(local0);
 }
 
-type SonicCreateAttempt = {
+type SonicCreateStep = {
+  endpoint: 'payment/create_order' | 'payment/create_order_simple';
   buyer_phone: string;
-  channel?: string;
+  timeoutMs: number;
 };
 
-/** Best-first phone/channel combos — network-aware ordering for reliable first-tap STK. */
-function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
-  const local0fmt = toLocal0Digits(localPhone);
-  const network = detectTzMobileNetwork(local0fmt);
-  const phones = sonicPhoneCandidatesForApi(localPhone);
-  const channelLimit =
-    network === 'vodacom' ||
-    network === 'mo_mobile' ||
-    network === 'halotel' ||
-    network === 'tigo_yas'
-      ? 3
-      : 2;
-  const channels = sonicChannelHintsForNetwork(localPhone).slice(0, channelLimit);
-  const intl255 = phones[0] ?? '';
-  const local0 = phones.length > 1 ? phones[1]! : '';
-  const out: SonicCreateAttempt[] = [];
-  const seen = new Set<string>();
-  const add = (buyer_phone: string, channel?: string) => {
-    if (!buyer_phone) return;
-    const key = `${buyer_phone}\0${channel ?? ''}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(channel ? { buyer_phone, channel } : { buyer_phone });
-  };
-
-  const channelFirst =
-    network === 'vodacom' ||
-    network === 'mo_mobile' ||
-    network === 'halotel' ||
-    network === 'airtel' ||
-    network === 'tigo_yas';
-
-  if (channelFirst) {
-    for (const channel of channels) {
-      if (intl255) add(intl255, channel);
-    }
+/**
+ * SonicPesa docs: POST create_order with buyer_email, buyer_name, buyer_phone (255…),
+ * amount, currency — no channel; gateway auto-sends Push USSD. Fallback: create_order_simple.
+ */
+function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
+  const phones = sonicBuyerPhonesForApi(localPhone);
+  const primary = phones[0] ?? formatPhoneToIntl255(localPhone);
+  const steps: SonicCreateStep[] = [
+    {
+      endpoint: 'payment/create_order',
+      buyer_phone: primary,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    },
+    {
+      endpoint: 'payment/create_order_simple',
+      buyer_phone: primary,
+      timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
+    },
+  ];
+  const fallback = phones[1];
+  if (fallback && fallback !== primary) {
+    steps.push({
+      endpoint: 'payment/create_order',
+      buyer_phone: fallback,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    });
   }
-
-  if (intl255) add(intl255);
-
-  if (!channelFirst) {
-    for (const channel of channels) {
-      if (intl255) add(intl255, channel);
-    }
-  }
-
-  if (local0 && local0 !== intl255) {
-    if (channelFirst) {
-      for (const channel of channels) add(local0, channel);
-    }
-    add(local0);
-    if (!channelFirst) {
-      for (const channel of channels) add(local0, channel);
-    }
-  }
-
-  return out;
+  return steps;
 }
 
-const SONIC_CREATE_ENDPOINTS = ['payment/create_order', 'payment/create_order_simple'] as const;
+function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
+  const code = String(responseCode ?? '').trim();
+  const msg = String(responseMessage ?? '').toLowerCase();
+  return code === '103' || /ongoing ussd|ussd session|session busy/i.test(msg);
+}
 
 async function postSonicCreateOrder(
-  endpoint: string,
-  attempt: SonicCreateAttempt,
+  step: SonicCreateStep,
   args: { buyerEmail: string; buyerName: string; amountTzs: number },
-  timeoutMs = SONIC_HTTP_TIMEOUT_MS,
 ): Promise<{ response: Response; data: Record<string, unknown> }> {
   const payload: Record<string, unknown> = {
     buyer_email: args.buyerEmail,
     buyer_name: args.buyerName,
-    buyer_phone: attempt.buyer_phone,
+    buyer_phone: step.buyer_phone,
     amount: args.amountTzs,
     currency: 'TZS',
   };
-  if (attempt.channel) payload.channel = attempt.channel;
-  return gatewayFetchJson(`${SONIC_API_BASE}/${endpoint}`, {
-    method: 'POST',
-    headers: getSonicPesaRequestHeaders(),
-    body: JSON.stringify(payload),
-  }, timeoutMs);
+  return gatewayFetchJson(
+    `${SONIC_API_BASE}/${step.endpoint}`,
+    {
+      method: 'POST',
+      headers: getSonicPesaRequestHeaders(),
+      body: JSON.stringify(payload),
+    },
+    step.timeoutMs,
+  );
 }
 
 
@@ -374,64 +366,67 @@ export async function tryCreateSonicOrder(args: {
   amountTzs: number;
 }): Promise<SonicCreateResult> {
   ensureSonicPesaConfigured();
-  const attempts = buildSonicCreateAttempts(args.localPhone);
+  const steps = buildSonicCreateSteps(args.localPhone);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
   };
 
-  let tried = 0;
-  outer:
-  for (const endpoint of SONIC_CREATE_ENDPOINTS) {
-    for (const attempt of attempts) {
-      if (tried >= MAX_SONIC_CREATE_ATTEMPTS) break outer;
-      tried++;
-      const timeoutMs = tried === 1 ? SONIC_HTTP_TIMEOUT_MS : SONIC_HTTP_RETRY_TIMEOUT_MS;
-      try {
-        if (tried > 1) await sonicRetryDelay(SONIC_RETRY_DELAY_MS);
-        last = await postSonicCreateOrder(endpoint, attempt, args, timeoutMs);
-        const responseMessage = extractSonicResponseMessage(last.data);
-        const responseCode = extractSonicResponseCode(last.data);
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    try {
+      if (i > 0) await sonicRetryDelay(SONIC_RETRY_DELAY_MS);
+      last = await postSonicCreateOrder(step, args);
+      const responseMessage = extractSonicResponseMessage(last.data);
+      const responseCode = extractSonicResponseCode(last.data);
 
-        if (isSonicInitiateSuccess(last.data, last.response)) {
-          const orderId = extractSonicOrderId(last.data);
-          if (orderId && !isSonicStkSendFailure(responseMessage, responseCode)) {
-            return {
-              ok: true,
-              orderId,
-              message: String(
-                last.data.message ?? 'Request in progress. You will receive a prompt on your phone.',
-              ),
-              raw: last.data,
-            };
-          }
-          if (!isSonicCreateRetryable(responseMessage, responseCode)) {
-            continue;
-          }
-          continue;
-        }
+      if (isSonicUssdBusy(responseMessage, responseCode)) {
+        await sonicRetryDelay(SONIC_USSD_BUSY_DELAY_MS);
+        last = await postSonicCreateOrder(step, args);
+      }
 
-        const errorMessage = responseMessage || 'Failed to start SonicPesa payment';
-        const errorCode = responseCode;
-        if (isPaymentRateLimitError(errorMessage, errorCode)) {
+      const retryMessage = extractSonicResponseMessage(last.data);
+      const retryCode = extractSonicResponseCode(last.data);
+
+      if (isSonicInitiateSuccess(last.data, last.response)) {
+        const orderId = extractSonicOrderId(last.data);
+        if (
+          orderId &&
+          (isSonicPushUssdSentMessage(retryMessage) ||
+            !isSonicStkSendFailure(retryMessage, retryCode))
+        ) {
           return {
-            ok: false,
-            orderId: '',
-            message: paymentRateLimitUserMessage(),
+            ok: true,
+            orderId,
+            message: String(
+              last.data.message ??
+                'Payment order created successfully! Push USSD sent to your phone.',
+            ),
             raw: last.data,
-            errorMessage: paymentRateLimitUserMessage(),
-            errorCode,
           };
         }
-        if (!isSonicCreateRetryable(errorMessage, errorCode)) {
-          continue;
-        }
-      } catch (e) {
-        last = {
-          response: new Response(null, { status: 502 }),
-          data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
+        if (!isSonicCreateRetryable(retryMessage, retryCode)) continue;
+        continue;
+      }
+
+      const errorMessage = retryMessage || 'Failed to start SonicPesa payment';
+      const errorCode = retryCode;
+      if (isPaymentRateLimitError(errorMessage, errorCode)) {
+        return {
+          ok: false,
+          orderId: '',
+          message: paymentRateLimitUserMessage(),
+          raw: last.data,
+          errorMessage: paymentRateLimitUserMessage(),
+          errorCode,
         };
       }
+      if (!isSonicCreateRetryable(errorMessage, errorCode)) continue;
+    } catch (e) {
+      last = {
+        response: new Response(null, { status: 502 }),
+        data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
+      };
     }
   }
 
@@ -452,7 +447,7 @@ export async function tryCreateSonicOrder(args: {
     orderId: '',
     message: errorMessage,
     raw: last.data,
-    errorMessage,
+    errorMessage: mapSonicInitiateUserError(args.localPhone, errorMessage, errorCode),
     errorCode,
   };
 }

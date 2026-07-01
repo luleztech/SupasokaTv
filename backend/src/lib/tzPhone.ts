@@ -134,9 +134,8 @@ export function formatPhoneToIntl255(local0: string): string {
 }
 
 /**
- * SonicPesa create_order phone formats (order matters by network).
- * Sonic docs require `255XXXXXXXXX` for Airtel/Tigo/Vodacom; Halopesa (061–063) may also
- * accept national `0…` — try both, with `255…` first when unsure.
+ * SonicPesa buyer_phone per official API docs — international 255XXXXXXXXX first.
+ * @see https://api.sonicpesa.com/api/v1/payment/create_order
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
@@ -155,9 +154,9 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
     case 'vodacom':
     case 'mo_mobile':
       return [
-        'VODACOMMPESA',
         'MPESA',
         'M-PESA',
+        'VODACOMMPESA',
         'VODACOM MPESA',
         'VODACOM',
         'MPESATZ',

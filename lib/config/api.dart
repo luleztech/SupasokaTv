@@ -30,18 +30,27 @@ class _SettingsApi {
 }
 
 class _PaymentsApi {
-  static const _startPaymentTimeout = Duration(seconds: 75);
+  static const _startPaymentTimeout = Duration(seconds: 95);
+
+  static const _maxStartRounds = 3;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
-    if (_isTransientStartPaymentError(e)) return true;
-    if (round > 0) return false;
-    final lower = e.toString().toLowerCase();
+    if (_isTransientStartPaymentError(e)) return round < _maxStartRounds;
+    if (round >= _maxStartRounds) return false;
+    return _isWalletStartFailure(e.toString().toLowerCase());
+  }
+
+  static bool _isWalletStartFailure(String lower) {
     return lower.contains('hayajatumika') ||
         lower.contains('hayajaweza kutumika') ||
         lower.contains('hayajaweza kutuma') ||
         lower.contains('hatukuweza kutuma ombi') ||
         lower.contains('haikupokea ombi') ||
-        lower.contains('halijakubaliwa');
+        lower.contains('halijakubaliwa') ||
+        lower.contains('m-pesa') ||
+        lower.contains('vodacom') ||
+        lower.contains('malipo hayajatumika') ||
+        lower.contains('074, 075, 076 au 079');
   }
 
   static bool _isTransientStartPaymentError(Object e) {
@@ -117,6 +126,7 @@ class _PaymentsApi {
     required String phone,
     required String email,
     required String name,
+    void Function(int attempt, int maxAttempts)? onAttempt,
   }) async {
     final normalizedPhone = phone.trim();
     await Future.wait<void>([
@@ -147,7 +157,8 @@ class _PaymentsApi {
     };
 
     Object? lastErr;
-    for (var round = 0; round < 3; round++) {
+    for (var round = 0; round < _maxStartRounds; round++) {
+      onAttempt?.call(round + 1, _maxStartRounds);
       try {
         final out = await _postStartPayment(uri: uri, headers: headers, bodyJson: bodyJson);
         final provider = (out['provider'] ?? 'sonicpesa').toString().toLowerCase();
@@ -159,8 +170,8 @@ class _PaymentsApi {
         return out;
       } catch (e) {
         lastErr = e;
-        if (round < 2 && _isRetryableStartPaymentError(e, round)) {
-          await Future<void>.delayed(Duration(milliseconds: 700 * (round + 1)));
+        if (round < _maxStartRounds - 1 && _isRetryableStartPaymentError(e, round)) {
+          await Future<void>.delayed(Duration(milliseconds: 800 * (round + 1)));
           continue;
         }
         rethrow;
