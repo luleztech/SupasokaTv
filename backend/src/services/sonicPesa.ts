@@ -344,8 +344,12 @@ export function mapSonicInitiateUserError(
     }
     return 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi na mtandao wa pesa unafanya kazi, kisha jaribu tena.';
   }
-  if (/invalid phone|invalid msisdn|wrong number|nambari/i.test(`${msg} ${code}`)) {
-    return 'Nambari ya simu si sahihi kwa malipo ya simu. Tumia nambari 10 za Tanzania (mfano 0712345678).';
+  if (
+    /invalid phone|invalid msisdn|wrong number|invalid.*msisdn|nambari.*si sahihi|si sahihi.*nambari/i.test(
+      `${msg} ${code}`,
+    )
+  ) {
+    return 'Nambari ya simu si sahihi. Andika tarakimu 9 baada ya 0 (mfano 0 kisha 712345678).';
   }
   return msg || 'Malipo hayajatumika. Jaribu tena baada ya muda mfupi.';
 }

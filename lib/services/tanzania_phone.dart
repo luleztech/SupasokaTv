@@ -23,6 +23,24 @@ class TanzaniaPhone {
 
   static bool _isValidLocal(String local0) => _mobileLocalRe.hasMatch(local0);
 
+  /// Nine digits after the national `0` (e.g. `712345678` from `0712345678`).
+  static String? localBodyDigits(String raw) {
+    final local = normalize(raw);
+    if (local == null || local.length != 10) return null;
+    return local.substring(1);
+  }
+
+  /// Validates 9-digit body (without leading `0`) or full 10-digit local input.
+  static bool isValidLocalBody(String body) {
+    final digits = body.replaceAll(RegExp(r'\D'), '');
+    if (digits.length == 9) return isValid('0$digits');
+    if (digits.length == 10 && digits.startsWith('0')) return isValid(digits);
+    return false;
+  }
+
+  /// Build national `0XXXXXXXXX` from fixed `0` prefix + 9-digit body field.
+  static String? fromLocalBody(String body) => normalize('0${body.replaceAll(RegExp(r'\D'), '')}');
+
   /// Returns normalized `0XXXXXXXXX` or `null` if not a valid TZ mobile.
   static String? normalize(String raw) {
     var s = raw.trim().replaceAll(RegExp(r'\s'), '');
@@ -30,7 +48,6 @@ class TanzaniaPhone {
 
     final upper = s.toUpperCase();
     if (upper.startsWith('+') && !upper.startsWith('+255')) return null;
-    if (upper.startsWith('00') && !upper.startsWith('00255')) return null;
 
     if (upper.startsWith('+255')) {
       s = '0${s.substring(4)}';
@@ -43,6 +60,15 @@ class TanzaniaPhone {
     }
 
     s = s.replaceAll(RegExp(r'\D'), '');
+    // Typo `007…` → `07…` (some keyboards duplicate the leading zero).
+    while (s.startsWith('00') && s.length > 10 && RegExp(r'^00[67]').hasMatch(s)) {
+      s = '0${s.substring(2)}';
+    }
+    if (s.startsWith('00') && !s.startsWith('00255')) {
+      if (!RegExp(r'^00[67]').hasMatch(s)) return null;
+      s = '0${s.substring(2)}';
+    }
+
     if (s.length == 9 && RegExp(r'^[1-9]').hasMatch(s)) {
       s = '0$s';
     }

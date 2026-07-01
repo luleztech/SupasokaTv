@@ -53,7 +53,7 @@ export function isRecoverablePaymentCreateError(message: string, code: string): 
   if (isMobileMoneyStkSendFailure(message, code)) return true;
   const combined = `${message} ${code}`.toLowerCase();
   return (
-    /invalid phone|invalid msisdn|wrong number|nambari|not registered|subscriber|wallet|provider|network|format|unsupported|unknown operator/i.test(
+    /invalid phone|invalid msisdn|wrong number|nambari si sahihi|not registered|subscriber|wallet|provider|network|format|unsupported|unknown operator/i.test(
       combined,
     ) ||
     /hayajatumika|malipo hayajatumika|hayajaweza kutumika|not sent|could not send|push failed|failed to send/i.test(

@@ -85,13 +85,6 @@ export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
         'Malipo yanatumwa kwa nambari za simu za Tanzania pekee. Tumia muundo wa ndani unaoanza na 0 (mfano 0712345678).',
     };
   }
-  if (s.startsWith('00') && !s.toUpperCase().startsWith('00255')) {
-    return {
-      error:
-        'Malipo yanatumwa kwa nambari za simu za Tanzania pekee. Tumia muundo wa ndani unaoanza na 0 (mfano 0712345678).',
-    };
-  }
-
   if (s.toUpperCase().startsWith('+255')) {
     s = `0${s.slice(4)}`;
   } else if (s.toUpperCase().startsWith('00255')) {
@@ -103,8 +96,27 @@ export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
 
   s = s.replace(/\D/g, '');
 
+  // Typo `007…` → `07…`; reject foreign `00…` country codes (not `00255`).
+  while (s.startsWith('00') && s.length > 10 && /^00[67]/.test(s)) {
+    s = `0${s.slice(2)}`;
+  }
+  if (s.startsWith('00') && !s.startsWith('00255')) {
+    if (/^00[67]/.test(s)) {
+      s = `0${s.slice(2)}`;
+    } else {
+      return {
+        error:
+          'Malipo yanatumwa kwa nambari za simu za Tanzania pekee. Tumia muundo wa ndani unaoanza na 0 (mfano 0712345678).',
+      };
+    }
+  }
+
   if (/^[1-9]\d{8}$/.test(s)) {
     s = `0${s}`;
+  }
+
+  if (s.length > 10) {
+    s = s.slice(0, 10);
   }
 
   if (!/^0[1-9]\d{8}$/.test(s)) {

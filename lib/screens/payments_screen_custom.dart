@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -143,9 +144,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return out;
   }
 
-  bool _phoneValid(String raw) => TanzaniaPhone.isValid(raw);
+  bool _phoneValid(String raw) => TanzaniaPhone.isValidLocalBody(raw);
 
-  String get _cleanPhone => TanzaniaPhone.normalize(_phoneCtrl.text) ?? '';
+  String get _cleanPhone => TanzaniaPhone.fromLocalBody(_phoneCtrl.text) ?? '';
 
   String get _paymentWaitWindowLabel {
     if (_kPaymentWaitSeconds >= 60 && _kPaymentWaitSeconds % 60 == 0) {
@@ -172,6 +173,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (uid != null && uid.isNotEmpty) {
       setState(() => _userId = uid);
       unawaited(UserIdentity.registerWithBackend());
+    }
+
+    final savedPhone = await UserIdentity.getSavedPhoneNumber();
+    final savedBody = savedPhone != null ? TanzaniaPhone.localBodyDigits(savedPhone) : null;
+    if (savedBody != null && savedBody.length == 9 && mounted) {
+      _phoneCtrl.text = savedBody;
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -812,7 +819,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
       _showStatus(
         'Nambari ya simu',
-        'Hakikisha umeandika nambari 10 za Tanzania (mfano 0701234567 au 0712345678). ${TanzaniaPhone.networksHint()}',
+        'Hakikisha umeandika tarakimu 9 baada ya 0 (mfano 0 kisha 712345678 au 791234567). ${TanzaniaPhone.networksHint()}',
         _PayDialogTone.error,
       );
       return;
@@ -968,7 +975,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
                         const SizedBox(height: 6),
                         Text(
-                          'Weka tarakimu 10 zote (anza na 0). Hatua inayofuata itaonekana ukimaliza namba yote.',
+                          'Andika tarakimu 9 za nambari yako baada ya 0 (usitumie 255). Mfano: 0 + 712345678.',
                           style: const TextStyle(
                             fontSize: 13.5,
                             height: 1.45,
@@ -990,11 +997,40 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                           ),
                           child: Row(
                             children: [
+                              Padding(
+                                padding: const EdgeInsets.only(left: 16),
+                                child: Icon(
+                                  Icons.phone_iphone_rounded,
+                                  color: _phoneOk ? _accentCta : _payMuted,
+                                  size: 22,
+                                ),
+                              ),
+                              Container(
+                                margin: const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: _payLine),
+                                ),
+                                child: const Text(
+                                  '0',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ),
                               Expanded(
                                 child: TextField(
                                   controller: _phoneCtrl,
-                                  keyboardType: TextInputType.phone,
-                                  maxLength: 10,
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                    LengthLimitingTextInputFormatter(9),
+                                  ],
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 18,
@@ -1003,21 +1039,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                   ),
                                   decoration: InputDecoration(
                                     border: InputBorder.none,
-                                    hintText: '07xxxxxxxx',
+                                    hintText: '712345678',
                                     hintStyle: TextStyle(
                                       color: _payMuted.withValues(alpha: 0.65),
                                       fontWeight: FontWeight.w500,
                                     ),
                                     counterText: '',
-                                    contentPadding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
-                                    prefixIcon: Padding(
-                                      padding: const EdgeInsets.only(left: 4),
-                                      child: Icon(
-                                        Icons.phone_iphone_rounded,
-                                        color: _phoneOk ? _accentCta : _payMuted,
-                                        size: 22,
-                                      ),
-                                    ),
+                                    contentPadding: const EdgeInsets.fromLTRB(12, 20, 12, 20),
                                   ),
                                   onChanged: (_) {
                                     setState(() {
