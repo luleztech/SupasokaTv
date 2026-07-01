@@ -139,24 +139,30 @@ export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-  // Sonic docs: buyer_phone is `255XXXXXXXXX` for all TZ mobile money wallets.
+  // SonicPesa docs: 255XXXXXXXXX first; national 0… as fallback.
   const ordered = [intl255, local0fmt];
 
   return [...new Set(ordered.filter((p) => p.length > 0))];
 }
 
-/** SonicPesa `channel` hints when auto-routing fails (webhook samples: TIGOPESATZ, AIRTELMONEY). */
+/** Preferred SonicPesa `channel` values per operator (from gateway webhooks/docs). */
 export function sonicChannelHintsForNetwork(local0: string): string[] {
   const network = detectTzMobileNetwork(toLocal0Digits(local0));
   switch (network) {
     case 'vodacom':
-      return ['MPESA', 'M-PESA', 'VODACOM MPESA', 'VODACOM'];
+      return ['MPESA', 'M-PESA', 'VODACOM MPESA', 'VODACOM', 'VODACOMMPESA'];
     case 'tigo_yas':
-      return ['TIGOPESATZ', 'TIGO PESA', 'TIGOPESA', 'MIXX', 'YAS', 'MIXX BY YAS'];
+      return ['TIGOPESATZ', 'TIGOPESA', 'TIGO PESA', 'MIXX BY YAS', 'MIXX', 'YAS', 'MIC'];
     case 'airtel':
-      return ['AIRTELMONEY', 'AIRTEL MONEY', 'AIRTEL'];
+      return ['AIRTELMONEY', 'AIRTEL MONEY', 'AIRTEL', 'AIRTELMONEYTZ'];
     case 'halotel':
-      return ['HALOPESATZ', 'HALOPESA', 'HALO PESA', 'HALOTEL'];
+      return ['HALOPESATZ', 'HALOPESA', 'HALO PESA', 'HALOTEL', 'HALOPESA TZ'];
+    case 'cootel':
+      return ['COOTEL', 'COO TEL'];
+    case 'smile':
+      return ['SMILE', 'SMILE MONEY'];
+    case 'ttcl':
+      return ['TTCL', 'TTCL PESA'];
     default:
       return [];
   }

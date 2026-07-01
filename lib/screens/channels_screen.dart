@@ -11,7 +11,6 @@ import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/widgets/app_header.dart';
 import 'package:supasoka/widgets/channel_card.dart';
 import 'package:supasoka/widgets/premium_ui.dart';
-import 'package:supasoka/widgets/pro_shimmer.dart';
 
 class ChannelsScreen extends StatefulWidget {
   const ChannelsScreen({super.key});
@@ -93,7 +92,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     const hPad = 12.0;
     const gap = 8.0;
     /// Grid cell stays full [cellW]; card is inset so it visually feels less “huge”.
-    const channelCardHorizontalInset = 4.0;
+    const channelCardHorizontalInset = 0.0;
     // Keep tile height in sync with `ChannelCard(compactGrid: true)` to avoid RenderFlex overflow
     // stripes (yellow/black) on web/desktop.
     const channelGridHeightTrim = 0.0;
@@ -224,12 +223,15 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                 sliver: SliverGrid(
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: crossAxis,
-                    mainAxisSpacing: 6,
-                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
                     childAspectRatio: cellW / tileH,
                   ),
                   delegate: SliverChildBuilderDelegate(
-                    (context, i) => const ShimmerBox(radius: 16),
+                    (context, i) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: channelCardHorizontalInset),
+                      child: ChannelCardSkeleton(seed: i + 1),
+                    ),
                     childCount: 8,
                   ),
                 ),
@@ -254,8 +256,8 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                 sliver: SliverGrid(
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: crossAxis,
-                    mainAxisSpacing: 6,
-                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
                     childAspectRatio: cellW / tileH,
                   ),
                   delegate: SliverChildBuilderDelegate(

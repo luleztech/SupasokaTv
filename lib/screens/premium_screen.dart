@@ -165,7 +165,7 @@ class _PremiumScreenState extends State<PremiumScreen> with SingleTickerProvider
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('📱 Phone Number (M-PESA)', style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2, letterSpacing: 1)),
+                          Text('📱 Nambari ya simu', style: rajdhani(12, weight: FontWeight.w600).copyWith(color: t.text2, letterSpacing: 1)),
                           const SizedBox(height: 8),
                           TextField(
                             spellCheckConfiguration: SpellCheckConfiguration.disabled(),

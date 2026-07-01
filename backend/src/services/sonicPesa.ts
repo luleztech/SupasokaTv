@@ -16,7 +16,13 @@ import {
 } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
-const SONIC_HTTP_TIMEOUT_MS = 28_000;
+const SONIC_HTTP_TIMEOUT_MS = 22_000;
+const SONIC_HTTP_RETRY_TIMEOUT_MS = 12_000;
+/** Cap gateway round-trips so the mobile client does not time out before we finish. */
+const MAX_SONIC_CREATE_ATTEMPTS = 8;
+const SONIC_RETRY_DELAY_MS = 250;
+
+const sonicRetryDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const SONIC_PAID_STATUSES = new Set([
   'SUCCESS',
@@ -73,14 +79,57 @@ async function gatewayFetchJson(
   }
 }
 
+export function extractSonicResponseMessage(data: Record<string, unknown>): string {
+  const nest = data.data;
+  const row =
+    nest && typeof nest === 'object' && !Array.isArray(nest)
+      ? (nest as Record<string, unknown>)
+      : Array.isArray(nest) && nest.length > 0 && typeof nest[0] === 'object'
+        ? (nest[0] as Record<string, unknown>)
+        : null;
+  for (const v of [
+    data.message,
+    data.error,
+    data.detail,
+    row?.message,
+    row?.error,
+  ]) {
+    const s = String(v ?? '').trim();
+    if (s) return s;
+  }
+  return '';
+}
+
+export function extractSonicResponseCode(data: Record<string, unknown>): string {
+  const nest = data.data;
+  const row =
+    nest && typeof nest === 'object' && !Array.isArray(nest)
+      ? (nest as Record<string, unknown>)
+      : null;
+  return String(
+    data.resultcode ??
+      data.result_code ??
+      data.code ??
+      row?.resultcode ??
+      row?.result_code ??
+      row?.code ??
+      '',
+  ).trim();
+}
+
 export function isSonicInitiateSuccess(
   sonicData: Record<string, unknown> | null | undefined,
   httpResponse: Response,
 ): boolean {
   if (!sonicData || typeof sonicData !== 'object') return false;
+  const responseMessage = extractSonicResponseMessage(sonicData);
+  const responseCode = extractSonicResponseCode(sonicData);
+  if (isSonicStkSendFailure(responseMessage, responseCode)) return false;
+
   const st = String(sonicData.status ?? '')
     .toLowerCase()
     .trim();
+  if (st === 'error' || st === 'failed') return false;
   if (st === 'success') return true;
   if (sonicData.success === true) return true;
   const nest = sonicData.data;
@@ -91,7 +140,7 @@ export function isSonicInitiateSuccess(
         ? (nest[0] as Record<string, unknown>)
         : sonicData;
   const orderId = row.order_id ?? row.orderId;
-  if (orderId && (httpResponse.ok || st !== 'error')) return true;
+  if (orderId && httpResponse.ok) return true;
   return false;
 }
 
@@ -179,32 +228,55 @@ type SonicCreateAttempt = {
   channel?: string;
 };
 
-/** Phone formats + network-specific SonicPesa channel hints (Tigo, Airtel, Halopesa, M-Pesa). */
+/** Best-first phone/channel combos — few attempts, high success rate on first tap. */
 function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
   const phones = sonicPhoneCandidatesForApi(localPhone);
-  const channels = sonicChannelHintsForNetwork(localPhone);
+  const channels = sonicChannelHintsForNetwork(localPhone).slice(0, 2);
+  const intl255 = phones[0] ?? '';
+  const local0 = phones.length > 1 ? phones[1]! : '';
   const out: SonicCreateAttempt[] = [];
   const seen = new Set<string>();
   const add = (buyer_phone: string, channel?: string) => {
+    if (!buyer_phone) return;
     const key = `${buyer_phone}\0${channel ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push(channel ? { buyer_phone, channel } : { buyer_phone });
   };
 
-  // Auto-detect wallet (preferred — matches Sonic docs).
-  for (const phone of phones) add(phone);
-
-  if (channels.length === 0) return out;
-
-  const primaryPhone = phones[0];
-  if (primaryPhone) add(primaryPhone, channels[0]);
-  if (phones[1]) add(phones[1], channels[0]);
-  for (let i = 1; i < channels.length; i++) {
-    for (const phone of phones) add(phone, channels[i]);
+  if (intl255) add(intl255);
+  for (const channel of channels) {
+    if (intl255) add(intl255, channel);
+  }
+  if (local0 && local0 !== intl255) {
+    add(local0);
+    for (const channel of channels) add(local0, channel);
   }
 
   return out;
+}
+
+const SONIC_CREATE_ENDPOINTS = ['payment/create_order', 'payment/create_order_simple'] as const;
+
+async function postSonicCreateOrder(
+  endpoint: string,
+  attempt: SonicCreateAttempt,
+  args: { buyerEmail: string; buyerName: string; amountTzs: number },
+  timeoutMs = SONIC_HTTP_TIMEOUT_MS,
+): Promise<{ response: Response; data: Record<string, unknown> }> {
+  const payload: Record<string, unknown> = {
+    buyer_email: args.buyerEmail,
+    buyer_name: args.buyerName,
+    buyer_phone: attempt.buyer_phone,
+    amount: args.amountTzs,
+    currency: 'TZS',
+  };
+  if (attempt.channel) payload.channel = attempt.channel;
+  return gatewayFetchJson(`${SONIC_API_BASE}/${endpoint}`, {
+    method: 'POST',
+    headers: getSonicPesaRequestHeaders(),
+    body: JSON.stringify(payload),
+  }, timeoutMs);
 }
 
 
@@ -224,13 +296,14 @@ export function mapSonicInitiateUserError(
 ): string {
   const code = String(rawCode ?? '').trim();
   const msg = String(rawMessage || '').trim();
+  const hayajatumika = /hayajatumika|hayajaweza kutumika|hayajaweza kutuma/i.test(msg);
   if (code === '103' || /ongoing ussd/i.test(msg)) {
     return 'Simu yako ina USSD nyingine zinazoendelea. Funga dirisha la malipo/USSD kwenye simu, subiri sekunde 30, kisha jaribu tena.';
   }
   if (isPaymentRateLimitError(msg, code)) {
     return paymentRateLimitUserMessage();
   }
-  if (isSonicStkSendFailure(msg, code)) {
+  if (isSonicStkSendFailure(msg, code) || hayajatumika) {
     if (isHalotelLocalPhone(localPhone)) {
       return 'Halopesa (061–063) haikupokea ombi. Hakikisha nambari ni sahihi, una salio, na mtandao wa Halopesa unafanya kazi, kisha jaribu tena.';
     }
@@ -274,67 +347,63 @@ export async function tryCreateSonicOrder(args: {
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
   };
 
-  for (const attempt of attempts) {
-    const payload: Record<string, unknown> = {
-      buyer_email: args.buyerEmail,
-      buyer_name: args.buyerName,
-      buyer_phone: attempt.buyer_phone,
-      amount: args.amountTzs,
-      currency: 'TZS',
-    };
-    if (attempt.channel) payload.channel = attempt.channel;
-    try {
-      last = await gatewayFetchJson(`${SONIC_API_BASE}/payment/create_order`, {
-        method: 'POST',
-        headers: getSonicPesaRequestHeaders(),
-        body: JSON.stringify(payload),
-      });
-      const responseMessage = String(last.data.message ?? last.data.error ?? '');
-      const responseCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+  let tried = 0;
+  outer:
+  for (const endpoint of SONIC_CREATE_ENDPOINTS) {
+    for (const attempt of attempts) {
+      if (tried >= MAX_SONIC_CREATE_ATTEMPTS) break outer;
+      tried++;
+      const timeoutMs = tried === 1 ? SONIC_HTTP_TIMEOUT_MS : SONIC_HTTP_RETRY_TIMEOUT_MS;
+      try {
+        if (tried > 1) await sonicRetryDelay(SONIC_RETRY_DELAY_MS);
+        last = await postSonicCreateOrder(endpoint, attempt, args, timeoutMs);
+        const responseMessage = extractSonicResponseMessage(last.data);
+        const responseCode = extractSonicResponseCode(last.data);
 
-      if (isSonicInitiateSuccess(last.data, last.response)) {
-        const orderId = extractSonicOrderId(last.data);
-        if (orderId && !isSonicStkSendFailure(responseMessage, responseCode)) {
+        if (isSonicInitiateSuccess(last.data, last.response)) {
+          const orderId = extractSonicOrderId(last.data);
+          if (orderId && !isSonicStkSendFailure(responseMessage, responseCode)) {
+            return {
+              ok: true,
+              orderId,
+              message: String(
+                last.data.message ?? 'Request in progress. You will receive a prompt on your phone.',
+              ),
+              raw: last.data,
+            };
+          }
+          if (!isSonicCreateRetryable(responseMessage, responseCode)) {
+            continue;
+          }
+          continue;
+        }
+
+        const errorMessage = responseMessage || 'Failed to start SonicPesa payment';
+        const errorCode = responseCode;
+        if (isPaymentRateLimitError(errorMessage, errorCode)) {
           return {
-            ok: true,
-            orderId,
-            message: String(
-              last.data.message ?? 'Request in progress. You will receive a prompt on your phone.',
-            ),
+            ok: false,
+            orderId: '',
+            message: paymentRateLimitUserMessage(),
             raw: last.data,
+            errorMessage: paymentRateLimitUserMessage(),
+            errorCode,
           };
         }
-        if (!isSonicCreateRetryable(responseMessage, responseCode)) {
-          break;
+        if (!isSonicCreateRetryable(errorMessage, errorCode)) {
+          continue;
         }
-        continue;
-      }
-
-      const errorMessage = responseMessage || 'Failed to start SonicPesa payment';
-      const errorCode = responseCode;
-      if (isPaymentRateLimitError(errorMessage, errorCode)) {
-        return {
-          ok: false,
-          orderId: '',
-          message: paymentRateLimitUserMessage(),
-          raw: last.data,
-          errorMessage: paymentRateLimitUserMessage(),
-          errorCode,
+      } catch (e) {
+        last = {
+          response: new Response(null, { status: 502 }),
+          data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
         };
       }
-      if (!isSonicCreateRetryable(errorMessage, errorCode)) {
-        break;
-      }
-    } catch (e) {
-      last = {
-        response: new Response(null, { status: 502 }),
-        data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
-      };
     }
   }
 
-  const errorMessage = String(last.data.message ?? last.data.error ?? 'Failed to start SonicPesa payment');
-  const errorCode = String(last.data.resultcode ?? last.data.code ?? '').trim();
+  const errorMessage = extractSonicResponseMessage(last.data) || 'Failed to start SonicPesa payment';
+  const errorCode = extractSonicResponseCode(last.data);
   if (isPaymentRateLimitError(errorMessage, errorCode)) {
     return {
       ok: false,

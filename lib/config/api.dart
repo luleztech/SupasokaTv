@@ -30,62 +30,46 @@ class _SettingsApi {
 }
 
 class _PaymentsApi {
-  /// Starts checkout via backend — SonicPesa mobile money (all TZ networks).
-  Future<Map<String, dynamic>> startPayment({
-    required String externalId,
-    required String bundle,
-    required int amount,
-    required String phone,
-    required String email,
-    required String name,
+  static const _startPaymentTimeout = Duration(seconds: 75);
+
+  static bool _isRetryableStartPaymentError(Object e, int round) {
+    if (_isTransientStartPaymentError(e)) return true;
+    if (round > 0) return false;
+    final lower = e.toString().toLowerCase();
+    return lower.contains('hayajatumika') ||
+        lower.contains('hayajaweza kutumika') ||
+        lower.contains('hayajaweza kutuma') ||
+        lower.contains('hatukuweza kutuma ombi') ||
+        lower.contains('haikupokea ombi') ||
+        lower.contains('halijakubaliwa');
+  }
+
+  static bool _isTransientStartPaymentError(Object e) {
+    final lower = e.toString().toLowerCase();
+    return lower.contains('timeout') ||
+        lower.contains('timed out') ||
+        lower.contains('socketexception') ||
+        lower.contains('connection') ||
+        lower.contains('failed host') ||
+        lower.contains('haikuweza kuunganisha') ||
+        lower.contains('502') ||
+        lower.contains('503') ||
+        lower.contains('504');
+  }
+
+  Future<Map<String, dynamic>> _postStartPayment({
+    required Uri uri,
+    required Map<String, String> headers,
+    required String bodyJson,
   }) async {
-    await UserIdentity.registerWithBackend(phone: phone);
-    final expectedProvider = await settingsApi.getActivePaymentProvider();
-    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/payments/start');
-    final versionHeaders = await appVersionHeaders();
-    final body = <String, dynamic>{
-      'publicId': externalId,
-      'planId': bundle,
-      'amount': amount,
-      'phone': phone,
-      'buyer_email': email,
-      'buyer_name': name,
-      'metadata': {
-        'plan_id': bundle,
-        'external_id': externalId,
-        'buyer_phone': phone,
-      },
-    };
+    final res = await http
+        .post(uri, headers: headers, body: bodyJson)
+        .timeout(_startPaymentTimeout);
+    return _parseStartPaymentResponse(res);
+  }
 
-    http.Response? res;
-    Object? lastErr;
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        res = await http
-            .post(
-              uri,
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                ...versionHeaders,
-              },
-              body: jsonEncode(body),
-            )
-            .timeout(const Duration(seconds: 45));
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (attempt < 2) {
-          await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
-        }
-      }
-    }
-    if (res == null) {
-      throw Exception(lastErr?.toString() ?? 'Haikuweza kuunganisha na seva ya malipo.');
-    }
-
-    Map<String, dynamic>? j;
+  Map<String, dynamic> _parseStartPaymentResponse(http.Response res) {
+    Map<String, dynamic> j;
     try {
       j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     } catch (_) {
@@ -118,16 +102,71 @@ class _PaymentsApi {
       throw Exception('Seva haikurudisha order id.');
     }
     final provider = (j['provider'] ?? j['paymentProvider'] ?? 'sonicpesa').toString().toLowerCase();
-    if (expectedProvider == 'sonicpesa' && provider != 'sonicpesa') {
-      throw Exception(
-        'Seva imerudisha $provider lakini SonicPesa imewashwa. Hakikisha backend imedeploy na jaribu tena.',
-      );
-    }
     return {
       'orderId': orderId,
       'message': (j['message'] ?? 'Ombi la malipo limetumwa.').toString(),
       'provider': provider,
     };
+  }
+
+  /// Starts checkout via backend — SonicPesa mobile money (all TZ networks).
+  Future<Map<String, dynamic>> startPayment({
+    required String externalId,
+    required String bundle,
+    required int amount,
+    required String phone,
+    required String email,
+    required String name,
+  }) async {
+    final normalizedPhone = phone.trim();
+    await Future.wait<void>([
+      UserIdentity.registerWithBackend(phone: normalizedPhone),
+      settingsApi.getActivePaymentProvider(),
+    ]);
+    const expectedProvider = 'sonicpesa';
+    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.parse('$origin/api/v1/public/payments/start');
+    final versionHeaders = await appVersionHeaders();
+    final bodyJson = jsonEncode(<String, dynamic>{
+      'publicId': externalId,
+      'planId': bundle,
+      'amount': amount,
+      'phone': normalizedPhone,
+      'buyer_email': email,
+      'buyer_name': name,
+      'metadata': {
+        'plan_id': bundle,
+        'external_id': externalId,
+        'buyer_phone': normalizedPhone,
+      },
+    });
+    final headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...versionHeaders,
+    };
+
+    Object? lastErr;
+    for (var round = 0; round < 3; round++) {
+      try {
+        final out = await _postStartPayment(uri: uri, headers: headers, bodyJson: bodyJson);
+        final provider = (out['provider'] ?? 'sonicpesa').toString().toLowerCase();
+        if (expectedProvider == 'sonicpesa' && provider != 'sonicpesa') {
+          throw Exception(
+            'Seva imerudisha $provider lakini SonicPesa imewashwa. Hakikisha backend imedeploy na jaribu tena.',
+          );
+        }
+        return out;
+      } catch (e) {
+        lastErr = e;
+        if (round < 2 && _isRetryableStartPaymentError(e, round)) {
+          await Future<void>.delayed(Duration(milliseconds: 700 * (round + 1)));
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw Exception(lastErr?.toString() ?? 'Haikuweza kuunganisha na seva ya malipo.');
   }
 
   Future<Map<String, dynamic>> checkPaymentStatus(String orderId) async {

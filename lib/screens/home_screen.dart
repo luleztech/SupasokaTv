@@ -14,6 +14,7 @@ import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/theme/brand_palette.dart';
 import 'package:supasoka/widgets/unlock_all_promo.dart';
 import 'package:supasoka/widgets/channel_card.dart';
+import 'package:supasoka/widgets/pro_shimmer.dart';
 import 'package:supasoka/widgets/safe_network_image.dart';
 import 'package:supasoka/widgets/whatsapp_fab.dart';
 
@@ -442,27 +443,67 @@ class _HomeLoadingSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 32, 16, 48),
-      child: Column(
-        children: [
-          const SizedBox(
-            width: 40,
-            height: 40,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: BrandPalette.accent,
+    const tileW = _kHomeRailTileWidth;
+    const posterH = _kHomeRailPosterHeight;
+    const tileH = _kHomeRailTileHeight;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+          child: ProShimmer(
+            child: Container(
+              height: 14,
+              width: 148,
+              decoration: BoxDecoration(
+                color: BrandPalette.bgMid,
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            'Inapakia channeli…',
-            style: rajdhani(14, weight: FontWeight.w700).copyWith(
-              color: BrandPalette.white.withValues(alpha: 0.7),
+        ),
+        SizedBox(
+          height: tileH,
+          child: ListView.separated(
+            clipBehavior: Clip.none,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: 6,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, i) => ChannelCardSkeleton(
+              width: tileW,
+              posterHeight: posterH,
+              seed: i + 1,
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 18),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: BrandPalette.accent.withValues(alpha: 0.85),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Inapakia channeli…',
+                style: rajdhani(13, weight: FontWeight.w700).copyWith(
+                  color: BrandPalette.white.withValues(alpha: 0.65),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 28),
+      ],
     );
   }
 }
@@ -722,13 +763,12 @@ class _CarouselSlide extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        const ColoredBox(color: BrandPalette.bgMid),
         Positioned.fill(
           child: SafeNetworkImage(
             imageUrl: item.img,
-            fit: BoxFit.contain,
+            fit: BoxFit.cover,
             alignment: Alignment.center,
-            placeholderColor: BrandPalette.bgMid,
+            placeholderColor: BrandPalette.bgDeep,
           ),
         ),
         Positioned(
@@ -963,6 +1003,7 @@ class _ChannelRailSection extends StatelessWidget {
           SizedBox(
             height: tileH,
             child: ListView.separated(
+              clipBehavior: Clip.none,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               scrollDirection: Axis.horizontal,
               itemCount: channels.length,
@@ -972,6 +1013,7 @@ class _ChannelRailSection extends StatelessWidget {
                 return SizedBox(
                   width: tileW,
                   child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
                       ChannelCard(
                         channel: ch,
@@ -1040,6 +1082,7 @@ class _ChannelPosterRailSection extends StatelessWidget {
           SizedBox(
             height: tileH,
             child: ListView.separated(
+              clipBehavior: Clip.none,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               scrollDirection: Axis.horizontal,
               itemCount: channels.length,
@@ -1142,10 +1185,11 @@ class _ChannelGridSection extends StatelessWidget {
             GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
+              clipBehavior: Clip.none,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: cols,
-                mainAxisSpacing: gap,
-                crossAxisSpacing: gap,
+                mainAxisSpacing: gap + 4,
+                crossAxisSpacing: gap + 2,
                 mainAxisExtent: tileH,
               ),
               itemCount: channels.length,

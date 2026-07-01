@@ -34,8 +34,8 @@ const _payLine = Color(0x14FFFFFF);
 const _payMuted = Color(0xFF8B9CAF);
 const _scaffold = BrandPalette.bgDeep;
 
-/// USSD / wallet confirmation often takes 1–3+ minutes; 60s caused false “Anza upya” while payment was still pending.
-const int _kPaymentWaitSeconds = 300;
+/// Active wait overlay while the user confirms USSD on the phone.
+const int _kPaymentWaitSeconds = 60;
 
 /// Shown only after the server has activated premium (same moment admin sees it).
 const _kPremiumSuccessTitle = 'HONGERA';
@@ -99,6 +99,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   bool _paymentPollArmed = false;
   /// Prevents countdown timeout from racing past a successful poll / [confirm] round-trip.
   bool _paymentCompletionInProgress = false;
+  /// Ensures only one expiry handler runs when the poll loop and countdown fire together.
+  bool _waitExpiryHandling = false;
   String _submitStatus = '';
   Timer? _submitStageTimer;
 
@@ -144,6 +146,15 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   bool _phoneValid(String raw) => TanzaniaPhone.isValid(raw);
 
   String get _cleanPhone => TanzaniaPhone.normalize(_phoneCtrl.text) ?? '';
+
+  String get _paymentWaitWindowLabel {
+    if (_kPaymentWaitSeconds >= 60 && _kPaymentWaitSeconds % 60 == 0) {
+      final mins = _kPaymentWaitSeconds ~/ 60;
+      return mins == 1 ? 'dakika 1' : 'dakika $mins';
+    }
+    return 'sekunde $_kPaymentWaitSeconds';
+  }
+
   bool get _phoneOk => _phoneValid(_phoneCtrl.text);
 
   @override
@@ -160,6 +171,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     final uid = await getOrCreateUserId();
     if (uid != null && uid.isNotEmpty) {
       setState(() => _userId = uid);
+      unawaited(UserIdentity.registerWithBackend());
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -230,6 +242,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   void _stopPaymentTimersOnly({bool notify = true}) {
     _pollGen++;
     _paymentPollArmed = false;
+    _waitExpiryHandling = false;
     _waitingTimer?.cancel();
     _waitingTimer = null;
     _waitingSeconds = 0;
@@ -270,9 +283,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     unawaited(_adaptivePaymentPollLoop(orderId, gen));
   }
 
-  /// Fast status checks first, then ~2s — detects paid sooner than fixed 3s polling.
+  /// Fast status checks first, then ~1.5s — fits the 60s confirmation window.
   Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
-    const warmDelaysMs = <int>[0, 650, 950, 1300, 1700, 2100, 2500];
+    const warmDelaysMs = <int>[0, 500, 800, 1100, 1400, 1800, 2200];
     var warmIdx = 0;
     var confirmProbeTick = 0;
     final deadline = DateTime.now().add(Duration(seconds: _kPaymentWaitSeconds));
@@ -280,15 +293,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     while (mounted && gen == _pollGen && !_paymentCompletionInProgress) {
       if (DateTime.now().isAfter(deadline)) {
         if (_pollingOrderId != null && _pollingOrderId == orderId && !_paymentCompletionInProgress) {
-          await _finalizeSessionTimedOut(
-            detail:
-                'Muda wa kusubiri umeisha. Malipo ya simu yanaweza bado yanaendelea — jaribu tena au fungua programu baada ya muda mfupi.',
-          );
+          _handleWaitWindowExpired();
         }
         return;
       }
 
-      final delayMs = warmIdx < warmDelaysMs.length ? warmDelaysMs[warmIdx] : 2000;
+      final delayMs = warmIdx < warmDelaysMs.length ? warmDelaysMs[warmIdx] : 1500;
       warmIdx++;
       if (delayMs > 0) {
         await Future<void>.delayed(Duration(milliseconds: delayMs));
@@ -329,7 +339,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           return;
         }
         confirmProbeTick++;
-        if (confirmProbeTick % 10 == 0) {
+        if (confirmProbeTick % 5 == 0) {
           try {
             final probe = await _probeConfirmWhilePending(orderId);
             if (!mounted || gen != _pollGen || _paymentCompletionInProgress) return;
@@ -352,7 +362,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         final msg = e.toString().toLowerCase();
         if (msg.contains('no order') || msg.contains('not found')) {
           _notFoundStreak++;
-          if (_notFoundStreak >= 20) {
+          if (_notFoundStreak >= 10) {
             _stopPaymentTimersOnly();
             await _clearPendingOrderPrefs();
             if (mounted) {
@@ -388,87 +398,94 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   /// Last chance: gateway may flip to completed right as the countdown hits zero.
   Future<void> _handleWaitWindowExpiredAsync() async {
-    if (_paymentCompletionInProgress || !mounted) return;
-    final id = _pollingOrderId?.trim();
-    if (id == null || id.isEmpty) {
-      await _finalizeSessionTimedOut(
-        detail:
-            'Muda wa kusubiri umeisha bila uthibitisho. Hakikisha umeingiza PIN kwenye simu, kisha jaribu tena.',
-      );
-      return;
-    }
+    if (_waitExpiryHandling || _paymentCompletionInProgress || !mounted) return;
+    if (_paymentUiPhase != _PaymentUiPhase.waiting) return;
+    _waitExpiryHandling = true;
     try {
-      final response = await paymentsApi.checkPaymentStatus(id);
-      final paymentStatus = paymentStatusFromCheckResponse(response);
-      if (isPaymentCompleted(paymentStatus)) {
-        final premiumMs = response['premiumUntilMs'];
-        if (response['activated'] == true && premiumMs is num) {
-          _stopPaymentTimersOnly();
-          await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
-          return;
-        }
-        final prefs = await SharedPreferences.getInstance();
-        final planId = prefs.getString('pendingPaymentPlanId')?.trim();
-        final phone = prefs.getString('pendingPaymentPhone')?.trim();
-        final publicId = await UserIdentity.getOrCreatePublicId();
-        final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
-          orderId: id,
-          publicId: publicId,
-          planId: planId ?? '',
-          phone: phone ?? '',
-        );
-        if (serverUntil != null) {
-          _stopPaymentTimersOnly();
-          await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
-          return;
-        }
-        // Paid at provider but premium not granted yet — keep pending prefs and retry via recovery.
-        final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
-        if (recovered && mounted) {
-          _stopPaymentTimersOnly();
-          setState(() {
-            _pollingOrderId = null;
-            _paymentUiPhase = _PaymentUiPhase.none;
-            _sessionEndDetail = null;
-          });
-          _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
-          await widget.onPaymentSuccess?.call();
-          return;
-        }
+      final id = _pollingOrderId?.trim();
+      if (id == null || id.isEmpty) {
         await _finalizeSessionTimedOut(
           detail:
-              'Malipo yamekamilika lakini bado hatujafungua akaunti yako. Fungua programu tena baada ya dakika 1–2 au wasiliana na msaada.',
+              'Muda wa kusubiri umeisha bila uthibitisho. Hakikisha umeingiza PIN kwenye simu, kisha jaribu tena.',
         );
         return;
       }
-      if (isPaymentTerminalFailure(paymentStatus)) {
-        await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
+      try {
+        final response = await paymentsApi.checkPaymentStatus(id);
+        final paymentStatus = paymentStatusFromCheckResponse(response);
+        if (isPaymentCompleted(paymentStatus)) {
+          final premiumMs = response['premiumUntilMs'];
+          if (response['activated'] == true && premiumMs is num) {
+            _stopPaymentTimersOnly();
+            await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
+            return;
+          }
+          final prefs = await SharedPreferences.getInstance();
+          final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+          final phone = prefs.getString('pendingPaymentPhone')?.trim();
+          final publicId = await UserIdentity.getOrCreatePublicId();
+          final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
+            orderId: id,
+            publicId: publicId,
+            planId: planId ?? '',
+            phone: phone ?? '',
+          );
+          if (serverUntil != null) {
+            _stopPaymentTimersOnly();
+            await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
+            return;
+          }
+          // Paid at provider but premium not granted yet — keep pending prefs and retry via recovery.
+          final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
+          if (recovered && mounted) {
+            _stopPaymentTimersOnly();
+            setState(() {
+              _pollingOrderId = null;
+              _paymentUiPhase = _PaymentUiPhase.none;
+              _sessionEndDetail = null;
+            });
+            _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+            await widget.onPaymentSuccess?.call();
+            return;
+          }
+          await _finalizeSessionTimedOut(
+            detail:
+                'Malipo yamekamilika lakini bado hatujafungua akaunti yako. Fungua programu tena baada ya dakika 1–2 au wasiliana na msaada.',
+          );
+          return;
+        }
+        if (isPaymentTerminalFailure(paymentStatus)) {
+          await _finalizeSessionFailed(_paymentFailureUserMessage(paymentStatus));
+          return;
+        }
+      } catch (_) {
+        // fall through to timeout
+      }
+      if (!mounted || _paymentCompletionInProgress) return;
+      final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
+      if (recovered && mounted) {
+        _stopPaymentTimersOnly();
+        setState(() {
+          _pollingOrderId = null;
+          _paymentUiPhase = _PaymentUiPhase.none;
+          _sessionEndDetail = null;
+        });
+        _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+        await widget.onPaymentSuccess?.call();
         return;
       }
-    } catch (_) {
-      // fall through to timeout
+      await _finalizeSessionTimedOut(
+        detail:
+            'Muda wa ${_paymentWaitWindowLabel} umeisha bila uthibitisho wa haraka. Ukiisha thibitisha PIN kwenye simu, fungua programu tena — malipo yanaweza kukamilika kiotomatiki.',
+      );
+    } finally {
+      _waitExpiryHandling = false;
     }
-    if (!mounted || _paymentCompletionInProgress) return;
-    final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
-    if (recovered && mounted) {
-      _stopPaymentTimersOnly();
-      setState(() {
-        _pollingOrderId = null;
-        _paymentUiPhase = _PaymentUiPhase.none;
-        _sessionEndDetail = null;
-      });
-      _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
-      await widget.onPaymentSuccess?.call();
-      return;
-    }
-    await _finalizeSessionTimedOut(
-      detail:
-          'Muda wa dakika ${_kPaymentWaitSeconds ~/ 60} umeisha bila uthibitisho wa haraka. Malipo yako yanaweza bado yanaendelea — jaribu tena au subiri kidogo kisha fungua programu tena.',
-    );
   }
 
   Future<void> _finalizeSessionTimedOut({String? detail}) async {
     if (_paymentCompletionInProgress) return;
+    if (_paymentUiPhase != _PaymentUiPhase.waiting) return;
     _stopPaymentTimersOnly();
     // Keep pending order prefs so [PremiumRecovery] / [_load] can finish activation after reopen.
     if (!mounted) return;
@@ -495,6 +512,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   void _resetPaymentFlowFromStepOne() {
     _paymentCompletionInProgress = false;
+    _waitExpiryHandling = false;
     _stopPaymentTimersOnly();
     _clearPendingOrderPrefs();
     setState(() {
@@ -542,6 +560,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
     if (lower.contains('500') || lower.contains('502') || lower.contains('503')) {
       return 'Seva ya malipo ina tatizo. Jaribu tena baada ya dakika chache.';
+    }
+    if (lower.contains('hayajatumika') ||
+        lower.contains('hayajaweza kutumika') ||
+        lower.contains('hayajaweza kutuma')) {
+      if (raw.length > 40 && !lower.startsWith('exception')) {
+        return raw;
+      }
+      return 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na mtandao wa pesa unafanya kazi, kisha jaribu tena.';
     }
     if (raw.length > 220) {
       return 'Malipo hayajaweza kukamilika. Jaribu tena au wasiliana na msaada.';
@@ -750,7 +776,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       setState(() {
         _submitStatus = switch (step % 3) {
           0 => 'Inathibitisha taarifa zako…',
-          1 => 'Inaunganisha na M-PESA…',
+          1 => 'Inaunganisha na huduma ya malipo…',
           _ => 'Inatumia ombi la malipo…',
         };
       });
@@ -824,6 +850,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         }
       }
 
+      setState(() => _submitStatus = 'Inathibitisha nambari ya simu…');
+      await UserIdentity.registerWithBackend(phone: clean);
+
       setState(() => _submitStatus = 'Inatumia ombi la malipo…');
       final result = await paymentsApi.startPayment(
         externalId: _userId!,
@@ -869,7 +898,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         _showStatus('Tumepokea ombi', msg, _PayDialogTone.info);
       }
     } catch (e) {
-      _showStatus('Malipo hayajatumika', _mapPaymentError(e), _PayDialogTone.error);
+      final detail = _mapPaymentError(e);
+      _showStatus('Malipo hayajakamilika', detail, _PayDialogTone.error);
     } finally {
       if (_submitting) _endSubmitProgress();
     }
@@ -1092,7 +1122,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           if (_paymentUiPhase == _PaymentUiPhase.waiting && _pollingOrderId != null)
             Positioned.fill(
               child: _PaymentWaitingModal(
-                elapsedSeconds: (_kPaymentWaitSeconds - _waitingSeconds).clamp(0, _kPaymentWaitSeconds),
+                remainingSeconds: _waitingSeconds.clamp(0, _kPaymentWaitSeconds),
                 maxWaitSeconds: _kPaymentWaitSeconds,
               ),
             ),
@@ -1520,17 +1550,18 @@ class _PaymentSessionEndedModal extends StatelessWidget {
 
 class _PaymentWaitingModal extends StatelessWidget {
   const _PaymentWaitingModal({
-    required this.elapsedSeconds,
+    required this.remainingSeconds,
     required this.maxWaitSeconds,
   });
 
-  final int elapsedSeconds;
+  final int remainingSeconds;
   final int maxWaitSeconds;
 
   @override
   Widget build(BuildContext context) {
     final max = maxWaitSeconds <= 0 ? 1 : maxWaitSeconds;
-    final progress = (elapsedSeconds / max).clamp(0.0, 1.0);
+    final elapsed = (max - remainingSeconds).clamp(0, max);
+    final progress = (elapsed / max).clamp(0.0, 1.0);
     return Material(
       color: Colors.black.withValues(alpha: 0.76),
       child: Center(
@@ -1581,9 +1612,9 @@ class _PaymentWaitingModal extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               Text(
-                elapsedSeconds <= 0
+                remainingSeconds <= 0
                     ? 'Tunahakiki malipo mara kwa mara…'
-                    : 'Sekunde $elapsedSeconds · tunahakiki malipo (haraka mwanzoni)',
+                    : 'Baki sekunde $remainingSeconds · thibitisha PIN kwenye simu',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withValues(alpha: 0.82), height: 1.35),
               ),
