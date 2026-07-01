@@ -220,12 +220,18 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
   return false;
 }
 
-/** Phone candidates for SonicPesa buyer_phone: local 0… first, then 255… international. */
+/**
+ * Phone candidates for SonicPesa buyer_phone: 255… international first, then local 0….
+ * SonicPesa docs require 255XXXXXXXXX for Airtel/Tigo/Vodacom; sending the local format
+ * first for these networks gets rejected and forces an immediate second live gateway call
+ * for the same number, which can trip SonicPesa's own per-number rate limit on the very
+ * first user attempt.
+ */
 export function sonicBuyerPhonesForApi(localPhone: string): string[] {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
   if (env.sonicSendLocalPhone) return [local0];
-  const out = [local0, intl255];
+  const out = [intl255, local0];
   return [...new Set(out.filter(Boolean))];
 }
 
@@ -247,8 +253,9 @@ type SonicCreateStep = {
 
 /**
  * Build ordered steps to attempt when creating a SonicPesa order.
- * Tries local 0-prefix first (most TZ gateways accept this), then international
- * 255-prefix, for both create_order and create_order_simple endpoints.
+ * Tries the official docs-required international 255-prefix first (Airtel/Tigo/Vodacom
+ * reject the local format), then national 0-prefix as fallback, for both create_order
+ * and create_order_simple endpoints.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
@@ -262,14 +269,14 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   }
 
   const steps: SonicCreateStep[] = [
-    // Local 0-prefix first — preferred by most TZ mobile money gateways.
-    { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
-    // International 255-prefix as first fallback.
+    // International 255-prefix first — required by SonicPesa docs for Airtel/Tigo/Vodacom.
     { endpoint: 'payment/create_order', buyer_phone: intl255, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
-    // create_order_simple with local format.
-    { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
-    // create_order_simple with international format as last resort.
+    // Local 0-prefix as first fallback.
+    { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
+    // create_order_simple with international format.
     { endpoint: 'payment/create_order_simple', buyer_phone: intl255, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+    // create_order_simple with local format as last resort.
+    { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
   ];
 
   // Deduplicate (local0 === intl255 is impossible for valid TZ numbers but guard anyway).
