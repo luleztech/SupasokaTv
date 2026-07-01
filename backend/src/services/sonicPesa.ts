@@ -7,7 +7,13 @@ import {
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
-import { detectTzMobileNetwork, formatPhoneToIntl255, isHalotelLocalPhone, isVodacomMpesaLocalPhone, phoneCandidatesForSonicPesaApi } from '../lib/tzPhone';
+import {
+  detectTzMobileNetwork,
+  formatPhoneToIntl255,
+  isHalotelLocalPhone,
+  phoneCandidatesForSonicPesaApi,
+  sonicChannelHintsForNetwork,
+} from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 28_000;
@@ -107,9 +113,15 @@ export function extractSonicPaymentStatus(statusData: Record<string, unknown>): 
   const candidates = [
     nestObj?.payment_status,
     nestObj?.paymentStatus,
+    nestObj?.transaction_status,
+    nestObj?.transactionStatus,
+    nestObj?.order_status,
+    nestObj?.orderStatus,
     nestObj?.status,
     statusData.payment_status,
     statusData.paymentStatus,
+    statusData.transaction_status,
+    statusData.transactionStatus,
     statusData.status,
   ];
   for (const c of candidates) {
@@ -167,9 +179,10 @@ type SonicCreateAttempt = {
   channel?: string;
 };
 
-/** Phone formats (+ optional M-Pesa channel hint for 072 / Vodacom). */
+/** Phone formats + network-specific SonicPesa channel hints (Tigo, Airtel, Halopesa, M-Pesa). */
 function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
   const phones = sonicPhoneCandidatesForApi(localPhone);
+  const channels = sonicChannelHintsForNetwork(localPhone);
   const out: SonicCreateAttempt[] = [];
   const seen = new Set<string>();
   const add = (buyer_phone: string, channel?: string) => {
@@ -179,15 +192,16 @@ function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
     out.push(channel ? { buyer_phone, channel } : { buyer_phone });
   };
 
+  // Auto-detect wallet (preferred — matches Sonic docs).
   for (const phone of phones) add(phone);
 
-  // 072 is often used with Vodacom M-Pesa; Sonic may need an explicit M-Pesa channel hint.
-  if (isVodacomMpesaLocalPhone(localPhone)) {
-    for (const phone of phones) {
-      add(phone, 'MPESA');
-      add(phone, 'M-PESA');
-      add(phone, 'VODACOM MPESA');
-    }
+  if (channels.length === 0) return out;
+
+  const primaryPhone = phones[0];
+  if (primaryPhone) add(primaryPhone, channels[0]);
+  if (phones[1]) add(phones[1], channels[0]);
+  for (let i = 1; i < channels.length; i++) {
+    for (const phone of phones) add(phone, channels[i]);
   }
 
   return out;
@@ -434,7 +448,7 @@ export function extractSonicWebhookPaid(payload: Record<string, unknown>): {
   const ev = String(payload.event ?? payload.type ?? '')
     .toLowerCase()
     .trim();
-  let paid = SONIC_PAID_STATUSES.has(st);
+  let paid = SONIC_PAID_STATUSES.has(st) || isSonicRawPaymentCompleted(payload);
   if (!paid && ev) {
     paid =
       ev === 'payment.success' ||

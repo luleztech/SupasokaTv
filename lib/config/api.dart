@@ -184,11 +184,14 @@ class _PaymentsApi {
     if (premiumRaw is int) premiumUntilMs = premiumRaw;
     if (premiumRaw is num) premiumUntilMs = premiumRaw.toInt();
 
+    final intentPlanId = (j['intentPlanId'] ?? j['planId'])?.toString().trim();
+
     return {
       'status': ps,
       'raw': j,
       if (premiumUntilMs != null) 'premiumUntilMs': premiumUntilMs,
       if (j['activated'] == true) 'activated': true,
+      if (intentPlanId != null && intentPlanId.isNotEmpty) 'intentPlanId': intentPlanId,
     };
   }
 

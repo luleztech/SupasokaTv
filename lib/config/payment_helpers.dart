@@ -68,7 +68,10 @@ bool isPaymentCompleted(Object? status) {
       s == 'AUTHORIZED' ||
       s == 'AUTHORISED' ||
       s == 'SETTLED' ||
-      s == 'CONFIRMED';
+      s == 'CONFIRMED' ||
+      s == 'OK' ||
+      s == 'TRUE' ||
+      s == '1';
 }
 
 bool isPaymentTerminalFailure(Object? status) {

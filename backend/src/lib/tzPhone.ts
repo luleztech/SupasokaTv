@@ -132,21 +132,34 @@ export function formatPhoneToIntl255(local0: string): string {
 
 /**
  * SonicPesa create_order phone formats (order matters by network).
- * Halopesa (061–063) often rejects `255…`; Vodacom M-Pesa (incl. 072) expects `255…` first.
+ * Sonic docs require `255XXXXXXXXX` for Airtel/Tigo/Vodacom; Halopesa (061–063) may also
+ * accept national `0…` — try both, with `255…` first when unsure.
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-  const network = detectTzMobileNetwork(local0fmt);
-
-  let ordered: string[];
-  if (network === 'halotel') ordered = [local0fmt, intl255];
-  else if (network === 'vodacom') ordered = [intl255, local0fmt];
-  else if (network === 'airtel' || network === 'tigo_yas') ordered = [local0fmt, intl255];
-  else ordered = [intl255, local0fmt];
+  // Sonic docs: buyer_phone is `255XXXXXXXXX` for all TZ mobile money wallets.
+  const ordered = [intl255, local0fmt];
 
   return [...new Set(ordered.filter((p) => p.length > 0))];
+}
+
+/** SonicPesa `channel` hints when auto-routing fails (webhook samples: TIGOPESATZ, AIRTELMONEY). */
+export function sonicChannelHintsForNetwork(local0: string): string[] {
+  const network = detectTzMobileNetwork(toLocal0Digits(local0));
+  switch (network) {
+    case 'vodacom':
+      return ['MPESA', 'M-PESA', 'VODACOM MPESA', 'VODACOM'];
+    case 'tigo_yas':
+      return ['TIGOPESATZ', 'TIGO PESA', 'TIGOPESA', 'MIXX', 'YAS', 'MIXX BY YAS'];
+    case 'airtel':
+      return ['AIRTELMONEY', 'AIRTEL MONEY', 'AIRTEL'];
+    case 'halotel':
+      return ['HALOPESATZ', 'HALOPESA', 'HALO PESA', 'HALOTEL'];
+    default:
+      return [];
+  }
 }
 
 export function isHalotelLocalPhone(local0: string): boolean {

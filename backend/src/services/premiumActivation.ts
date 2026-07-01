@@ -193,7 +193,7 @@ export async function activatePremiumForUser(args: {
 
   const end = computePremiumEndMs(now, dur);
 
-  await pool.query(
+  const res = await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
          note = CASE
@@ -209,6 +209,9 @@ export async function activatePremiumForUser(args: {
      WHERE id = $1`,
     [publicId, end, note],
   );
+  if ((res.rowCount ?? 0) === 0) {
+    throw new HttpError(500, 'Failed to set premium on user record', 'PREMIUM_UPDATE_FAILED');
+  }
 
   return { premiumUntilMs: end };
 }

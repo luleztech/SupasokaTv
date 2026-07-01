@@ -311,10 +311,15 @@ export async function activatePremiumIfCompletedOrder(
   if (intent?.activated_at_ms != null) {
     const { getUserPremiumStatus } = await import('./userDirectory');
     const until = await getUserPremiumStatus(identity.publicId);
-    return {
-      activated: isPremiumUntilActiveLocal(until),
-      premiumUntilMs: isPremiumUntilActiveLocal(until) ? until : undefined,
-    };
+    if (isPremiumUntilActiveLocal(until)) {
+      return { activated: true, premiumUntilMs: until };
+    }
+    const ps = await resolvePaidStatusForOrder(orderId);
+    if (!isPaymentCompletedStatus(ps)) {
+      return { activated: false };
+    }
+    const out = await writePremiumForOrder(orderId, identity);
+    return { activated: true, premiumUntilMs: out.premiumUntilMs };
   }
 
   const ps = await resolvePaidStatusForOrder(orderId);
@@ -399,10 +404,26 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     intentPlanId: local?.plan_id ?? undefined,
   };
   if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
+    const ps = await resolvePaidStatusForOrder(trimmed);
+    const providerPaid = isPaymentCompletedStatus(ps);
+    if (!providerPaid && local?.activated_at_ms == null) {
+      return {
+        status: ps || local?.provider_status || 'PENDING',
+        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
+        ...intentMeta,
+      };
+    }
     const act = await ensurePremiumActivatedForPaidOrder(trimmed, {
       publicId: local?.public_id ?? undefined,
       planId: local?.plan_id ?? undefined,
     });
+    if (!providerPaid && !act.activated) {
+      return {
+        status: ps || 'PENDING',
+        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
+        ...intentMeta,
+      };
+    }
     return {
       status: 'COMPLETED',
       resultcode: '000',

@@ -176,6 +176,17 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           _stopPaymentTimersOnly();
           await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
         } else {
+          final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
+          if (recovered && mounted) {
+            _stopPaymentTimersOnly();
+            setState(() {
+              _pollingOrderId = null;
+              _paymentUiPhase = _PaymentUiPhase.none;
+            });
+            _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+            await widget.onPaymentSuccess?.call();
+            return;
+          }
           setState(() {
             _pollingOrderId = pending;
             _paymentUiPhase = _PaymentUiPhase.waiting;
@@ -406,8 +417,28 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           planId: planId ?? '',
           phone: phone ?? '',
         );
-        _stopPaymentTimersOnly();
-        await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
+        if (serverUntil != null) {
+          _stopPaymentTimersOnly();
+          await _markPaymentCompleted(serverPremiumUntilMs: serverUntil);
+          return;
+        }
+        // Paid at provider but premium not granted yet — keep pending prefs and retry via recovery.
+        final recovered = await PremiumRecovery.recoverPendingPaymentIfAny();
+        if (recovered && mounted) {
+          _stopPaymentTimersOnly();
+          setState(() {
+            _pollingOrderId = null;
+            _paymentUiPhase = _PaymentUiPhase.none;
+            _sessionEndDetail = null;
+          });
+          _showStatus(_kPremiumSuccessTitle, _kPremiumSuccessMessage, _PayDialogTone.success);
+          await widget.onPaymentSuccess?.call();
+          return;
+        }
+        await _finalizeSessionTimedOut(
+          detail:
+              'Malipo yamekamilika lakini bado hatujafungua akaunti yako. Fungua programu tena baada ya dakika 1–2 au wasiliana na msaada.',
+        );
         return;
       }
       if (isPaymentTerminalFailure(paymentStatus)) {
