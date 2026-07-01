@@ -7,6 +7,8 @@ class TanzaniaPhone {
   /// All standard TZ mobile NDC blocks: 061–069 and 070–079.
   static final RegExp _mobileLocalRe = RegExp(r'^0(6[1-9]|7[0-9])\d{7}$');
 
+  static const vodacomPrefixes = ['074', '075', '076', '079'];
+
   /// Documented operator prefixes (subset of [_mobileLocalRe]).
   static const knownPrefixes = [
     '061', '062', '063',
@@ -16,7 +18,7 @@ class TanzaniaPhone {
     '068', '069', '078',
     '072',
     '073',
-    '074', '075', '076', '079',
+    ...vodacomPrefixes,
   ];
 
   static bool _isValidLocal(String local0) => _mobileLocalRe.hasMatch(local0);
@@ -55,5 +57,5 @@ class TanzaniaPhone {
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Nambari zote za Tanzania zinakubalika: 061, 062, 063, 065, 068, 071, 072, 075, 076, 077, 078, 079, na zingine 061–079.';
+      'Nambari zote za Tanzania zinakubalika: 061–063, 065, 068, 071, 072, 074–076, 077, 078, 079 (Vodacom: 074, 075, 076, 079).';
 }

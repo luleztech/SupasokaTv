@@ -8,10 +8,13 @@ export const TZ_MOBILE_PREFIXES = [
   '065', '067', '070', '071', '077', // Yas / tiGo (MIC)
   '066', // Smile
   '068', '069', '078', // Airtel
-  '072', // M-Pesa / Vodacom (legacy MO Mobile range; STK via M-Pesa)
+  '072', // MO Mobile (legacy; may use M-Pesa via portability)
   '073', // TTCL
-  '074', '075', '076', '079', // Vodacom
+  '074', '075', '076', '079', // Vodacom M-Pesa
 ] as const;
+
+/** Vodacom Tanzania M-Pesa prefixes (074, 075, 076, 079). */
+export const VODACOM_MPESA_PREFIXES = ['074', '075', '076', '079'] as const;
 
 /** All assigned TZ mobile local numbers: 061–069 and 070–079 (10 digits). */
 export const TZ_MOBILE_LOCAL_RE = /^0(6[1-9]|7[0-9])\d{7}$/;
@@ -50,11 +53,10 @@ export function toLocal0Digits(raw: string): string {
   return s.slice(0, 10);
 }
 
-/** Vodacom M-Pesa numbers: 072 (legacy/portability) and 074–076, 079. */
+/** Vodacom M-Pesa numbers: 074, 075, 076, 079. */
 export function isVodacomMpesaLocalPhone(local0: string): boolean {
   const p = toLocal0Digits(local0);
-  if (p.startsWith('072')) return true;
-  return /^07[45679]/.test(p) && !p.startsWith('078');
+  return VODACOM_MPESA_PREFIXES.some((pre) => p.startsWith(pre));
 }
 
 export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
@@ -64,6 +66,7 @@ export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
   if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) return 'tigo_yas';
   if (p.startsWith('066')) return 'smile';
   if (/^06[89]/.test(p) || p.startsWith('078')) return 'airtel';
+  if (p.startsWith('072')) return 'mo_mobile';
   if (isVodacomMpesaLocalPhone(p)) return 'vodacom';
   if (p.startsWith('073')) return 'ttcl';
   if (isValidTzMobileLocal0(p)) return 'unknown';
@@ -114,7 +117,7 @@ export function normalizePhoneToLocal0(rawPhone: string): NormalizePhoneResult {
   if (!isValidTzMobileLocal0(s)) {
     return {
       error:
-        'Nambari hii si ya simu ya Tanzania. Tumia nambari halali ya ndani (061–069, 071–079), mfano 062, 068, 071, 075, 077, 078.',
+        'Nambari hii si ya simu ya Tanzania. Tumia nambari halali ya ndani (061–069, 070–079), mfano 062, 068, 071, 074, 075, 077, 078, 079.',
     };
   }
 
@@ -150,7 +153,15 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
   const network = detectTzMobileNetwork(toLocal0Digits(local0));
   switch (network) {
     case 'vodacom':
-      return ['MPESA', 'M-PESA', 'VODACOM MPESA', 'VODACOM', 'VODACOMMPESA'];
+    case 'mo_mobile':
+      return [
+        'VODACOMMPESA',
+        'MPESA',
+        'M-PESA',
+        'VODACOM MPESA',
+        'VODACOM',
+        'MPESATZ',
+      ];
     case 'tigo_yas':
       return ['TIGOPESATZ', 'TIGOPESA', 'TIGO PESA', 'MIXX BY YAS', 'MIXX', 'YAS', 'MIC'];
     case 'airtel':

@@ -11,15 +11,17 @@ import {
   detectTzMobileNetwork,
   formatPhoneToIntl255,
   isHalotelLocalPhone,
+  isVodacomMpesaLocalPhone,
   phoneCandidatesForSonicPesaApi,
   sonicChannelHintsForNetwork,
+  toLocal0Digits,
 } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_HTTP_TIMEOUT_MS = 22_000;
 const SONIC_HTTP_RETRY_TIMEOUT_MS = 12_000;
-/** Cap gateway round-trips so the mobile client does not time out before we finish. */
-const MAX_SONIC_CREATE_ATTEMPTS = 8;
+/** Cap gateway round-trips; Vodacom needs a few more channel variants (074–076, 079). */
+const MAX_SONIC_CREATE_ATTEMPTS = 12;
 const SONIC_RETRY_DELAY_MS = 250;
 
 const sonicRetryDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -228,10 +230,19 @@ type SonicCreateAttempt = {
   channel?: string;
 };
 
-/** Best-first phone/channel combos — few attempts, high success rate on first tap. */
+/** Best-first phone/channel combos — network-aware ordering for reliable first-tap STK. */
 function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
+  const local0fmt = toLocal0Digits(localPhone);
+  const network = detectTzMobileNetwork(local0fmt);
   const phones = sonicPhoneCandidatesForApi(localPhone);
-  const channels = sonicChannelHintsForNetwork(localPhone).slice(0, 2);
+  const channelLimit =
+    network === 'vodacom' ||
+    network === 'mo_mobile' ||
+    network === 'halotel' ||
+    network === 'tigo_yas'
+      ? 3
+      : 2;
+  const channels = sonicChannelHintsForNetwork(localPhone).slice(0, channelLimit);
   const intl255 = phones[0] ?? '';
   const local0 = phones.length > 1 ? phones[1]! : '';
   const out: SonicCreateAttempt[] = [];
@@ -244,13 +255,35 @@ function buildSonicCreateAttempts(localPhone: string): SonicCreateAttempt[] {
     out.push(channel ? { buyer_phone, channel } : { buyer_phone });
   };
 
-  if (intl255) add(intl255);
-  for (const channel of channels) {
-    if (intl255) add(intl255, channel);
+  const channelFirst =
+    network === 'vodacom' ||
+    network === 'mo_mobile' ||
+    network === 'halotel' ||
+    network === 'airtel' ||
+    network === 'tigo_yas';
+
+  if (channelFirst) {
+    for (const channel of channels) {
+      if (intl255) add(intl255, channel);
+    }
   }
+
+  if (intl255) add(intl255);
+
+  if (!channelFirst) {
+    for (const channel of channels) {
+      if (intl255) add(intl255, channel);
+    }
+  }
+
   if (local0 && local0 !== intl255) {
+    if (channelFirst) {
+      for (const channel of channels) add(local0, channel);
+    }
     add(local0);
-    for (const channel of channels) add(local0, channel);
+    if (!channelFirst) {
+      for (const channel of channels) add(local0, channel);
+    }
   }
 
   return out;
@@ -307,15 +340,15 @@ export function mapSonicInitiateUserError(
     if (isHalotelLocalPhone(localPhone)) {
       return 'Halopesa (061–063) haikupokea ombi. Hakikisha nambari ni sahihi, una salio, na mtandao wa Halopesa unafanya kazi, kisha jaribu tena.';
     }
-    const network = detectTzMobileNetwork(localPhone);
+    const network = detectTzMobileNetwork(toLocal0Digits(localPhone));
     if (network === 'airtel') {
       return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
     }
     if (network === 'tigo_yas') {
       return 'Hatukuweza kutuma ombi la Tigo/Yas kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na TigoPesa/Mixx inafanya kazi, kisha jaribu tena.';
     }
-    if (network === 'vodacom') {
-      return 'Hatukuweza kutuma ombi la M-Pesa kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na M-Pesa inafanya kazi, kisha jaribu tena.';
+    if (network === 'vodacom' || isVodacomMpesaLocalPhone(localPhone)) {
+      return 'Hatukuweza kutuma ombi la M-Pesa (Vodacom) kwenye simu yako. Hakikisha nambari 074, 075, 076 au 079 ni sahihi, una salio, na M-Pesa inafanya kazi, kisha jaribu tena.';
     }
     return 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi na mtandao wa pesa unafanya kazi, kisha jaribu tena.';
   }
