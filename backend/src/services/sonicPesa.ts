@@ -220,13 +220,12 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
   return false;
 }
 
-/** Docs-compliant MSISDN for buyer_phone: always 255XXXXXXXXX first, national 0… as fallback. */
+/** Phone candidates for SonicPesa buyer_phone: local 0… first, then 255… international. */
 export function sonicBuyerPhonesForApi(localPhone: string): string[] {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
   if (env.sonicSendLocalPhone) return [local0];
-  const out = [intl255];
-  if (local0.startsWith('0') && local0 !== intl255) out.push(local0);
+  const out = [local0, intl255];
   return [...new Set(out.filter(Boolean))];
 }
 
@@ -247,33 +246,36 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa docs: POST create_order with buyer_email, buyer_name, buyer_phone (255…),
- * amount, currency — no channel; gateway auto-sends Push USSD. Fallback: create_order_simple.
+ * Build ordered steps to attempt when creating a SonicPesa order.
+ * Tries local 0-prefix first (most TZ gateways accept this), then international
+ * 255-prefix, for both create_order and create_order_simple endpoints.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
-  const phones = sonicBuyerPhonesForApi(localPhone);
-  const primary = phones[0] ?? formatPhoneToIntl255(localPhone);
-  const steps: SonicCreateStep[] = [
-    {
-      endpoint: 'payment/create_order',
-      buyer_phone: primary,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    },
-    {
-      endpoint: 'payment/create_order_simple',
-      buyer_phone: primary,
-      timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
-    },
-  ];
-  const fallback = phones[1];
-  if (fallback && fallback !== primary) {
-    steps.push({
-      endpoint: 'payment/create_order',
-      buyer_phone: fallback,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    });
+  const local0 = toLocal0Digits(localPhone);
+  const intl255 = formatPhoneToIntl255(local0);
+
+  if (env.sonicSendLocalPhone) {
+    return [
+      { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
+      { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+    ];
   }
-  return steps;
+
+  const steps: SonicCreateStep[] = [
+    // Local 0-prefix first — preferred by most TZ mobile money gateways.
+    { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
+    // International 255-prefix as first fallback.
+    { endpoint: 'payment/create_order', buyer_phone: intl255, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
+    // create_order_simple with local format.
+    { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+    // create_order_simple with international format as last resort.
+    { endpoint: 'payment/create_order_simple', buyer_phone: intl255, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+  ];
+
+  // Deduplicate (local0 === intl255 is impossible for valid TZ numbers but guard anyway).
+  return steps.filter(
+    (s, i, arr) => arr.findIndex((t) => t.endpoint === s.endpoint && t.buyer_phone === s.buyer_phone) === i,
+  );
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -349,7 +351,7 @@ export function mapSonicInitiateUserError(
       `${msg} ${code}`,
     )
   ) {
-    return 'Nambari ya simu si sahihi. Andika tarakimu 9 baada ya 0 (mfano 0 kisha 712345678).';
+    return 'Hatukuweza kutuma ombi kwa nambari hii. Hakikisha unaandika nambari yako kamili ya simu ukianza na 0 (mfano 0712345678), una mtandao wa pesa, na jaribu tena.';
   }
   return msg || 'Malipo hayajatumika. Jaribu tena baada ya muda mfupi.';
 }

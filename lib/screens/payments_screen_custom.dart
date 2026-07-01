@@ -144,9 +144,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     return out;
   }
 
-  bool _phoneValid(String raw) => TanzaniaPhone.isValidLocalBody(raw);
+  bool _phoneValid(String raw) => TanzaniaPhone.isValid(raw);
 
-  String get _cleanPhone => TanzaniaPhone.fromLocalBody(_phoneCtrl.text) ?? '';
+  String get _cleanPhone => TanzaniaPhone.normalize(_phoneCtrl.text) ?? '';
 
   String get _paymentWaitWindowLabel {
     if (_kPaymentWaitSeconds >= 60 && _kPaymentWaitSeconds % 60 == 0) {
@@ -176,9 +176,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
 
     final savedPhone = await UserIdentity.getSavedPhoneNumber();
-    final savedBody = savedPhone != null ? TanzaniaPhone.localBodyDigits(savedPhone) : null;
-    if (savedBody != null && savedBody.length == 9 && mounted) {
-      _phoneCtrl.text = savedBody;
+    final savedLocal = savedPhone != null ? TanzaniaPhone.normalize(savedPhone) : null;
+    if (savedLocal != null && savedLocal.length == 10 && mounted) {
+      _phoneCtrl.text = savedLocal;
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -819,7 +819,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
       _showStatus(
         'Nambari ya simu',
-        'Hakikisha umeandika tarakimu 9 baada ya 0 (mfano 0 kisha 712345678 au 791234567). ${TanzaniaPhone.networksHint()}',
+        'Andika namba yako ya simu ukianza na 0 (tarakimu 10, mfano 0712345678). ${TanzaniaPhone.networksHint()}',
         _PayDialogTone.error,
       );
       return;
@@ -975,7 +975,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
                         const SizedBox(height: 6),
                         Text(
-                          'Andika tarakimu 9 za nambari yako baada ya 0 (usitumie 255). Mfano: 0 + 712345678.',
+                          'Andika namba yako ya simu ukianza na 0 (tarakimu 10). Usitumie 255.',
                           style: const TextStyle(
                             fontSize: 13.5,
                             height: 1.45,
@@ -997,39 +997,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                           ),
                           child: Row(
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.only(left: 16),
-                                child: Icon(
-                                  Icons.phone_iphone_rounded,
-                                  color: _phoneOk ? _accentCta : _payMuted,
-                                  size: 22,
-                                ),
-                              ),
-                              Container(
-                                margin: const EdgeInsets.symmetric(vertical: 14),
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.06),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: _payLine),
-                                ),
-                                child: const Text(
-                                  '0',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                              ),
                               Expanded(
                                 child: TextField(
                                   controller: _phoneCtrl,
                                   keyboardType: TextInputType.number,
                                   inputFormatters: [
                                     FilteringTextInputFormatter.digitsOnly,
-                                    LengthLimitingTextInputFormatter(9),
+                                    LengthLimitingTextInputFormatter(10),
                                   ],
                                   style: const TextStyle(
                                     color: Colors.white,
@@ -1039,13 +1013,21 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                   ),
                                   decoration: InputDecoration(
                                     border: InputBorder.none,
-                                    hintText: '712345678',
+                                    hintText: '0712345678',
                                     hintStyle: TextStyle(
                                       color: _payMuted.withValues(alpha: 0.65),
                                       fontWeight: FontWeight.w500,
                                     ),
                                     counterText: '',
-                                    contentPadding: const EdgeInsets.fromLTRB(12, 20, 12, 20),
+                                    contentPadding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
+                                    prefixIcon: Padding(
+                                      padding: const EdgeInsets.only(left: 4),
+                                      child: Icon(
+                                        Icons.phone_iphone_rounded,
+                                        color: _phoneOk ? _accentCta : _payMuted,
+                                        size: 22,
+                                      ),
+                                    ),
                                   ),
                                   onChanged: (_) {
                                     setState(() {

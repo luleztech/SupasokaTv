@@ -90,5 +90,5 @@ class TanzaniaPhone {
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Nambari zote za Tanzania zinakubalika: 061–063, 065, 068, 071, 072, 074–076, 077, 078, 079 (Vodacom: 074, 075, 076, 079).';
+      'Nambari zote za Tanzania zinakubalika (061–079). Mfano: Tigo 071/077, Vodacom 074/076/079, Airtel 068/078, Halopesa 062, na nyingine.';
 }
