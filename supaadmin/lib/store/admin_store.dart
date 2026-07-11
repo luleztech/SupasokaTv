@@ -1247,18 +1247,29 @@ class AdminStore extends ChangeNotifier {
     await _saveLocalConfigOnly();
   }
 
+  /// Deletes the user (and their subscription) on the server first — only then
+  /// drops them from the local list. Previously the local removal happened
+  /// unconditionally even if the backend call failed, so the user vanished
+  /// from the admin list while staying fully subscribed server-side.
   Future<void> deleteUser(String id) async {
     if (hasAdminSession) {
       final base = resolvedApiBaseUrl;
       final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(id)}');
       try {
-        await http
+        final res = await http
             .delete(
               uri,
               headers: _authHeaders(),
             )
             .timeout(const Duration(seconds: 25));
-      } catch (_) {}
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          _snack('Kufuta mtumiaji kumeshindikana (${res.statusCode}). Jaribu tena.');
+          return;
+        }
+      } catch (e) {
+        _snack('Kufuta mtumiaji kumeshindikana: ${adminFormatError(e)}');
+        return;
+      }
     }
     _config.users.removeWhere((u) => u.id == id);
     await _saveLocalConfigOnly();

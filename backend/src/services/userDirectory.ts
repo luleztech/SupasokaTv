@@ -84,6 +84,21 @@ export async function deleteUserById(id: string): Promise<boolean> {
   }
   const trimmed = id.trim();
   if (!trimmed) return false;
+
+  // Neutralize any not-yet-activated payment intents first. Deleting the user
+  // row also erases its `premium_revoked` lock note, so a leftover pending (or
+  // paid-but-not-yet-activated) intent would otherwise let
+  // reconcilePremiumForUser silently re-grant premium the next time this
+  // device/public id checks in — making the delete look like it "worked" in
+  // the admin list while the subscription quietly comes back.
+  const { ensurePaymentIntentsTable } = await import('./paymentIntents');
+  await ensurePaymentIntentsTable();
+  await pool.query(
+    `UPDATE payment_intents SET activated_at_ms = $2, updated_at = now()
+     WHERE public_id = $1 AND activated_at_ms IS NULL`,
+    [trimmed, Date.now()],
+  );
+
   const res = await pool.query(`DELETE FROM users WHERE id = $1`, [trimmed]);
   return (res.rowCount ?? 0) > 0;
 }

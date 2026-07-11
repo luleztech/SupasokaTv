@@ -60,6 +60,26 @@ function durationMsFromKnownTzAmountTiers(tzs: number): number | null {
 }
 
 /**
+ * Digit+unit quantity, accepting either order ("2 wiki" or "wiki 2"). The two
+ * fields are matched independently so a bare unit word without a number (e.g.
+ * "wiki" alone, meaning "one week") returns null here and is handled by the
+ * caller's singular fallback instead of being coerced to some digit.
+ */
+function matchUnitQuantity(hay: string, unitPattern: string): number | null {
+  const digitFirst = hay.match(new RegExp(`\\b(\\d{1,3})\\s*(?:${unitPattern})\\b`));
+  if (digitFirst) {
+    const n = parseInt(digitFirst[1]!, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const unitFirst = hay.match(new RegExp(`\\b(?:${unitPattern})\\s*(\\d{1,3})\\b`));
+  if (unitFirst) {
+    const n = parseInt(unitFirst[1]!, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+/**
  * Infer premium window from admin-configured malipo copy (id + period + label + amounts).
  * Most specific patterns first.
  */
@@ -73,15 +93,19 @@ export function inferDurationMsFromMalipoRow(row: MalipoPlanRow): number {
     return 90 * MS_DAY;
   }
 
-  const hay = `${row.id} ${row.period} ${row.label} ${row.amount} ${row.price_lines}`.toLowerCase();
+  /**
+   * Fields are joined with a non-whitespace separator on purpose: joining with
+   * plain spaces let a trailing digit from one field (e.g. period's "...siku 7")
+   * bind to a unit word starting the next field (label's "wiki 1..."), producing
+   * a bogus "7 wiki" match worth 49 days for what was actually a 1-week plan.
+   * The "|" blocks `\s*` from bridging across field boundaries.
+   */
+  const hay = `${row.id} | ${row.period} | ${row.label} | ${row.amount} | ${row.price_lines}`.toLowerCase();
 
   // --- Years ---
   if (/\b(yearly|annual|mwaka|miaka\s*\d+|year)\b/.test(hay)) {
-    const y = hay.match(/\b(\d{1,2})\s*(year|years|mwaka|miaka)\b/);
-    if (y) {
-      const n = parseInt(y[1]!, 10);
-      if (Number.isFinite(n) && n > 0) return n * 365 * MS_DAY;
-    }
+    const n = matchUnitQuantity(hay, 'year|years|mwaka|miaka');
+    if (n != null) return n * 365 * MS_DAY;
     return 365 * MS_DAY;
   }
 
@@ -92,11 +116,8 @@ export function inferDurationMsFromMalipoRow(row: MalipoPlanRow): number {
   ) {
     return 90 * MS_DAY;
   }
-  const mieziN = hay.match(/\b(\d{1,2})\s*miezi\b/);
-  if (mieziN) {
-    const n = parseInt(mieziN[1]!, 10);
-    if (Number.isFinite(n) && n > 0) return n * 30 * MS_DAY;
-  }
+  const mieziN = matchUnitQuantity(hay, 'miezi');
+  if (mieziN != null) return mieziN * 30 * MS_DAY;
 
   // --- Single month ---
   if (/\b(mwezi\s*mmoja|mwezi\s*1|1\s*mwezi|monthly|one\s*month|1\s*month)\b/.test(hay)) {
@@ -107,28 +128,19 @@ export function inferDurationMsFromMalipoRow(row: MalipoPlanRow): number {
   }
 
   // --- Weeks ---
-  const wikiN = hay.match(/\b(\d{1,2})\s*(wiki|weeks?)\b/);
-  if (wikiN) {
-    const n = parseInt(wikiN[1]!, 10);
-    if (Number.isFinite(n) && n > 0) return n * 7 * MS_DAY;
-  }
+  const wikiN = matchUnitQuantity(hay, 'wiki|weeks?');
+  if (wikiN != null) return wikiN * 7 * MS_DAY;
   if (/\b(weekly|wiki\s*moja|wiki|week)\b/.test(hay)) {
     return 7 * MS_DAY;
   }
 
   // --- Days ---
-  const sikuN = hay.match(/\b(\d{1,3})\s*(siku|days?)\b/);
-  if (sikuN) {
-    const n = parseInt(sikuN[1]!, 10);
-    if (Number.isFinite(n) && n > 0) return n * MS_DAY;
-  }
+  const sikuN = matchUnitQuantity(hay, 'siku|days?');
+  if (sikuN != null) return sikuN * MS_DAY;
 
   // --- Hours (masaa / saa) ---
-  const hourM = hay.match(/\b(\d{1,3})\s*(masaa|saa|hours?|hrs?)\b/);
-  if (hourM) {
-    const n = parseInt(hourM[1]!, 10);
-    if (Number.isFinite(n) && n > 0) return n * MS_HOUR;
-  }
+  const hourM = matchUnitQuantity(hay, 'masaa|saa|hours?|hrs?');
+  if (hourM != null) return hourM * MS_HOUR;
 
   // --- Fallback: infer from displayed TZS (admin prices) ---
   const tier = tzPrimary != null ? durationMsFromKnownTzAmountTiers(tzPrimary) : null;
