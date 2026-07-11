@@ -95,9 +95,9 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
       img: _imgCtrl.text.trim(),
     );
     if (widget.existing == null) {
-      await widget.store.addCarousel(dto);
+      widget.store.addCarousel(dto);
     } else {
-      await widget.store.upsertCarousel(widget.index, dto);
+      widget.store.upsertCarousel(widget.index, dto);
     }
     if (mounted) Navigator.of(context).pop();
   }
@@ -112,7 +112,6 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
       _channelId = channels.first.id;
     }
 
-    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Container(
@@ -318,20 +317,15 @@ class _CarouselSlideBodyState extends State<_CarouselSlideBody> {
                     ],
                     const SizedBox(height: 28),
                     FilledButton(
-                      onPressed: saving ? null : _save,
+                      onPressed: _save,
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: saving
-                          ? const SizedBox(
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : Text(
-                              isNew ? 'Add slide' : 'Save slide',
-                              style: const TextStyle(fontWeight: FontWeight.w800),
-                            ),
+                      child: Text(
+                        isNew ? 'Add slide' : 'Save slide',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
                     const SizedBox(height: 8),
                   ],

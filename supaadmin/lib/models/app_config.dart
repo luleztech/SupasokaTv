@@ -119,7 +119,14 @@ class AppConfig {
     );
   }
 
-  String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
+  String toJsonString() => jsonEncode(toJson());
+
+  /// Catalog-only payload for bulk sync — skips notification log (server ignores it).
+  Map<String, dynamic> toCatalogSyncJson() {
+    final j = toJson();
+    j.remove('notificationLog');
+    return j;
+  }
 
   static AppConfig fromJsonString(String s) => AppConfig.fromJson(jsonDecode(s) as Map<String, dynamic>);
 }

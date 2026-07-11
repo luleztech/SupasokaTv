@@ -240,19 +240,24 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   if (!pool) return null;
   await ensurePaymentIntentsTable();
 
+  // Only first-time activation for paid orders that never granted premium (e.g. webhook missed).
+  // Never re-grant from orders that already consumed their one subscription window.
   const res = await pool.query<{ order_id: string }>(
     `SELECT order_id
      FROM payment_intents
      WHERE public_id = $1
+       AND activated_at_ms IS NULL
        AND updated_at > now() - interval '90 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
-     ORDER BY activated_at_ms NULLS FIRST, updated_at DESC
-     LIMIT 10`,
+     ORDER BY updated_at DESC
+     LIMIT 5`,
     [trimmed],
   );
 
   for (const row of res.rows) {
-    const act = await ensurePremiumActivatedForPaidOrder(row.order_id, { publicId: trimmed });
+    const ps = await resolvePaidStatusForOrder(row.order_id);
+    if (!isPaymentCompletedStatus(ps)) continue;
+    const act = await activatePremiumIfCompletedOrder(row.order_id, { publicId: trimmed });
     if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
       return act.premiumUntilMs!;
     }
@@ -315,12 +320,8 @@ export async function activatePremiumIfCompletedOrder(
     if (isPremiumUntilActiveLocal(until)) {
       return { activated: true, premiumUntilMs: until };
     }
-    const ps = await resolvePaidStatusForOrder(orderId);
-    if (!isPaymentCompletedStatus(ps)) {
-      return { activated: false };
-    }
-    const out = await writePremiumForOrder(orderId, identity);
-    return { activated: true, premiumUntilMs: out.premiumUntilMs };
+    // One payment = one subscription window; expired premium is not restored from the same order.
+    return { activated: false };
   }
 
   const ps = await resolvePaidStatusForOrder(orderId);
@@ -330,25 +331,6 @@ export async function activatePremiumIfCompletedOrder(
 
   const out = await writePremiumForOrder(orderId, identity);
   return { activated: true, premiumUntilMs: out.premiumUntilMs };
-}
-
-async function regrantPremiumForPaidOrder(
-  orderId: string,
-  identity: { publicId: string; planId: string; phone: string },
-  reason: string,
-): Promise<{ activated: boolean; premiumUntilMs?: number }> {
-  try {
-    const ps = await resolvePaidStatusForOrder(orderId);
-    if (!isPaymentCompletedStatus(ps)) {
-      return { activated: false };
-    }
-    const out = await writePremiumForOrder(orderId, identity);
-    logger.info({ orderId, publicId: identity.publicId, reason }, 'payment_premium_regranted');
-    return { activated: true, premiumUntilMs: out.premiumUntilMs };
-  } catch (e) {
-    logger.error({ orderId, err: e, reason }, 'payment_regrant_failed');
-    return { activated: false };
-  }
 }
 
 export async function ensurePremiumActivatedForPaidOrder(
@@ -376,13 +358,13 @@ export async function ensurePremiumActivatedForPaidOrder(
   }
 
   if (intent?.activated_at_ms != null) {
-    return regrantPremiumForPaidOrder(trimmed, identity, 'activated_intent_missing_premium');
+    return { activated: false };
   }
 
   const act = await activatePremiumIfCompletedOrder(trimmed, overrides);
   if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) return act;
 
-  return regrantPremiumForPaidOrder(trimmed, identity, 'force_activate');
+  return { activated: false };
 }
 
 export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
@@ -411,6 +393,19 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       return {
         status: ps || local?.provider_status || 'PENDING',
         raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
+        ...intentMeta,
+      };
+    }
+    if (local?.activated_at_ms != null) {
+      const { getUserPremiumStatus } = await import('./userDirectory');
+      const publicId = String(local.public_id ?? '').trim();
+      const existingUntil = publicId ? await getUserPremiumStatus(publicId) : null;
+      return {
+        status: 'COMPLETED',
+        resultcode: '000',
+        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+        activated: isPremiumUntilActiveLocal(existingUntil),
+        premiumUntilMs: existingUntil ?? undefined,
         ...intentMeta,
       };
     }
@@ -492,12 +487,7 @@ export async function confirmPremiumForOrder(args: {
     if (isPremiumUntilActiveLocal(until)) {
       return { premiumUntilMs: until };
     }
-    const ps = await resolvePaidStatusForOrder(orderId);
-    if (!isPaymentCompletedStatus(ps)) {
-      throw new HttpError(409, 'Payment already used for premium', 'ORDER_ALREADY_ACTIVATED');
-    }
-    const out = await writePremiumForOrder(orderId, { publicId, planId, phone });
-    return { premiumUntilMs: out.premiumUntilMs };
+    throw new HttpError(409, 'Payment already used for premium', 'ORDER_ALREADY_ACTIVATED');
   }
 
   if (!tracked?.public_id || !tracked.plan_id) {

@@ -29,9 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     final store = context.read<AdminStore>();
     final error = await store.login(_passwordController.text);
-    if (error == null) {
-      await store.saveRuntimeSyncSettings(jwt: store.runtimeAdminApiKeyForEditing);
-    } else {
+    if (error != null && mounted) {
       setState(() {
         _error = error;
         _loading = false;

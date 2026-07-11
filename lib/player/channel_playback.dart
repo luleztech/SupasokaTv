@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/player/cdn_token_headers.dart';
 import 'package:supasoka/player/playback_helpers.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
 import 'package:supasoka/screens/payment_screen.dart';
@@ -16,6 +17,16 @@ Future<void> _applyUpdatePayload(BuildContext context, Map<String, dynamic>? pay
   if (payload == null) return;
   final store = context.read<ContentStore>();
   await store.applyServerUpdatePayload(payload);
+}
+
+bool _sessionNeedsFreshPlaybackResolve(ApiPlaybackSession session) {
+  if (playbackSessionMissingSecrets(session)) return true;
+  // Direct `tok_` CDN URLs should use the API relay when available.
+  if (CdnTokenHeaders.isTokenizedCdnUrl(session.streamUrl) &&
+      !session.streamUrl.contains('/relay/')) {
+    return true;
+  }
+  return false;
 }
 
 Map<String, dynamic> _channelDataForSession(ApiPlaybackSession session, Channel? channel) {
@@ -32,7 +43,7 @@ Map<String, dynamic> _channelDataForSession(ApiPlaybackSession session, Channel?
     'audioLanguage': session.audioLanguage,
     'audio_language': session.audioLanguage,
     if (channel?.audioLanguage != null) 'channelAudioLanguage': channel!.audioLanguage,
-    'headers': playbackHttpHeaders(session.streamUrl),
+    'headers': mergePlaybackHeaders(session.streamUrl, session.playbackHeaders),
   };
 }
 
@@ -43,7 +54,7 @@ Future<void> _openResolvedPlayback(
 }) async {
   final resolved = sessionWithResolvedAudioLanguage(session, channel);
   final channelData = _channelDataForSession(resolved, channel);
-  final headers = playbackHttpHeaders(resolved.streamUrl);
+  final headers = mergePlaybackHeaders(resolved.streamUrl, resolved.playbackHeaders);
   if (headers.isNotEmpty) {
     channelData['headers'] = headers;
   }
@@ -130,7 +141,8 @@ Future<void> _handlePlaybackResolve(
         await _openResolvedPlayback(context, retry.session!, channel: channel);
         return;
       }
-      if (channel.streamUrl.trim().isNotEmpty) {
+      if (channel.streamUrl.trim().isNotEmpty &&
+          !channelRequiresPlaybackResolve(channel)) {
         await _openQuickFromChannel(context, channel);
         return;
       }
@@ -159,10 +171,25 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
     unawaited(SubscriptionStore.syncPremiumFromBackend());
   }
 
+  final needsSecrets = channelRequiresPlaybackResolve(channel);
+
   final cached = peekCachedPlayback(channel.id);
-  if (cached != null && cached.streamUrl.trim().isNotEmpty) {
+  if (cached != null &&
+      cached.streamUrl.trim().isNotEmpty &&
+      (!needsSecrets || !_sessionNeedsFreshPlaybackResolve(cached))) {
     await _openResolvedPlayback(context, cached, channel: channel);
     unawaited(resolveChannelPlayback(channel.id, bypassCache: !channel.free));
+    return;
+  }
+
+  // DRM channels must use the playback API — public config strips ClearKey / license URLs.
+  if (needsSecrets) {
+    final resolved = await resolveChannelPlayback(
+      channel.id,
+      bypassCache: true,
+    );
+    if (!context.mounted) return;
+    await _handlePlaybackResolve(context, channel, resolved);
     return;
   }
 

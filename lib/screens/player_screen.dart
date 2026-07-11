@@ -139,7 +139,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           drmType: nativeDrmTypeForSession(session),
           clearKeyHex: session.clearKeyKidKey.trim(),
           audioLanguage: session.audioLanguage,
-          headers: playbackHttpHeaders(url),
+          headers: mergePlaybackHeaders(url, session.playbackHeaders),
         );
         if (mounted) Navigator.of(context).pop();
       } catch (_) {

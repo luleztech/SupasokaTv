@@ -22,6 +22,7 @@ class ApiPlaybackSession {
     this.licenseUrl = '',
     this.free = true,
     this.audioLanguage = 'sw',
+    this.playbackHeaders = const {},
   });
 
   final String streamUrl;
@@ -31,6 +32,7 @@ class ApiPlaybackSession {
   final bool free;
   /// Preferred audio track: `sw` (Swahili) | `en` (English).
   final String audioLanguage;
+  final Map<String, String> playbackHeaders;
 }
 
 String normalizePlaybackAudioLanguage(String? raw) {
@@ -62,11 +64,40 @@ ApiPlaybackSession sessionWithResolvedAudioLanguage(
     licenseUrl: session.licenseUrl,
     free: session.free,
     audioLanguage: resolvePlaybackAudioLanguage(session: session, channel: channel),
+    playbackHeaders: session.playbackHeaders,
   );
 }
 
+String _normalizedDrmLabel(String raw) =>
+    raw.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
+
+/// Public channel list omits DRM secrets — those channels need `/playback` first.
+bool channelRequiresPlaybackResolve(Channel channel) {
+  final drm = _normalizedDrmLabel(channel.drm);
+  return drm != 'none' && drm.isNotEmpty;
+}
+
+/// True when a session advertises DRM but is missing keys/license from the API.
+bool playbackSessionMissingSecrets(ApiPlaybackSession session) {
+  final drm = _normalizedDrmLabel(session.drm);
+  switch (drm) {
+    case 'none':
+    case '':
+      return false;
+    case 'clearkey':
+      return session.clearKeyKidKey.trim().isEmpty;
+    case 'widevine':
+    case 'widevinel1':
+    case 'widevinel3':
+    case 'playready':
+      return session.licenseUrl.trim().isEmpty;
+    default:
+      return true;
+  }
+}
+
 String nativeDrmTypeForSession(ApiPlaybackSession session) {
-  final drm = session.drm.trim().toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
+  final drm = _normalizedDrmLabel(session.drm);
   switch (drm) {
     case 'clearkey':
       return session.clearKeyKidKey.trim().isEmpty ? 'NONE' : 'CLEARKEY';
@@ -134,6 +165,17 @@ ApiPlaybackSession? peekCachedPlayback(int channelId) {
   if (cached == null) return null;
   if (DateTime.now().difference(cached.fetchedAt) >= _playbackCacheTtl) return null;
   return cached.session;
+}
+
+Map<String, String> _playbackHeadersFromJson(Object? raw) {
+  if (raw is! Map) return const {};
+  final out = <String, String>{};
+  raw.forEach((key, value) {
+    final k = key.toString().trim();
+    final v = value?.toString().trim() ?? '';
+    if (k.isNotEmpty && v.isNotEmpty) out[k] = v;
+  });
+  return out;
 }
 
 ApiPlaybackSession apiSessionFromChannel(Channel channel) {
@@ -204,6 +246,7 @@ Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
         licenseUrl: (j['licenseUrl'] ?? '').toString(),
         free: j['free'] as bool? ?? true,
         audioLanguage: normalizePlaybackAudioLanguage(j['audioLanguage']?.toString()),
+        playbackHeaders: _playbackHeadersFromJson(j['playbackHeaders']),
       ),
     );
   } catch (_) {

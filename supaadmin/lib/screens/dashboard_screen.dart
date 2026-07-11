@@ -5,16 +5,6 @@ import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
 import '../widgets/stagger_entrance.dart';
 
-String _formatTzs(int amountTzs) {
-  if (amountTzs < 1000) return 'TZS $amountTzs';
-  if (amountTzs < 1000000) {
-    final k = (amountTzs / 1000).toStringAsFixed(1);
-    return 'TZS ${k}K';
-  }
-  final m = (amountTzs / 1000000).toStringAsFixed(1);
-  return 'TZS ${m}M';
-}
-
 String _formatTzsFull(int amountTzs) {
   final s = amountTzs.toString();
   final buf = StringBuffer('TZS ');
@@ -23,28 +13,6 @@ String _formatTzsFull(int amountTzs) {
     buf.write(s[i]);
   }
   return buf.toString();
-}
-
-String _revenueDayLabel(String dayIso, {required String todayDay}) {
-  if (dayIso == todayDay) return 'Leo';
-  final parts = dayIso.split('-');
-  if (parts.length == 3 && todayDay.split('-').length == 3) {
-    final y = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    final d = int.tryParse(parts[2]);
-    final ty = int.tryParse(todayDay.split('-')[0]);
-    final tm = int.tryParse(todayDay.split('-')[1]);
-    final td = int.tryParse(todayDay.split('-')[2]);
-    if (y != null && m != null && d != null && ty != null && tm != null && td != null) {
-      final day = DateTime(y, m, d);
-      final today = DateTime(ty, tm, td);
-      if (today.difference(day).inDays == 1) return 'Jana';
-    }
-  }
-  final parsed = DateTime.tryParse(dayIso);
-  if (parsed == null) return dayIso;
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return '${parsed.day} ${months[parsed.month - 1]} ${parsed.year}';
 }
 
 class DashboardScreen extends StatelessWidget {
@@ -66,14 +34,8 @@ class DashboardScreen extends StatelessWidget {
       _Stat('Pushes', '${c.notificationLog.length}', Icons.notifications_active_rounded, const Color(0xFFeab308)),
     ];
     final payment = store.paymentHealthSummary;
-    final totalPayments = payment['total'] ?? 0;
-    final pendingPayments = payment['pending'] ?? 0;
-    final completedPayments = payment['completed'] ?? 0;
-    final activatedPayments = payment['activated'] ?? 0;
-    final totalCollectionsTzs = payment['totalCollectionsTzs'] ?? 0;
     final todayCollectionsTzs = payment['todayCollectionsTzs'] ?? 0;
     final todayCompleted = payment['todayCompleted'] ?? 0;
-    final dailyRevenue = store.paymentDailyRevenue;
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
@@ -204,7 +166,7 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 9,
@@ -292,159 +254,14 @@ class DashboardScreen extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (dailyRevenue.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Text(
-                        'Siku za hivi karibuni',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.72),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.4,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      ...dailyRevenue.take(7).map((row) {
-                        final day = row['day'] ?? '';
-                        final count = int.tryParse(row['count'] ?? '0') ?? 0;
-                        final total = int.tryParse(row['totalTzs'] ?? '0') ?? 0;
-                        final isToday = day == store.revenueTodayDay;
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  _revenueDayLabel(day, todayDay: store.revenueTodayDay),
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
-                                    color: Colors.white.withValues(alpha: isToday ? 0.95 : 0.72),
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                count == 1 ? '1 txn' : '$count txn',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  color: Colors.white.withValues(alpha: 0.45),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                _formatTzs(total),
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.green.shade300.withValues(alpha: isToday ? 1 : 0.85),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ] else if (!store.loadingPaymentHealth)
+                    if (!store.loadingPaymentHealth && todayCompleted == 0)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          'Hakuna malipo yaliyofanikiwa bado.',
+                          'Hakuna malipo yaliyofanikiwa bado leo.',
                           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                         ),
                       ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          sliver: SliverToBoxAdapter(
-            child: StaggerEntrance(
-              index: 10,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  color: const Color(0xFF12151c),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.monitor_heart_rounded, size: 18),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'Payment Health',
-                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Refresh payment health',
-                          onPressed: store.loadingPaymentHealth ? null : store.refreshPaymentHealth,
-                          icon: const Icon(Icons.refresh_rounded),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      'Total $totalPayments  ·  Pending $pendingPayments  ·  Completed $completedPayments  ·  Activated $activatedPayments',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.65),
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(10),
-                        color: Colors.green.withValues(alpha: 0.15),
-                        border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.trending_up_rounded, color: Colors.green.shade300, size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Total Collections: ${_formatTzs(totalCollectionsTzs)}',
-                              style: TextStyle(
-                                color: Colors.green.shade300,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    if (store.paymentHealthRecent.isEmpty)
-                      Text(
-                        store.loadingPaymentHealth ? 'Loading payment events...' : 'No payment events yet.',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-                      )
-                    else
-                      ...store.paymentHealthRecent.take(5).map(
-                            (r) {
-                              final amountTzs = int.tryParse(r['amountTzs'] ?? '0') ?? 0;
-                              final amountDisplay = amountTzs > 0 ? ' · ${_formatTzs(amountTzs)}' : '';
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: Text(
-                                  '${r['status'] ?? 'PENDING'} · ${r['planId'] ?? '-'} · ${r['publicId'] ?? '-'}$amountDisplay',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white.withValues(alpha: 0.82),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
                   ],
                 ),
               ),

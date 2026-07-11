@@ -65,14 +65,12 @@ class _UserManageSheetState extends State<UserManageSheet> {
     }
   }
 
-  Future<void> _saveNote(AdminStore store) async {
+  void _saveNote(AdminStore store) {
     final u = _user(store);
-    await store.upsertUser(u.copyWith(note: _note.text.trim()));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Maelezo yamehifadhiwa')),
-      );
-    }
+    store.upsertUser(u.copyWith(note: _note.text.trim()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Maelezo yamehifadhiwa')),
+    );
   }
 
   Future<void> _pickEndDate(AdminStore store) async {
@@ -301,13 +299,8 @@ class _UserManageSheetState extends State<UserManageSheet> {
             ),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: saving ? null : () => _saveNote(store),
-              child: saving
-                  ? const SizedBox(
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text('Hifadhi maelezo'),
+              onPressed: () => _saveNote(store),
+              child: const Text('Hifadhi maelezo'),
             ),
           ],
         ),

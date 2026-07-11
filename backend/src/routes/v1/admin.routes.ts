@@ -3,6 +3,17 @@ import { Router } from 'express';
 import { getPool } from '../../db/pool';
 import { fetchAdminExportConfig } from '../../services/adminExport';
 import { importAppConfig } from '../../services/adminImport';
+import {
+  deleteChannelFast,
+  deleteLiveMatchFast,
+  deleteMalipoPlanFast,
+  reorderChannelsFast,
+  replaceCarouselFast,
+  setCustomerCareWhatsappFast,
+  upsertChannelFast,
+  upsertLiveMatchFast,
+  upsertMalipoPlanFast,
+} from '../../services/adminCatalog';
 import { importAppUpdateSettings } from '../../services/appUpdateSettingsImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
@@ -37,6 +48,109 @@ adminRouter.get('/export', requireAdmin, async (_req, res, next) => {
 adminRouter.post('/import', requireAdmin, async (req, res, next) => {
   try {
     await importAppConfig(req.body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/channels/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const body = { ...(req.body as Record<string, unknown>), id };
+    await upsertChannelFast(body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.post('/channels', requireAdmin, async (req, res, next) => {
+  try {
+    await upsertChannelFast(req.body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.delete('/channels/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const deleted = await deleteChannelFast(Number(req.params.id));
+    res.json({ ok: true, deleted });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/channels/reorder', requireAdmin, async (req, res, next) => {
+  try {
+    const ids = (req.body as { ids?: unknown })?.ids;
+    if (!Array.isArray(ids)) {
+      res.status(400).json({ ok: false, error: 'ids array required' });
+      return;
+    }
+    await reorderChannelsFast(ids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/carousel', requireAdmin, async (req, res, next) => {
+  try {
+    const slides = (req.body as { slides?: unknown })?.slides;
+    await replaceCarouselFast(Array.isArray(slides) ? slides : []);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/malipo-plans/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    const body = { ...(req.body as Record<string, unknown>), id };
+    await upsertMalipoPlanFast(body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.delete('/malipo-plans/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const deleted = await deleteMalipoPlanFast(String(req.params.id ?? ''));
+    res.json({ ok: true, deleted });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/live-matches/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const body = { ...(req.body as Record<string, unknown>), id };
+    await upsertLiveMatchFast(body);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.delete('/live-matches/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const deleted = await deleteLiveMatchFast(Number(req.params.id));
+    res.json({ ok: true, deleted });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminRouter.put('/settings/customer-care', requireAdmin, async (req, res, next) => {
+  try {
+    const raw = (req.body as { customerCareWhatsapp?: unknown })?.customerCareWhatsapp;
+    await setCustomerCareWhatsappFast(raw);
     res.json({ ok: true });
   } catch (e) {
     next(e);

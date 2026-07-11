@@ -96,7 +96,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     }
     HapticFeedback.mediumImpact();
     final clearKey = _drm == 'clearkey' ? _clearKeyCtrl.text.trim() : '';
-    await widget.store.upsertChannel(
+    widget.store.upsertChannel(
       ChannelDto(
         id: id,
         name: _nameCtrl.text.trim(),
@@ -120,7 +120,6 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final isNew = widget.existing == null;
 
-    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Container(
@@ -375,17 +374,12 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     ),
                     const SizedBox(height: 28),
                     FilledButton(
-                      onPressed: saving ? null : _save,
+                      onPressed: _save,
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: saving
-                          ? const SizedBox(
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Text('Save channel', style: TextStyle(fontWeight: FontWeight.w800)),
+                      child: const Text('Save channel', style: TextStyle(fontWeight: FontWeight.w800)),
                     ),
                     const SizedBox(height: 8),
                   ],

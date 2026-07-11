@@ -95,7 +95,7 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
     final id = int.tryParse(_idCtrl.text.trim()) ?? widget.store.nextLiveId();
     final matchTime = _timeCtrl.text.trim().isEmpty ? null : _timeCtrl.text.trim();
     HapticFeedback.mediumImpact();
-    await widget.store.upsertLive(
+    widget.store.upsertLive(
       LiveMatchDto(
         id: id,
         title: title,
@@ -115,7 +115,6 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
     final channels = widget.store.config.channels;
     final selected = _channelById(channels, _channelId) ?? (channels.isEmpty ? null : channels.first);
 
-    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: Container(
@@ -310,20 +309,15 @@ class _LiveMatchBodyState extends State<_LiveMatchBody> {
                     ),
                     const SizedBox(height: 28),
                     FilledButton(
-                      onPressed: channels.isEmpty || saving ? null : _save,
+                      onPressed: channels.isEmpty ? null : _save,
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: saving
-                          ? const SizedBox(
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : Text(
-                              isNew ? 'Ongeza mechi' : 'Hifadhi mabadiliko',
-                              style: const TextStyle(fontWeight: FontWeight.w800),
-                            ),
+                      child: Text(
+                        isNew ? 'Ongeza mechi' : 'Hifadhi mabadiliko',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
                     const SizedBox(height: 8),
                   ],

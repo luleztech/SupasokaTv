@@ -149,6 +149,114 @@ class AdminStore extends ChangeNotifier {
     };
   }
 
+  Timer? _channelReorderTimer;
+  Timer? _carouselReorderTimer;
+
+  bool _httpOk(http.Response res) => res.statusCode >= 200 && res.statusCode < 300;
+
+  Future<bool> _putJson(
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    if (!hasAdminSession) return false;
+    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
+    try {
+      final res = await http
+          .put(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode(body),
+          )
+          .timeout(timeout);
+      return _httpOk(res);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _postJson(
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    if (!hasAdminSession) return false;
+    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
+    try {
+      final res = await http
+          .post(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode(body),
+          )
+          .timeout(timeout);
+      return _httpOk(res);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _deleteApi(String path, {Duration timeout = const Duration(seconds: 12)}) async {
+    if (!hasAdminSession) return false;
+    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
+    try {
+      final res = await http
+          .delete(uri, headers: _authHeaders())
+          .timeout(timeout);
+      return _httpOk(res);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Saves locally immediately, pushes to server in background (fast endpoints first).
+  Future<void> _saveLocalThenBackground(Future<bool> Function() push) async {
+    _normalizeConfigForServer();
+    await _saveLocalConfigOnly();
+    if (!hasAdminSession) return;
+    unawaited(_runBackgroundSync(push));
+  }
+
+  Future<void> _runBackgroundSync(Future<bool> Function() push) async {
+    final ok = await push();
+    if (!ok) {
+      await _pushConfigToServer();
+    }
+  }
+
+  Future<bool> _pushChannelUpsert(ChannelDto c) =>
+      _putJson('/api/v1/admin/channels/${c.id}', c.toJson());
+
+  Future<bool> _pushChannelDelete(int id) =>
+      _deleteApi('/api/v1/admin/channels/$id');
+
+  Future<bool> _pushChannelReorder() => _putJson(
+        '/api/v1/admin/channels/reorder',
+        {'ids': _config.channels.map((c) => c.id).toList()},
+      );
+
+  Future<bool> _pushCarouselReplace() => _putJson(
+        '/api/v1/admin/carousel',
+        {'slides': _config.carousel.map((s) => s.toJson()).toList()},
+      );
+
+  Future<bool> _pushMalipoUpsert(MalipoPlanDto m) =>
+      _putJson('/api/v1/admin/malipo-plans/${Uri.encodeComponent(m.id)}', m.toJson());
+
+  Future<bool> _pushMalipoDelete(String id) =>
+      _deleteApi('/api/v1/admin/malipo-plans/${Uri.encodeComponent(id)}');
+
+  Future<bool> _pushLiveUpsert(LiveMatchDto m) =>
+      _putJson('/api/v1/admin/live-matches/${m.id}', m.toJson());
+
+  Future<bool> _pushLiveDelete(int id) =>
+      _deleteApi('/api/v1/admin/live-matches/$id');
+
+  Future<bool> _pushCustomerCareWhatsapp() => _putJson(
+        '/api/v1/admin/settings/customer-care',
+        {'customerCareWhatsapp': _config.customerCareWhatsapp},
+      );
+
   Future<Map<String, dynamic>?> _readAppUpdatePrefs() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefsKeyAppUpdate);
@@ -311,6 +419,8 @@ class AdminStore extends ChangeNotifier {
   @override
   void dispose() {
     _syncRetryTimer?.cancel();
+    _channelReorderTimer?.cancel();
+    _carouselReorderTimer?.cancel();
     super.dispose();
   }
 
@@ -614,8 +724,11 @@ class AdminStore extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Public sync method to push all changes to server.
+  /// Public sync method — full catalog push (manual dashboard sync).
   Future<void> syncToServer() async {
+    if (hasAdminSession) {
+      await _mergeRegisteredUsersFromApi();
+    }
     await _pushConfigToServer();
   }
 
@@ -645,7 +758,7 @@ class AdminStore extends ChangeNotifier {
                 ..._authHeaders(contentType: 'application/json'),
                 'Cache-Control': 'no-cache',
               },
-              body: jsonEncode(_config.toJson()),
+              body: jsonEncode(_config.toCatalogSyncJson()),
             )
             .timeout(const Duration(seconds: 45));
         break;
@@ -680,13 +793,10 @@ class AdminStore extends ChangeNotifier {
 
   Future<void> _persist() async {
     _normalizeConfigForServer();
+    await _saveLocalConfigOnly();
     if (hasAdminSession) {
-      await _mergeRegisteredUsersFromApi();
+      await _pushConfigToServer();
     }
-    final p = await SharedPreferences.getInstance();
-    await p.setString(_prefsKey, _config.toJsonString());
-    notifyListeners();
-    await _pushConfigToServer();
   }
 
   Future<void> _saveLocalConfigOnly() async {
@@ -709,7 +819,7 @@ class AdminStore extends ChangeNotifier {
 
   Future<void> setCustomerCareWhatsapp(String raw) async {
     _config.customerCareWhatsapp = normalizeCustomerCareWhatsapp(raw);
-    await _persist();
+    await _saveLocalThenBackground(_pushCustomerCareWhatsapp);
   }
 
   Future<void> setAppUpdatePolicy({
@@ -757,19 +867,25 @@ class AdminStore extends ChangeNotifier {
     } else {
       _config.channels.add(c);
     }
-    await _persist();
+    await _saveLocalThenBackground(() => _pushChannelUpsert(c));
   }
 
   Future<void> deleteChannel(int id) async {
     _config.channels.removeWhere((c) => c.id == id);
-    await _persist();
+    await _saveLocalThenBackground(() => _pushChannelDelete(id));
   }
 
   Future<void> reorderChannels(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1;
     final item = _config.channels.removeAt(oldIndex);
     _config.channels.insert(newIndex, item);
-    await _persist();
+    _normalizeConfigForServer();
+    await _saveLocalConfigOnly();
+    _channelReorderTimer?.cancel();
+    _channelReorderTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!hasAdminSession) return;
+      unawaited(_runBackgroundSync(_pushChannelReorder));
+    });
   }
 
   int nextChannelId() {
@@ -783,26 +899,31 @@ class AdminStore extends ChangeNotifier {
     } else {
       _config.carousel.add(slide);
     }
-    await _persist();
+    await _saveLocalThenBackground(_pushCarouselReplace);
   }
 
   Future<void> removeCarouselAt(int index) async {
     if (index >= 0 && index < _config.carousel.length) {
       _config.carousel.removeAt(index);
-      await _persist();
+      await _saveLocalThenBackground(_pushCarouselReplace);
     }
   }
 
   Future<void> addCarousel(CarouselDto slide) async {
     _config.carousel.add(slide);
-    await _persist();
+    await _saveLocalThenBackground(_pushCarouselReplace);
   }
 
   Future<void> reorderCarousel(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1;
     final item = _config.carousel.removeAt(oldIndex);
     _config.carousel.insert(newIndex, item);
-    await _persist();
+    await _saveLocalConfigOnly();
+    _carouselReorderTimer?.cancel();
+    _carouselReorderTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!hasAdminSession) return;
+      unawaited(_runBackgroundSync(_pushCarouselReplace));
+    });
   }
 
   Future<void> upsertPackage(PackageDto p) async {
@@ -827,12 +948,12 @@ class AdminStore extends ChangeNotifier {
     } else {
       _config.malipoPlans.add(m);
     }
-    await _persist();
+    await _saveLocalThenBackground(() => _pushMalipoUpsert(m));
   }
 
   Future<void> deleteMalipo(String id) async {
     _config.malipoPlans.removeWhere((m) => m.id == id);
-    await _persist();
+    await _saveLocalThenBackground(() => _pushMalipoDelete(id));
   }
 
   Future<void> upsertLive(LiveMatchDto m) async {
@@ -843,12 +964,12 @@ class AdminStore extends ChangeNotifier {
       _config.liveMatches.add(m);
       _config.liveMatches.sort((a, b) => a.id.compareTo(b.id));
     }
-    await _persist();
+    await _saveLocalThenBackground(() => _pushLiveUpsert(m));
   }
 
   Future<void> deleteLive(int id) async {
     _config.liveMatches.removeWhere((m) => m.id == id);
-    await _persist();
+    await _saveLocalThenBackground(() => _pushLiveDelete(id));
   }
 
   int nextLiveId() {
@@ -1123,7 +1244,7 @@ class AdminStore extends ChangeNotifier {
     } else {
       _config.users.add(u);
     }
-    await _persist();
+    await _saveLocalConfigOnly();
   }
 
   Future<void> deleteUser(String id) async {
@@ -1140,7 +1261,7 @@ class AdminStore extends ChangeNotifier {
       } catch (_) {}
     }
     _config.users.removeWhere((u) => u.id == id);
-    await _persist();
+    await _saveLocalConfigOnly();
   }
 
   Future<void> addUserPremiumDuration(String userId, Duration duration) async {
@@ -1155,8 +1276,7 @@ class AdminStore extends ChangeNotifier {
       if (ex.isAfter(now)) start = ex;
     }
     final end = start.add(duration);
-    _config.users[i] = u.copyWith(premiumUntilMs: end.millisecondsSinceEpoch);
-    await _persist();
+    await setUserPremiumUntil(userId, end);
   }
 
   Future<void> setUserPremiumUntil(String userId, DateTime? endUtc) async {

@@ -175,8 +175,8 @@ class PremiumRecovery {
 
     final createdAtMs = prefs.getInt(_pendingCreatedAtKey);
     if (createdAtMs == null || createdAtMs <= 0) {
-      // Backward compatibility: old pending records had no timestamp.
-      return true;
+      await _clearPendingOrderPrefs();
+      return false;
     }
     final ageMs = DateTime.now().millisecondsSinceEpoch - createdAtMs;
     if (ageMs <= maxAge.inMilliseconds) return true;

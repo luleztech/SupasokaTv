@@ -8,7 +8,8 @@ import {
   stripCatalogForForcedUpdate,
 } from '../../services/appUpdatePolicy';
 import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../services/playbackAccess';
-import { registerPublicUser, getUserPremiumRecord } from '../../services/userDirectory';
+import { proxyRelayRequest } from '../../services/streamRelay';
+import { registerPublicUser, getUserPremiumRecord, getUserPremiumStatus } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
   ensurePaymentIntentsTable,
@@ -132,6 +133,24 @@ publicRouter.get('/playback/:channelId', async (req, res, next) => {
   }
 });
 
+/** Proxies token-bound CDN manifests/segments (Azam/Nagra `tok_` URLs). */
+publicRouter.get('/relay/:channelId/*', async (req, res, next) => {
+  try {
+    const channelId = Number(req.params.channelId);
+    if (!Number.isFinite(channelId) || channelId <= 0) {
+      res.status(400).json({ ok: false, error: 'Invalid channel id' });
+      return;
+    }
+    const prefix = `/relay/${channelId}/`;
+    const path = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
+    const suffix = path.length > 0 ? path : 'manifest';
+    res.setHeader('Cache-Control', 'no-store');
+    await proxyRelayRequest(channelId, suffix, req, res);
+  } catch (e) {
+    next(e);
+  }
+});
+
 /** Lightweight viewer poll: same sync cursor as full `/config` without heavy joins. */
 publicRouter.get('/config-meta', async (req, res, next) => {
   try {
@@ -171,9 +190,9 @@ publicRouter.post('/register-user', async (req, res, next) => {
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
     const userId = String(req.params.userId ?? '').trim();
-    const reconciled = await reconcilePremiumForUser(userId);
+    await reconcilePremiumForUser(userId);
     const out = await getUserPremiumRecord(userId);
-    const premiumUntilMs = reconciled ?? out.premiumUntilMs;
+    const premiumUntilMs = await getUserPremiumStatus(userId);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

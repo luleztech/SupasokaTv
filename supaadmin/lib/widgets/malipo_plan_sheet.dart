@@ -148,7 +148,7 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
       badge: badgeC.text.trim(),
     );
 
-    await widget.store.upsertMalipo(dto);
+    widget.store.upsertMalipo(dto);
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -160,7 +160,6 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
     final isNew = widget.existing == null;
     final inset = MediaQuery.viewInsetsOf(context).bottom;
 
-    final saving = context.watch<AdminStore>().syncingToServer;
     return Padding(
       padding: EdgeInsets.only(bottom: inset),
       child: Container(
@@ -397,23 +396,17 @@ class _MalipoPlanBodyState extends State<_MalipoPlanBody> {
                         ],
                       ),
                       child: FilledButton(
-                        onPressed: saving ? null : _save,
+                        onPressed: _save,
                         style: FilledButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           backgroundColor: Colors.transparent,
                           shadowColor: Colors.transparent,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                         ),
-                        child: saving
-                            ? const SizedBox(
-                                height: 22,
-                                width: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
-                              )
-                            : Text(
-                                isNew ? 'Hifadhi mpango' : 'Hifadhi mabadiliko',
-                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.3),
-                              ),
+                        child: Text(
+                          isNew ? 'Hifadhi mpango' : 'Hifadhi mabadiliko',
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.3),
+                        ),
                       ),
                     ),
                   ],

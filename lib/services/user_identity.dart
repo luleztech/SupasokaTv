@@ -3,11 +3,26 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 
 const _prefsPublicId = 'supasoka_public_user_id';
 const _prefsPublicPhone = 'supasoka_public_user_phone';
+const _prefsInstallMs = 'supasoka_install_time_ms';
+
+/// Keys cleared on reinstall so identity and subscription never survive a fresh install.
+const _identityResetKeys = <String>[
+  _prefsPublicId,
+  _prefsPublicPhone,
+  'supasoka_premium_until_ms',
+  'supasoka_premium_plan_id',
+  'pendingPaymentOrderId',
+  'pendingPaymentPlanId',
+  'pendingPaymentPhone',
+  'pendingPaymentProvider',
+  'pendingPaymentCreatedAtMs',
+];
 
 /// Suffix charset aligned with backend `^User-[A-Za-z2-9]{5}$` (no 0/O/1/l ambiguity).
 const _suffixChars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -17,9 +32,35 @@ String _randomSuffix5() {
   return List.generate(5, (_) => _suffixChars[r.nextInt(_suffixChars.length)]).join();
 }
 
-/// Stable viewer id: `User-xxxxx` (unique suffix). Persisted locally; registered on the API when online.
+/// Stable viewer id: `User-xxxxx` (unique suffix). New id on every app reinstall.
 class UserIdentity {
   UserIdentity._();
+
+  /// Detect reinstall (or backup restore after reinstall) and wipe prior identity/subscription prefs.
+  /// Call once at cold start before reading premium from local storage.
+  static Future<bool> resetIdentityIfFreshInstall() async {
+    final p = await SharedPreferences.getInstance();
+    final info = await PackageInfo.fromPlatform();
+    final installMs = info.installTime?.millisecondsSinceEpoch;
+    if (installMs == null) return false;
+
+    final storedInstallMs = p.getInt(_prefsInstallMs);
+    if (storedInstallMs != null && storedInstallMs != installMs) {
+      for (final key in _identityResetKeys) {
+        await p.remove(key);
+      }
+      await p.setInt(_prefsInstallMs, installMs);
+      if (kDebugMode) {
+        debugPrint('UserIdentity: fresh install detected — new user id will be issued');
+      }
+      return true;
+    }
+
+    if (storedInstallMs == null) {
+      await p.setInt(_prefsInstallMs, installMs);
+    }
+    return false;
+  }
 
   /// Returns existing `User-xxxxx` or creates and persists a new one.
   static Future<String> getOrCreatePublicId() async {

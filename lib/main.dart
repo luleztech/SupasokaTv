@@ -37,6 +37,7 @@ Future<void> main() async {
     statusBarBrightness: Brightness.dark,
   ));
   // Keep only fast local reads before first frame — Firebase + network sync runs after [runApp].
+  await UserIdentity.resetIdentityIfFreshInstall();
   final themeController = await ThemeController.load();
   await SubscriptionStore.refreshNotifierFromPrefs();
   final contentStore = ContentStore();

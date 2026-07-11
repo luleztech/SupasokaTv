@@ -141,7 +141,6 @@ class SubscriptionStore {
           : rawUntil is num
               ? rawUntil.toInt()
               : null;
-      final userExists = j['userExists'] == true;
 
       if (premiumUntilMs != null && _isActiveMs(premiumUntilMs)) {
         final p = await SharedPreferences.getInstance();
@@ -156,10 +155,8 @@ class SubscriptionStore {
         return;
       }
 
-      if (userExists) {
-        invalidatePlaybackCache();
-        await clearLocalPremium();
-      }
+      invalidatePlaybackCache();
+      await clearLocalPremium();
     } catch (e) {
       if (kDebugMode) {
         debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');
