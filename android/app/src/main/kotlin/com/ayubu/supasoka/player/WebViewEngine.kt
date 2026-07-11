@@ -39,36 +39,25 @@ class WebViewEngine(
     private var pageFinishRunnable: Runnable? = null
     private val pendingRunnables = mutableListOf<Runnable>()
 
-    private val DESKTOP_USER_AGENT =
-        "ReactNativeVideo/3.0 (Linux;Android 11) ExoPlayerLib/2.10.4"
-
     companion object {
         private const val TAG = "EaMaxAudio"
         private const val QUALITY_TAG = "EaMaxQuality"
     }
 
-    private fun shouldUseWebView(url: String): Boolean {
-        val u = url.trim().lowercase()
-        return u.contains(".php") || u.contains(".html") ||
-            (u.startsWith("http") && !u.contains(".mpd") && !u.contains(".m3u8"))
-    }
-
-    private fun acceptLanguageFor(lang: String): String =
-        if (lang == "en") "en-US,en;q=0.9,sw;q=0.8" else "sw-TZ,sw;q=0.9,en;q=0.8"
+    private fun shouldUseWebView(url: String): Boolean =
+        StreamUrlClassifier.needsWebPlayer(url)
 
     private fun buildLoadHeaders(
         session: StreamSession,
         audioLang: String = preferredAudioLanguage,
     ): Map<String, String> {
         val lang = normalizeAudioLanguage(audioLang)
-        val h = LinkedHashMap(session.headers)
+        val h = PlaybackBrowserHeaders.buildForUrl(session.mpdUrl, session.headers, lang)
         if (session.token.isNotBlank() &&
             !h.keys.any { it.equals("Authorization", ignoreCase = true) }
         ) {
             h["Authorization"] = "Bearer ${session.token}"
         }
-        h["Accept"] = "text/html,application/xhtml+xml,*/*;q=0.8"
-        h["Accept-Language"] = acceptLanguageFor(lang)
         return h
     }
 
@@ -106,7 +95,7 @@ class WebViewEngine(
                     javaScriptCanOpenWindowsAutomatically = true
                     loadWithOverviewMode = true
                     useWideViewPort = true
-                    userAgentString = DESKTOP_USER_AGENT
+                    userAgentString = PlaybackBrowserHeaders.CHROME_MOBILE_UA
                 }
 
                 CookieManager.getInstance().setAcceptCookie(true)

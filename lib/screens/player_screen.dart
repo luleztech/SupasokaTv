@@ -13,6 +13,8 @@ import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
+import 'package:supasoka/player/web_playback_config.dart';
+import 'package:supasoka/player/web_stream_probe.dart';
 import 'package:supasoka/theme/app_theme.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:video_player/video_player.dart';
@@ -61,6 +63,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _useWebView = false;
   /// Resolved playback URL (authoritative); used for retries/fallbacks.
   String _playbackUrl = '';
+  Map<String, String> _playbackHeaders = const {};
   Timer? _webLoadingSafetyTimer;
   /// On web, retry once with WebView when video_player (HLS/DASH) fails.
   bool _webFallbackAttempted = false;
@@ -154,11 +157,42 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     _useWebView = needsWebPlayer;
     if (_useWebView) {
-      await _initWebView(url);
+      final probed = await _probeGatewayDirectUrl(url, session);
+      if (probed != null) {
+        _playbackUrl = probed.url;
+        _playbackHeaders = probed.headers;
+        _useWebView = false;
+        await _initNativePlayer(probed.url);
+      } else {
+        await _initWebView(url);
+      }
     } else {
+      _playbackHeaders = mergePlaybackHeaders(url, session?.playbackHeaders);
       await _initNativePlayer(url);
     }
   }
+
+  Future<({String url, Map<String, String> headers})?> _probeGatewayDirectUrl(
+    String url,
+    ApiPlaybackSession? session,
+  ) async {
+    if (!StreamUrlClassifier.needsWebPlayer(url)) return null;
+    try {
+      final merged = mergePlaybackHeaders(url, session?.playbackHeaders);
+      final config = WebPlaybackConfig(
+        url: url,
+        headers: merged,
+        drmType: session != null ? nativeDrmTypeForSession(session) : 'NONE',
+        licenseUrl: session?.licenseUrl ?? '',
+        clearKeyRaw: session?.clearKeyKidKey ?? '',
+        token: '',
+      );
+      final resolved = await WebStreamProbe.resolve(config);
+      if (resolved.kind == WebResolvedKind.gatewayEmbed) return null;
+      return (url: resolved.playbackUrl, headers: resolved.headers);
+    } catch (_) {
+      return null;
+    }
 
   Future<void> _initWebView(String url) async {
     _webLoadingSafetyTimer?.cancel();
@@ -194,7 +228,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ),
       );
 
-      final headers = playbackHttpHeaders(url);
+      final headers = _playbackHeaders.isNotEmpty
+          ? _playbackHeaders
+          : playbackHttpHeaders(url);
       await controller.loadRequest(
         Uri.parse(url),
         headers: Map<String, String>.from(headers),
@@ -294,7 +330,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final uri = Uri.parse(url);
       final formatHint = _formatHintForUrl(url);
 
-      final headers = playbackHttpHeaders(url);
+      final headers = _playbackHeaders.isNotEmpty
+          ? _playbackHeaders
+          : playbackHttpHeaders(url);
       final video = formatHint != null
           ? VideoPlayerController.networkUrl(uri, formatHint: formatHint, httpHeaders: headers)
           : VideoPlayerController.networkUrl(uri, httpHeaders: headers);

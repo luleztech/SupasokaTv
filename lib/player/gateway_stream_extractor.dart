@@ -48,6 +48,7 @@ class GatewayStreamExtractor {
 
   static GatewayExtracted? extract(String html) {
     if (html.isEmpty) return null;
+    if (looksLikeBotChallenge(html)) return null;
     final blocked = html.trim().toLowerCase() == 'blocked' ||
         (html.length < 200 && html.toLowerCase().contains('blocked'));
     if (blocked) return null;
@@ -218,6 +219,17 @@ class GatewayStreamExtractor {
     } catch (_) {
       return '';
     }
+  }
+
+  static bool looksLikeBotChallenge(String html) {
+    final t = html.toLowerCase();
+    return t.contains('g-recaptcha') ||
+        t.contains('recaptcha') ||
+        t.contains('cf-challenge') ||
+        t.contains('challenge-platform') ||
+        t.contains('just a moment') ||
+        t.contains('verify you are human') ||
+        t.contains('attention required');
   }
 }
 

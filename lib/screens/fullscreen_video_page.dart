@@ -10,6 +10,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../player/flutter_playback_mode.dart';
+import '../player/playback_http_headers.dart';
+import '../player/stream_url_classifier.dart';
 import '../player/stream_url_utils.dart';
 import '../player/web_playback_config.dart';
 import '../player/web_player_html.dart';
@@ -211,6 +213,20 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
   }
 
   Future<void> _initWebView() async {
+    final config = _webPlaybackConfig();
+    if (useWebViewForUrl(widget.videoUrl)) {
+      try {
+        final resolved = await WebStreamProbe.resolve(config);
+        if (resolved.kind != WebResolvedKind.gatewayEmbed) {
+          _webView = true;
+          await _initShakaWebViewWithResolved(resolved);
+          return;
+        }
+      } catch (e, st) {
+        debugPrint('Gateway probe before WebView failed: $e\n$st');
+      }
+    }
+
     _webController = WebViewController();
     // `webview_flutter_web` may not implement `setJavaScriptMode` on all
     // versions/platforms. Don't crash the whole page if it's unimplemented.
@@ -224,8 +240,41 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
     } on UnimplementedError {
       // Some webview_flutter_web versions don't support background color.
     }
+    try {
+      await _webController!.setUserAgent(kBrowserPlaybackUserAgent);
+    } on UnimplementedError {}
     await _guardWebViewNavigation(_webController!);
-    _webController!.loadRequest(Uri.parse(widget.videoUrl));
+    final headers = mergePlaybackHeaders(widget.videoUrl, widget.httpHeaders);
+    await _webController!.loadRequest(
+      Uri.parse(widget.videoUrl),
+      headers: headers,
+    );
+  }
+
+  WebPlaybackConfig _webPlaybackConfig() {
+    return WebPlaybackConfig(
+      url: widget.videoUrl,
+      headers: widget.httpHeaders ?? const {},
+      drmType: widget.drmType ?? 'NONE',
+      licenseUrl: widget.licenseUrl ?? '',
+      clearKeyRaw: widget.clearKeyRaw ?? '',
+      token: widget.playbackToken ?? '',
+    );
+  }
+
+  Future<void> _initShakaWebViewWithResolved(WebStreamProbeResult resolved) async {
+    _webController = WebViewController();
+    try {
+      _webController!.setJavaScriptMode(JavaScriptMode.unrestricted);
+    } on UnimplementedError {
+      if (!kIsWeb) rethrow;
+    }
+    try {
+      _webController!.setBackgroundColor(Colors.black);
+    } on UnimplementedError {}
+    await _guardWebViewNavigation(_webController!);
+    final html = _htmlForProbeResult(resolved);
+    await _webController!.loadHtmlString(html);
   }
 
   /// Keep stream/gateway URLs inside the app — never hand off to VLC/MX/system chooser.

@@ -1,0 +1,196 @@
+package com.ayubu.supasoka.player
+
+import android.util.Base64
+
+/** Decrypted stream payload from PHP / HTML gateway pages. */
+data class GatewayExtracted(
+    val streamUrl: String,
+    val isHls: Boolean = false,
+    val licenseUrl: String = "",
+    val authToken: String = "",
+    val clearKeyRaw: String = "",
+)
+
+object GatewayStreamExtractor {
+    private val streamFields = listOf(
+        "encryptedMpd", "encryptedStream", "encryptedUrl", "encryptedHls",
+        "encryptedDash", "encryptedManifest",
+    )
+    private val licenseFields = listOf(
+        "encryptedLicense", "encryptedLicence", "encryptedDrm", "encryptedWidevine",
+        "encryptedLicenseUrl",
+    )
+    private val tokenFields = listOf("encryptedToken", "encryptedAuth", "encryptedAuthToken")
+    private val keyFields = listOf("keyPart", "key", "xorKey", "decryptKey")
+    private val clearKeyFields = listOf("encryptedClearKey", "encryptedClearKeys", "encryptedKeys")
+
+    fun extract(html: String): GatewayExtracted? {
+        if (html.isBlank()) return null
+        val blocked = html.trim().lowercase() == "blocked" ||
+            (html.length < 200 && html.lowercase().contains("blocked"))
+        if (blocked) return null
+        if (looksLikeBotChallenge(html)) return null
+
+        parseFields(html, requireStream = true)?.let { return it.toExtracted() }
+        extractInlineDrm(html)?.let { return it }
+        return null
+    }
+
+    fun extractDrmFromHtml(html: String, fallbackStreamUrl: String = ""): GatewayExtracted? {
+        parseFields(html, requireStream = false)?.let { fields ->
+            if (fields.licenseUrl.isNotEmpty() || fields.authToken.isNotEmpty() || fields.clearKeyRaw.isNotEmpty()) {
+                val stream = fields.streamUrl.ifBlank { fallbackStreamUrl }
+                if (stream.isNotEmpty()) {
+                    return GatewayExtracted(
+                        streamUrl = stream,
+                        isHls = stream.lowercase().contains(".m3u8"),
+                        licenseUrl = fields.licenseUrl,
+                        authToken = fields.authToken,
+                        clearKeyRaw = fields.clearKeyRaw,
+                    )
+                }
+            }
+        }
+        return extractInlineDrm(html, fallbackStreamUrl)
+    }
+
+    private data class ParsedFields(
+        val streamUrl: String = "",
+        val licenseUrl: String = "",
+        val authToken: String = "",
+        val clearKeyRaw: String = "",
+    ) {
+        fun toExtracted() = GatewayExtracted(
+            streamUrl = streamUrl,
+            isHls = streamUrl.lowercase().contains(".m3u8"),
+            licenseUrl = licenseUrl,
+            authToken = authToken,
+            clearKeyRaw = clearKeyRaw,
+        )
+    }
+
+    private fun parseFields(html: String, requireStream: Boolean): ParsedFields? {
+        val keyPart = pickQuoted(html, keyFields) ?: return null
+        if (keyPart.isEmpty()) return null
+
+        var streamUrl = ""
+        for (name in streamFields) {
+            val enc = pickQuoted(html, listOf(name)) ?: continue
+            if (enc.isEmpty()) continue
+            streamUrl = xorDecrypt(enc, keyPart)
+            if (streamUrl.isNotEmpty()) break
+        }
+        if (requireStream && (streamUrl.isEmpty() || !streamUrl.lowercase().startsWith("http"))) {
+            return null
+        }
+
+        var licenseUrl = ""
+        for (name in licenseFields) {
+            val enc = pickQuoted(html, listOf(name)) ?: continue
+            if (enc.isEmpty()) continue
+            licenseUrl = xorDecrypt(enc, keyPart)
+            if (licenseUrl.isNotEmpty()) break
+        }
+
+        var authToken = ""
+        for (name in tokenFields) {
+            val enc = pickQuoted(html, listOf(name)) ?: continue
+            if (enc.isEmpty()) continue
+            authToken = xorDecrypt(enc, keyPart)
+            if (authToken.isNotEmpty()) break
+        }
+
+        var clearKeyRaw = ""
+        for (name in clearKeyFields) {
+            val enc = pickQuoted(html, listOf(name)) ?: continue
+            if (enc.isEmpty()) continue
+            clearKeyRaw = xorDecrypt(enc, keyPart)
+            if (clearKeyRaw.isNotEmpty()) break
+        }
+
+        return ParsedFields(streamUrl, licenseUrl, authToken, clearKeyRaw)
+    }
+
+    private fun extractInlineDrm(html: String, fallbackStreamUrl: String = ""): GatewayExtracted? {
+        val licenseUrl = extractInlineLicenseUrl(html)
+        var authToken = ""
+        for (name in tokenFields) {
+            val v = pickQuoted(html, listOf(name)) ?: continue
+            if (v.isNotEmpty() && !v.contains('=')) {
+                authToken = v
+                break
+            }
+        }
+        if (licenseUrl.isEmpty() && authToken.isEmpty()) return null
+        val stream = fallbackStreamUrl
+        if (stream.isEmpty() && licenseUrl.isEmpty()) return null
+        return GatewayExtracted(
+            streamUrl = stream,
+            isHls = stream.lowercase().contains(".m3u8"),
+            licenseUrl = licenseUrl,
+            authToken = authToken,
+        )
+    }
+
+    private fun extractInlineLicenseUrl(html: String): String {
+        val patterns = listOf(
+            """['"]com\.widevine\.alpha['"]\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """['"]com\.widevine['"]\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """licenseUrl\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """Lic_?url\s*=\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """(https?://[^\s"'<>]*(?:license|widevine|RightsManager|AcquireLicense|/wv/|/drm/)[^\s"'<>]*)""".toRegex(RegexOption.IGNORE_CASE),
+        )
+        for (re in patterns) {
+            val url = re.find(html)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            if (url.lowercase().startsWith("http") &&
+                !url.lowercase().contains(".js") &&
+                !url.lowercase().contains(".css")
+            ) {
+                return url
+            }
+        }
+        return ""
+    }
+
+    private fun pickQuoted(html: String, names: List<String>): String? {
+        for (name in names) {
+            val escaped = Regex.escape(name)
+            val patterns = listOf(
+                """$escaped[\s=:]+"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE),
+                """$escaped[\s=:]+'([^']+)'""".toRegex(RegexOption.IGNORE_CASE),
+                """["']$escaped["']\s*:\s*"([^"]+)"""".toRegex(RegexOption.IGNORE_CASE),
+                """["']$escaped["']\s*:\s*'([^']+)'""".toRegex(RegexOption.IGNORE_CASE),
+                """$escaped\s*=\s*`([^`]+)`""".toRegex(RegexOption.IGNORE_CASE),
+            )
+            for (re in patterns) {
+                val v = re.find(html)?.groupValues?.getOrNull(1)?.trim()
+                if (!v.isNullOrEmpty()) return v
+            }
+        }
+        return null
+    }
+
+    private fun xorDecrypt(enc: String, key: String): String {
+        if (enc.isEmpty() || key.isEmpty()) return ""
+        return try {
+            val raw = Base64.decode(enc, Base64.DEFAULT)
+            val out = ByteArray(raw.size) { i ->
+                (raw[i].toInt() xor key[i % key.length].code).toByte()
+            }
+            String(out, Charsets.UTF_8).trim()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun looksLikeBotChallenge(html: String): Boolean {
+        val t = html.lowercase()
+        return t.contains("g-recaptcha") ||
+            t.contains("recaptcha") ||
+            t.contains("cf-challenge") ||
+            t.contains("challenge-platform") ||
+            t.contains("just a moment") ||
+            t.contains("verify you are human") ||
+            t.contains("attention required")
+    }
+}
