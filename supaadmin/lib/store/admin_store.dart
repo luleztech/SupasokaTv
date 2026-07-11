@@ -1341,6 +1341,35 @@ class AdminStore extends ChangeNotifier {
     final next = AppConfig.fromJsonString(raw);
     await replaceConfig(next);
   }
+
+  /// Irreversibly revokes premium for every currently-active user, including
+  /// ones with a verified payment. Only call this after an explicit,
+  /// unambiguous admin confirmation — there is no undo.
+  Future<int> revokeAllPremium() async {
+    if (!hasAdminSession) {
+      throw Exception('Not logged in. Please login again.');
+    }
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/maintenance/revoke-all-premium');
+    final res = await http
+        .post(uri, headers: _authHeaders(contentType: 'application/json'))
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      String reason = '';
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded['error'] != null) {
+          reason = '${decoded['error']}';
+        }
+      } catch (_) {}
+      throw Exception(reason.isEmpty ? 'HTTP ${res.statusCode}' : reason);
+    }
+    final decoded = jsonDecode(res.body);
+    final revoked = decoded is Map ? decoded['revoked'] : null;
+    final count = revoked is int ? revoked : int.tryParse('$revoked') ?? 0;
+    await refreshUsersFromServer();
+    return count;
+  }
 }
 
 class ExpiredBatchOutcome {

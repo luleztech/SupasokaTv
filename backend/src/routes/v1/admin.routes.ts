@@ -30,7 +30,7 @@ import {
   setPaymentProvider,
 } from '../../services/paymentProviderSettings';
 import { providerHealthSnapshot } from '../../services/unifiedPayments';
-import { revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
+import { revokeAllActivePremium, revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
 import { fetchPaymentHealth } from '../../services/paymentHealth';
 
 export const adminRouter = Router();
@@ -297,6 +297,20 @@ adminRouter.put('/users/:id/premium', requireAdmin, async (req, res, next) => {
 adminRouter.post('/maintenance/revoke-mistaken-premium', requireAdmin, async (_req, res, next) => {
   try {
     const out = await revokePremiumWithoutVerifiedPayment();
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Revoke active premium for EVERY user, including ones with a verified
+ * payment. Irreversible bulk action — only ever triggered from an explicit,
+ * typed-confirmation admin action.
+ */
+adminRouter.post('/maintenance/revoke-all-premium', requireAdmin, async (_req, res, next) => {
+  try {
+    const out = await revokeAllActivePremium();
     res.json({ ok: true, ...out });
   } catch (e) {
     next(e);

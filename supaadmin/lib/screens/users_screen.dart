@@ -115,6 +115,76 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  /// Irreversible: strips premium from every currently-active subscriber,
+  /// including ones with a verified payment. Requires typing a confirmation
+  /// phrase — a plain Yes/No dialog is too easy to tap through by accident
+  /// for something this destructive and unrecoverable.
+  Future<void> _confirmRevokeAllPremium(
+    BuildContext context,
+    AdminStore store,
+    int premiumCount,
+  ) async {
+    const confirmPhrase = 'FUTA YOTE';
+    final controller = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final match = controller.text.trim() == confirmPhrase;
+          return AlertDialog(
+            title: const Text('Futa premium ya WOTE?'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Hii itamnyang\'anya premium kila mtumiaji mwenye akaunti hai ($premiumCount kwa sasa) — '
+                  'HATA wale waliolipa kihalali. Hatua hii HAIWEZI kutenduliwa.',
+                ),
+                const SizedBox(height: 14),
+                Text('Andika "$confirmPhrase" kuthibitisha:',
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: confirmPhrase,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+                onPressed: match ? () => Navigator.pop(ctx, true) : null,
+                child: const Text('Futa premium ya wote'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    if (ok != true) return;
+    try {
+      final revoked = await store.revokeAllPremium();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Premium imefutwa kwa watumiaji $revoked.')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imeshindikana: ${adminFormatError(e)}')),
+      );
+    }
+  }
+
   Future<void> _sendExpiredReminder(BuildContext context, AdminStore store, UserDto u) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -268,6 +338,18 @@ class _UsersScreenState extends State<UsersScreen> {
                 onPressed: () => _sendExpiredReminderToAll(context, store, expiredForBulk),
                 icon: const Icon(Icons.notifications_active_rounded),
                 label: Text('Tuma ukumbusho — wote walioisha (${expiredForBulk.length})'),
+              ),
+            ),
+          ],
+          if (count(_UserFilter.premium) > 0) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => _confirmRevokeAllPremium(context, store, count(_UserFilter.premium)),
+                style: OutlinedButton.styleFrom(foregroundColor: cs.error, side: BorderSide(color: cs.error)),
+                icon: const Icon(Icons.warning_amber_rounded),
+                label: Text('Futa premium ya WOTE (${count(_UserFilter.premium)})'),
               ),
             ),
           ],
