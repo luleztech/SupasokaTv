@@ -88,7 +88,7 @@ class PremiumRecovery {
       phone: (await UserIdentity.getSavedPhoneNumber()) ?? '',
     );
     final recovered = await recoverPendingPaymentIfAny();
-    await SubscriptionStore.syncPremiumFromBackend();
+    await SubscriptionStore.syncPremiumFromBackend(force: true);
     final active =
         SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     if (active) return true;
@@ -257,7 +257,7 @@ class PremiumRecovery {
         await UserIdentity.registerWithBackend(phone: phone);
       }
 
-      await SubscriptionStore.syncPremiumFromBackend();
+      await SubscriptionStore.syncPremiumFromBackend(force: true);
       await SubscriptionStore.refreshNotifierFromPrefs();
       return SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     } catch (e) {

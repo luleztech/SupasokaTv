@@ -1,7 +1,6 @@
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
 import { playbackHeadersForStreamUrl } from '../lib/cdnTokenHeaders';
-import { relayPlaybackUrl } from './streamRelay';
 import {
   buildAppUpdatePayload,
   fetchAppUpdateSettings,
@@ -31,16 +30,6 @@ export type PlaybackResolveResult =
 
 function isPremiumActive(premiumUntilMs: number | null): boolean {
   return isPremiumUntilActive(premiumUntilMs);
-}
-
-function apiOriginFromRequest(req: {
-  headers: Record<string, unknown>;
-}): string {
-  const proto = String(req.headers['x-forwarded-proto'] ?? 'https').split(',')[0]!.trim();
-  const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
-    .split(',')[0]!
-    .trim();
-  return `${proto}://${host}`;
 }
 
 function normalizeChannelAudioLanguage(raw: unknown): string {
@@ -115,11 +104,13 @@ export async function resolvePlaybackForChannel(
     }
   }
 
+  // Serve the CDN URL directly with required Referer/Origin headers.
+  // Relaying every DASH segment through Railway trips the edge IP rate limit
+  // (429 "rate limited"), which then breaks admin login and other API calls.
   return {
     ok: true,
     session: {
-      streamUrl:
-        relayPlaybackUrl(apiOriginFromRequest(req), channelId, streamUrl) ?? streamUrl,
+      streamUrl,
       drm: String(row.drm ?? 'none'),
       clearKeyKidKey: String(row.clear_key_kid_key ?? ''),
       licenseUrl: '',

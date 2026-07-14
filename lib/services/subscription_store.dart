@@ -20,6 +20,10 @@ class SubscriptionStore {
   static final ValueNotifier<DateTime?> premiumUntilNotifier = ValueNotifier<DateTime?>(null);
 
   static Timer? _localExpiryTimer;
+  static Future<void>? _inflightSync;
+  static DateTime? _lastSyncAttemptAt;
+  static const _minSyncInterval = Duration(seconds: 45);
+  static const _syncTimeout = Duration(seconds: 12);
 
   static void _cancelLocalExpiryTimer() {
     _localExpiryTimer?.cancel();
@@ -109,12 +113,34 @@ class SubscriptionStore {
 
   /// Server is authoritative — use before opening paid channels.
   static Future<bool> syncAndCheckPremiumActive() async {
-    await syncPremiumFromBackend();
+    await syncPremiumFromBackend(force: true);
     return isPremiumActiveLocal();
   }
 
   /// Sync premium status from backend (authoritative for all users).
-  static Future<void> syncPremiumFromBackend() async {
+  ///
+  /// Dedupes concurrent calls and rate-limits to avoid flooding the API
+  /// (timeouts / socket errors under poor network).
+  static Future<void> syncPremiumFromBackend({bool force = false}) async {
+    if (_inflightSync != null) return _inflightSync!;
+
+    final now = DateTime.now();
+    if (!force &&
+        _lastSyncAttemptAt != null &&
+        now.difference(_lastSyncAttemptAt!) < _minSyncInterval) {
+      return;
+    }
+    _lastSyncAttemptAt = now;
+
+    _inflightSync = _syncPremiumFromBackendImpl();
+    try {
+      await _inflightSync;
+    } finally {
+      _inflightSync = null;
+    }
+  }
+
+  static Future<void> _syncPremiumFromBackendImpl() async {
     await purgeExpiredLocalPremium();
 
     final base = apiConfigUrl.trim();
@@ -128,7 +154,7 @@ class SubscriptionStore {
       final res = await http.get(uri, headers: const {
         'Cache-Control': 'no-cache',
         'Accept': 'application/json',
-      }).timeout(const Duration(seconds: 10));
+      }).timeout(_syncTimeout);
 
       if (res.statusCode != 200) return;
 
@@ -158,8 +184,12 @@ class SubscriptionStore {
       invalidatePlaybackCache();
       await clearLocalPremium();
     } catch (e) {
+      // Transient network noise — keep local premium cache; avoid log spam.
       if (kDebugMode) {
-        debugPrint('SubscriptionStore.syncPremiumFromBackend failed (${e.runtimeType})');
+        final name = e.runtimeType.toString();
+        if (name != 'TimeoutException' && !name.contains('SocketException')) {
+          debugPrint('SubscriptionStore.syncPremiumFromBackend failed ($name)');
+        }
       }
       await purgeExpiredLocalPremium();
     }

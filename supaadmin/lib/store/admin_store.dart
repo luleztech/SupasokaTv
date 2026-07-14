@@ -345,29 +345,62 @@ class AdminStore extends ChangeNotifier {
     _ensureAutoSyncRetryLoop();
   }
 
+  static bool _isRateLimitedResponse(int statusCode, String body) {
+    if (statusCode == 429) return true;
+    final lower = body.toLowerCase();
+    return lower.contains('rate limited') || lower.contains('too many requests');
+  }
+
   Future<String?> login(String password) async {
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/auth/admin-login');
-    try {
-      final res = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'password': password}),
-          )
-          .timeout(const Duration(seconds: 15));
-      if (res.statusCode == 200) {
-        final decoded = jsonDecode(res.body);
-        if (decoded is Map && decoded['ok'] == true && decoded['token'] is String) {
-          final token = decoded['token'] as String;
-          await saveRuntimeSyncSettings(jwt: token);
-          return null; // success
+    const maxAttempts = 4;
+    Object? lastError;
+
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        final res = await http
+            .post(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'password': password}),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (res.statusCode == 200) {
+          final decoded = jsonDecode(res.body);
+          if (decoded is Map && decoded['ok'] == true && decoded['token'] is String) {
+            final token = decoded['token'] as String;
+            await saveRuntimeSyncSettings(jwt: token);
+            return null; // success
+          }
+          return 'Login failed: unexpected server response.';
+        }
+
+        if (res.statusCode == 401) {
+          return 'Invalid password.';
+        }
+
+        if (_isRateLimitedResponse(res.statusCode, res.body)) {
+          if (attempt < maxAttempts - 1) {
+            // Railway edge cools down per IP — wait before retrying.
+            await Future<void>.delayed(Duration(seconds: 2 << attempt));
+            continue;
+          }
+          return 'Rate limited by the server. Wait about a minute without retrying, then try again.';
+        }
+
+        final snippet = res.body.length > 120 ? '${res.body.substring(0, 120)}…' : res.body;
+        return 'Login failed: ${res.statusCode} $snippet';
+      } catch (e) {
+        lastError = e;
+        if (attempt < maxAttempts - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+          continue;
         }
       }
-      return 'Login failed: ${res.statusCode} ${res.body}';
-    } catch (e) {
-      return 'Login error: $e';
     }
+    return 'Login error: $lastError';
   }
 
   Future<void> logout() async {

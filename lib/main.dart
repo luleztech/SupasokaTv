@@ -56,7 +56,7 @@ Future<void> _initializeDeferredServices() async {
   }
   try {
     await PremiumRecovery.recoverPendingPaymentIfAny();
-    await SubscriptionStore.syncPremiumFromBackend();
+    await SubscriptionStore.syncPremiumFromBackend(force: true);
     final isPremium =
         SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
@@ -140,7 +140,8 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _premiumSyncTimer = Timer.periodic(const Duration(seconds: 12), (_) {
+    // Cooldown inside syncPremiumFromBackend (force: false) — avoid edge 429s.
+    _premiumSyncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
       if (!mounted || !_loaded) return;
       unawaited(_syncPremiumAndTopics());
     });

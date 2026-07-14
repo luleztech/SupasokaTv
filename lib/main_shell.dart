@@ -35,12 +35,12 @@ class _MainShellState extends State<MainShell> {
         unawaited(SubscriptionStore.syncPremiumFromBackend());
       }
     });
+    // Config meta is cheap; premium sync is heavier — keep it out of the fast poll.
     _configPoll = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!mounted) return;
       final cs = context.read<ContentStore>();
       if (cs.ready) {
         unawaited(cs.pollConfigMeta());
-        unawaited(SubscriptionStore.syncPremiumFromBackend());
       }
     });
   }

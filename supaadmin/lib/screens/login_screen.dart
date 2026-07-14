@@ -23,18 +23,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
+    if (_loading) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     final store = context.read<AdminStore>();
     final error = await store.login(_passwordController.text);
-    if (error != null && mounted) {
+    if (!mounted) return;
+    if (error != null) {
       setState(() {
         _error = error;
         _loading = false;
       });
+      return;
     }
+    // Success: AppLaunchGate watches Auth state and navigates away.
+    setState(() => _loading = false);
   }
 
   @override

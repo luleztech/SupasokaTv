@@ -715,7 +715,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (serverUntilMs != null) {
         await SubscriptionStore.setPremiumUntilMs(serverUntilMs);
       }
-      await SubscriptionStore.syncPremiumFromBackend();
+      await SubscriptionStore.syncPremiumFromBackend(force: true);
       await SubscriptionStore.refreshNotifierFromPrefs();
       final isActive = SubscriptionStore.isPremiumActiveLocal();
 
@@ -811,7 +811,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
       _showStatus(
         'Nambari ya simu',
-        'Andika namba yako ya simu ukianza na 0 (tarakimu 10, mfano 0712345678). ${TanzaniaPhone.networksHint()}',
+        'Andika namba ya simu ukianza na 0.',
         _PayDialogTone.error,
       );
       return;
@@ -967,7 +967,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
                         const SizedBox(height: 6),
                         Text(
-                          'Andika namba yako ya simu ukianza na 0 (tarakimu 10). Usitumie 255.\n${TanzaniaPhone.networksHint()}',
+                          'Andika namba ya simu ukianza na 0.',
                           style: const TextStyle(
                             fontSize: 13.5,
                             height: 1.45,
@@ -1047,22 +1047,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                             ],
                           ),
                         ),
-                        if (_phoneOk && TanzaniaPhone.walletLabel(_phoneCtrl.text) != null) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            TanzaniaPhone.supportsPushUssd(_phoneCtrl.text)
-                                ? 'Mtandao: ${TanzaniaPhone.walletLabel(_phoneCtrl.text)} — Push USSD itatumwa simu yako'
-                                : 'Mtandao: ${TanzaniaPhone.walletLabel(_phoneCtrl.text)} — tumia M-Pesa / Tigo / Airtel / Halopesa',
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              height: 1.35,
-                              color: TanzaniaPhone.supportsPushUssd(_phoneCtrl.text)
-                                  ? _accentCta.withValues(alpha: 0.95)
-                                  : Colors.amber.shade200,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
                       ],
                     ),
                     ),
