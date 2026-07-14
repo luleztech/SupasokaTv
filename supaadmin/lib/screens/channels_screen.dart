@@ -160,7 +160,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                         physics: const BouncingScrollPhysics(),
                         padding: EdgeInsets.zero,
                         itemCount: list.length,
-                        onReorder: store.reorderChannels,
+                        onReorderItem: store.reorderChannels,
                         proxyDecorator: (child, index, animation) {
                           return AnimatedBuilder(
                             animation: animation,

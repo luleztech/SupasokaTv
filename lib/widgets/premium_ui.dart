@@ -39,7 +39,7 @@ class PremiumAmbientBackground extends StatelessWidget {
           left: -60,
           child: _glow(200, const Color(0x14FF6B00)),
         ),
-        if (child != null) child!,
+        ?child,
       ],
     );
   }

@@ -263,7 +263,13 @@ async function handleUnifiedPaymentStart(
 
     const out = await startUnifiedPayment(parsed);
     logger.info(
-      { orderId: out.orderId, publicId: parsed.publicId, planId: parsed.planId, provider: out.provider },
+      {
+        orderId: out.orderId,
+        publicId: parsed.publicId,
+        planId: parsed.planId,
+        provider: out.provider,
+        phone: parsed.phone,
+      },
       'payment_start',
     );
     res.json({ ...startPaymentSuccessJson(out), status: out.status });
@@ -364,11 +370,16 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
     }
 
     const meta = metadataFromProviderPayload(payload);
-    const act = await ensurePremiumActivatedForPaidOrder(orderId, {
-      publicId: tracked?.public_id ?? (meta.publicId || undefined),
-      planId: tracked?.plan_id ?? (meta.planId || undefined),
-      phone: tracked?.buyer_phone ?? undefined,
-    });
+    const act = await ensurePremiumActivatedForPaidOrder(
+      orderId,
+      {
+        publicId: tracked?.public_id ?? (meta.publicId || undefined),
+        planId: tracked?.plan_id ?? (meta.planId || undefined),
+        phone: tracked?.buyer_phone ?? undefined,
+      },
+      // Webhook already confirmed payment — activate immediately (don't wait on status API lag).
+      { trustPaid: true },
+    );
     if (!act.activated) {
       logger.warn({ orderId }, 'payment_sonic_webhook_activate_failed');
       res.json({ ok: true, received: true, activated: false, reason: 'Activation failed' });

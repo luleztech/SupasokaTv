@@ -31,6 +31,8 @@ class WebViewEngine(
     private var playbackStarted = false
     private var playbackApisInjected = false
     private var userPickedQuality = false
+    private var qualityConfirmed = false
+    private var qualityRetryGeneration = 0
     private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
     private var preferredAudioLanguage = "sw"
     private var lastLoadedAudioLanguage = ""
@@ -66,6 +68,8 @@ class WebViewEngine(
         playbackStarted = false
         playbackApisInjected = false
         userPickedQuality = false
+        qualityConfirmed = false
+        qualityRetryGeneration++
         preferredAudioLanguage = normalizeAudioLanguage(streamSession.preferredAudioLanguage)
         lastLoadedAudioLanguage = preferredAudioLanguage
         cancelPendingRunnables()
@@ -162,6 +166,7 @@ class WebViewEngine(
                     },
                     onQualityProbe = { wanted, maxH, activeH, applied ->
                         if (applied) {
+                            qualityConfirmed = true
                             Log.d(QUALITY_TAG, "quality confirmed wanted=$wanted maxH=$maxH activeH=$activeH")
                         }
                     },
@@ -230,6 +235,8 @@ class WebViewEngine(
         if (fromUser) {
             userPickedQuality = true
         }
+        qualityConfirmed = false
+        qualityRetryGeneration++
         val mode = qualityModeFor(quality)
         Log.d(QUALITY_TAG, "setQuality $quality mode=$mode fromUser=$fromUser")
         applyQualityJs(mode, fromUser, scheduleRetries = true)
@@ -248,19 +255,22 @@ class WebViewEngine(
     }
 
     private fun applyQualityJs(mode: String, fromUser: Boolean, scheduleRetries: Boolean) {
+        val gen = qualityRetryGeneration
         injectQuality(mode, fromUser)
-        if (scheduleRetries) {
-            val delays = if (fromUser) {
-                listOf(400L, 1000L, 2000L, 4000L, 7000L)
-            } else {
-                listOf(400L, 1200L, 2500L, 5000L)
-            }
-            delays.forEach { delayMs ->
-                postDelayed({
-                    if (!fromUser && userPickedQuality) return@postDelayed
-                    injectQuality(mode, fromUser)
-                }, delayMs)
-            }
+        if (!scheduleRetries) return
+        // Keep retries light — re-selecting every few hundred ms causes scratch/pause loops.
+        val delays = if (fromUser) {
+            listOf(500L, 1400L, 3000L)
+        } else {
+            listOf(800L, 2000L, 4500L)
+        }
+        delays.forEach { delayMs ->
+            postDelayed({
+                if (gen != qualityRetryGeneration) return@postDelayed
+                if (qualityConfirmed) return@postDelayed
+                if (!fromUser && userPickedQuality) return@postDelayed
+                injectQuality(mode, fromUser)
+            }, delayMs)
         }
     }
 
@@ -335,7 +345,6 @@ class WebViewEngine(
         val w = webView ?: return
         ensurePlaybackApisInjected()
         val safeMode = mode.filter { it.isDigit() || it == 'a' || it == 'u' || it == 't' || it == 'o' }
-        w.evaluateJavascript(GatewayPlaybackJs.eaMaxOkoaQualityApiScript(), null)
         w.evaluateJavascript(
             "try{window.__eaMaxPreferredAudioLang='${normalizeAudioLanguage(preferredAudioLanguage)}';" +
                 "window.__eaMaxOkoaSetQuality&&window.__eaMaxOkoaSetQuality('$safeMode',${if (fromUser) "true" else "false"});}catch(e){}",

@@ -8,14 +8,17 @@ class TanzaniaPhone {
   static final RegExp _mobileLocalRe = RegExp(r'^0(6[1-9]|7[0-9])\d{7}$');
 
   static const vodacomPrefixes = ['074', '075', '076', '079'];
+  static const tigoYasPrefixes = ['065', '067', '070', '071', '077'];
+  static const airtelPrefixes = ['068', '069', '078'];
+  static const halopesaPrefixes = ['061', '062', '063'];
 
   /// Documented operator prefixes (subset of [_mobileLocalRe]).
   static const knownPrefixes = [
-    '061', '062', '063',
+    ...halopesaPrefixes,
     '064',
-    '065', '067', '070', '071', '077',
+    ...tigoYasPrefixes,
     '066',
-    '068', '069', '078',
+    ...airtelPrefixes,
     '072',
     '073',
     ...vodacomPrefixes,
@@ -88,7 +91,34 @@ class TanzaniaPhone {
     return vodacomPrefixes.any((pre) => local.startsWith(pre));
   }
 
+  /// Detected push-USSD wallet label, or null if number invalid / unknown for payments.
+  static String? walletLabel(String raw) {
+    final local = normalize(raw);
+    if (local == null) return null;
+    if (halopesaPrefixes.any((p) => local.startsWith(p))) return 'Halopesa';
+    if (tigoYasPrefixes.any((p) => local.startsWith(p))) return 'TigoPesa / Mixx';
+    if (airtelPrefixes.any((p) => local.startsWith(p))) return 'Airtel Money';
+    if (vodacomPrefixes.any((p) => local.startsWith(p)) || local.startsWith('072')) {
+      return 'M-Pesa';
+    }
+    if (local.startsWith('073')) return 'TTCL';
+    if (local.startsWith('066')) return 'Smile';
+    if (local.startsWith('064')) return 'CooTel';
+    return null;
+  }
+
+  /// True when SonicPesa Push USSD is expected (M-Pesa, Tigo/Yas, Airtel, Halopesa).
+  static bool supportsPushUssd(String raw) {
+    final local = normalize(raw);
+    if (local == null) return false;
+    return halopesaPrefixes.any((p) => local.startsWith(p)) ||
+        tigoYasPrefixes.any((p) => local.startsWith(p)) ||
+        airtelPrefixes.any((p) => local.startsWith(p)) ||
+        vodacomPrefixes.any((p) => local.startsWith(p)) ||
+        local.startsWith('072');
+  }
+
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Nambari zote za Tanzania zinakubalika (061–079). Mfano: Tigo 071/077, Vodacom 074/076/079, Airtel 068/078, Halopesa 062, na nyingine.';
+      'Inakubaliwa: M-Pesa (074/075/076/079), Tigo/Yas (065/067/070/071/077), Airtel (068/069/078), Halopesa (061–063).';
 }

@@ -313,7 +313,7 @@ class _GlassBottomNav extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
             scrollDirection: Axis.horizontal,
             itemCount: destinations.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 6),
+            separatorBuilder: (_, _) => const SizedBox(width: 6),
             itemBuilder: (context, i) {
               final d = destinations[i];
               final active = i == selectedIndex;

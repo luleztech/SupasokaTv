@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -45,19 +44,16 @@ const _kPremiumSuccessMessage =
 
 enum _PaymentUiPhase { none, instruction, waiting, timedOut, failed }
 enum _PayDialogTone { success, error, info }
-enum _ConfirmProbeKind { pending, completed, terminalFailure }
+enum _ConfirmProbeKind { pending, completed }
 
 class _ConfirmProbeOutcome {
-  const _ConfirmProbeOutcome._(this.kind, {this.paymentStatus, this.premiumUntilMs});
+  const _ConfirmProbeOutcome._(this.kind, {this.premiumUntilMs});
   final _ConfirmProbeKind kind;
-  final String? paymentStatus;
   final int? premiumUntilMs;
 
   factory _ConfirmProbeOutcome.pending() => const _ConfirmProbeOutcome._(_ConfirmProbeKind.pending);
   factory _ConfirmProbeOutcome.completed({int? premiumUntilMs}) =>
       _ConfirmProbeOutcome._(_ConfirmProbeKind.completed, premiumUntilMs: premiumUntilMs);
-  factory _ConfirmProbeOutcome.terminalFailure(String? status) =>
-      _ConfirmProbeOutcome._(_ConfirmProbeKind.terminalFailure, paymentStatus: status);
 }
 
 class PaymentsScreen extends StatefulWidget {
@@ -355,10 +351,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
               await _markPaymentCompleted(serverPremiumUntilMs: probe.premiumUntilMs);
               return;
             }
-            if (probe.kind == _ConfirmProbeKind.terminalFailure) {
-              await _finalizeSessionFailed(_paymentFailureUserMessage(probe.paymentStatus));
-              return;
-            }
           } catch (_) {
             // keep polling; transient backend/provider lag.
           }
@@ -483,7 +475,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       }
       await _finalizeSessionTimedOut(
         detail:
-            'Muda wa ${_paymentWaitWindowLabel} umeisha bila uthibitisho wa haraka. Ukiisha thibitisha PIN kwenye simu, fungua programu tena — malipo yanaweza kukamilika kiotomatiki.',
+            'Muda wa $_paymentWaitWindowLabel umeisha bila uthibitisho wa haraka. Ukiisha thibitisha PIN kwenye simu, fungua programu tena — malipo yanaweza kukamilika kiotomatiki.',
       );
     } finally {
       _waitExpiryHandling = false;
@@ -975,7 +967,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                         _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
                         const SizedBox(height: 6),
                         Text(
-                          'Andika namba yako ya simu ukianza na 0 (tarakimu 10). Usitumie 255.',
+                          'Andika namba yako ya simu ukianza na 0 (tarakimu 10). Usitumie 255.\n${TanzaniaPhone.networksHint()}',
                           style: const TextStyle(
                             fontSize: 13.5,
                             height: 1.45,
@@ -1055,6 +1047,22 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                             ],
                           ),
                         ),
+                        if (_phoneOk && TanzaniaPhone.walletLabel(_phoneCtrl.text) != null) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            TanzaniaPhone.supportsPushUssd(_phoneCtrl.text)
+                                ? 'Mtandao: ${TanzaniaPhone.walletLabel(_phoneCtrl.text)} — Push USSD itatumwa simu yako'
+                                : 'Mtandao: ${TanzaniaPhone.walletLabel(_phoneCtrl.text)} — tumia M-Pesa / Tigo / Airtel / Halopesa',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              height: 1.35,
+                              color: TanzaniaPhone.supportsPushUssd(_phoneCtrl.text)
+                                  ? _accentCta.withValues(alpha: 0.95)
+                                  : Colors.amber.shade200,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     ),

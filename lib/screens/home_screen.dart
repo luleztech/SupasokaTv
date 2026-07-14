@@ -470,7 +470,7 @@ class _HomeLoadingSection extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             scrollDirection: Axis.horizontal,
             itemCount: 6,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, i) => ChannelCardSkeleton(
               width: tileW,
               posterHeight: posterH,
@@ -866,84 +866,6 @@ class _BrandLiveBadge extends StatelessWidget {
   }
 }
 
-class _HomeChannelSectionHeader extends StatelessWidget {
-  const _HomeChannelSectionHeader({
-    required this.title,
-    required this.count,
-    required this.style,
-  });
-
-  final String title;
-  final int count;
-  final HomeSectionStyle style;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                style.primary.withValues(alpha: 0.22),
-                style.secondary.withValues(alpha: 0.1),
-              ],
-            ),
-            border: Border.all(color: style.primary.withValues(alpha: 0.35)),
-          ),
-          alignment: Alignment.center,
-          child: Text(style.emoji, style: const TextStyle(fontSize: 20)),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ShaderMask(
-                shaderCallback: (b) => style.accentGradient.createShader(b),
-                child: Text(
-                  title.toUpperCase(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: rajdhani(15, weight: FontWeight.w800).copyWith(
-                    color: BrandPalette.white,
-                    letterSpacing: 0.8,
-                    height: 1.05,
-                  ),
-                ),
-              ),
-              Text(
-                '$count channel${count == 1 ? '' : 's'} · ${style.label}',
-                style: rajdhani(11, weight: FontWeight.w600).copyWith(
-                  color: BrandPalette.white.withValues(alpha: 0.42),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(99),
-            border: Border.all(color: style.primary.withValues(alpha: 0.4)),
-            color: style.primary.withValues(alpha: 0.1),
-          ),
-          child: Text(
-            '$count',
-            style: rajdhani(11, weight: FontWeight.w800).copyWith(color: style.primary),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _HomeSectionHeader extends StatelessWidget {
   const _HomeSectionHeader({required this.title, required this.style});
 
@@ -975,7 +897,6 @@ class _ChannelRailSection extends StatelessWidget {
     required this.channels,
     required this.lockedFor,
     required this.onChannel,
-    this.showPlayOverlay = false,
   });
 
   final String title;
@@ -983,7 +904,6 @@ class _ChannelRailSection extends StatelessWidget {
   final List<Channel> channels;
   final bool Function(Channel) lockedFor;
   final void Function(Channel) onChannel;
-  final bool showPlayOverlay;
 
   @override
   Widget build(BuildContext context) {
@@ -1007,7 +927,7 @@ class _ChannelRailSection extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               scrollDirection: Axis.horizontal,
               itemCount: channels.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
               itemBuilder: (context, i) {
                 final ch = channels[i];
                 return SizedBox(
@@ -1022,21 +942,6 @@ class _ChannelRailSection extends StatelessWidget {
                         locked: lockedFor(ch),
                         onPress: () => onChannel(ch),
                       ),
-                      if (showPlayOverlay)
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: BrandPalette.bgDeep.withValues(alpha: 0.55),
-                              border: Border.all(color: BrandPalette.white.withValues(alpha: 0.25)),
-                            ),
-                            child: const Icon(Ionicons.play, size: 16, color: BrandPalette.white),
-                          ),
-                        ),
                     ],
                   ),
                 );
@@ -1044,167 +949,6 @@ class _ChannelRailSection extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ChannelPosterRailSection extends StatelessWidget {
-  const _ChannelPosterRailSection({
-    required this.title,
-    required this.sectionStyle,
-    required this.channels,
-    required this.lockedFor,
-    required this.onChannel,
-  });
-
-  final String title;
-  final HomeSectionStyle sectionStyle;
-  final List<Channel> channels;
-  final bool Function(Channel) lockedFor;
-  final void Function(Channel) onChannel;
-
-  @override
-  Widget build(BuildContext context) {
-    if (channels.isEmpty) return const SizedBox.shrink();
-    const tileW = 118.0;
-    const tileH = 178.0;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: _kHomeSectionGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, _kHomeSectionHeaderGap),
-            child: _HomeSectionHeader(title: title, style: sectionStyle),
-          ),
-          SizedBox(
-            height: tileH,
-            child: ListView.separated(
-              clipBehavior: Clip.none,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              scrollDirection: Axis.horizontal,
-              itemCount: channels.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, i) {
-                final ch = channels[i];
-                return ChannelPosterCard(
-                  channel: ch,
-                  width: tileW,
-                  locked: lockedFor(ch),
-                  onPress: () => onChannel(ch),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CategorySectionShell extends StatelessWidget {
-  const _CategorySectionShell({
-    required this.style,
-    required this.child,
-  });
-
-  final HomeSectionStyle style;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: BrandPalette.bgMid.withValues(alpha: 0.55),
-        border: Border.all(color: BrandPalette.white.withValues(alpha: 0.06)),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          children: [
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: 3,
-              child: DecoratedBox(decoration: BoxDecoration(gradient: style.accentGradient)),
-            ),
-            Positioned(
-              top: -30,
-              right: -20,
-              child: _GlowOrb(size: 100, color: style.primary.withValues(alpha: 0.12)),
-            ),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ChannelGridSection extends StatelessWidget {
-  const _ChannelGridSection({
-    required this.title,
-    required this.sectionStyle,
-    required this.channels,
-    required this.lockedFor,
-    required this.onChannel,
-  });
-
-  final String title;
-  final HomeSectionStyle sectionStyle;
-  final List<Channel> channels;
-  final bool Function(Channel) lockedFor;
-  final void Function(Channel) onChannel;
-
-  @override
-  Widget build(BuildContext context) {
-    if (channels.isEmpty) return const SizedBox.shrink();
-
-    final w = MediaQuery.sizeOf(context).width;
-    const hPad = 14.0;
-    const gap = 10.0;
-    const shellMargin = 12.0;
-    final cols = w >= 520 ? 3 : 2;
-    final cellW = (w - shellMargin * 2 - hPad * 2 - gap * (cols - 1)) / cols;
-    final tileH = channelGridCellHeight(cellW).clamp(88.0, double.infinity) + 2;
-
-    return _CategorySectionShell(
-      style: sectionStyle,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(hPad, 14, hPad, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _HomeChannelSectionHeader(title: title, count: channels.length, style: sectionStyle),
-            const SizedBox(height: 14),
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              clipBehavior: Clip.none,
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: cols,
-                mainAxisSpacing: gap + 4,
-                crossAxisSpacing: gap + 2,
-                mainAxisExtent: tileH,
-              ),
-              itemCount: channels.length,
-              itemBuilder: (context, i) {
-                final ch = channels[i];
-                return ChannelCard(
-                  channel: ch,
-                  locked: lockedFor(ch),
-                  compactGrid: true,
-                  onPress: () => onChannel(ch),
-                );
-              },
-            ),
-          ],
-        ),
       ),
     );
   }

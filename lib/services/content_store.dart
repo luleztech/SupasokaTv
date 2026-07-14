@@ -44,7 +44,7 @@ Future<http.Response> _getPublicConfig(Uri uri, {Map<String, String>? versionHea
     'Accept': 'application/json',
     'User-Agent': 'Supasoka/1.1 (Flutter; viewer)',
     'Accept-Encoding': 'gzip',
-    if (versionHeaders != null) ...versionHeaders,
+    ...?versionHeaders,
   };
   for (var attempt = 0; attempt < _configFetchAttempts; attempt++) {
     try {
@@ -175,7 +175,7 @@ class ContentStore extends ChangeNotifier {
     return Uri.parse(originPath).replace(
       queryParameters: {
         ...versionParams,
-        if (extra != null) ...extra,
+        ...?extra,
       },
     );
   }

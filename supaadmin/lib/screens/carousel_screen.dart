@@ -39,7 +39,7 @@ class CarouselScreen extends StatelessWidget {
               physics: const BouncingScrollPhysics(),
               padding: EdgeInsets.zero,
               itemCount: slides.length,
-              onReorder: store.reorderCarousel,
+              onReorderItem: store.reorderCarousel,
               proxyDecorator: (child, index, animation) {
                 return AnimatedBuilder(
                   animation: animation,

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -77,7 +76,7 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
   /// First multi-track manifest: apply admin default quality cap once at startup.
   bool _appliedDefaultOkoa360 = false;
 
-  /** After landscape once this session, do not show hint again (until new page). */
+  /// After landscape once this session, do not show hint again (until new page).
   bool _hasSeenLandscapeSession = false;
 
   void _applyImmersive() {
@@ -164,7 +163,9 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
     }
     try {
       _webController!.setBackgroundColor(Colors.black);
-    } on UnimplementedError {}
+    } on UnimplementedError {
+      // Not supported on every WebView backend; background color is cosmetic only.
+    }
     await _guardWebViewNavigation(_webController!);
 
     final config = WebPlaybackConfig(
@@ -242,7 +243,9 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
     }
     try {
       await _webController!.setUserAgent(kBrowserPlaybackUserAgent);
-    } on UnimplementedError {}
+    } on UnimplementedError {
+      // Not supported on every WebView backend; default UA is acceptable.
+    }
     await _guardWebViewNavigation(_webController!);
     final headers = mergePlaybackHeaders(widget.videoUrl, widget.httpHeaders);
     await _webController!.loadRequest(
@@ -271,7 +274,9 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
     }
     try {
       _webController!.setBackgroundColor(Colors.black);
-    } on UnimplementedError {}
+    } on UnimplementedError {
+      // Not supported on every WebView backend; background color is cosmetic only.
+    }
     await _guardWebViewNavigation(_webController!);
     final html = _htmlForProbeResult(resolved);
     await _webController!.loadHtmlString(html);

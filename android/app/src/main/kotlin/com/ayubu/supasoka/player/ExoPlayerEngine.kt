@@ -627,52 +627,103 @@ class ExoPlayerEngine(
 
     fun setQuality(quality: StreamQuality) {
         selectedQuality = quality
-        val builder = trackSelector.buildUponParameters()
-            .setForceHighestSupportedBitrate(false)
+        val player = exoPlayer ?: return
+
         if (quality == StreamQuality.AUTO) {
-            builder.clearVideoSizeConstraints()
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .clearVideoSizeConstraints()
                 .setMaxVideoBitrate(Int.MAX_VALUE)
-        } else {
-            val maxBitrate = when (quality) {
-                StreamQuality.QUALITY_240P -> 400_000
-                StreamQuality.QUALITY_360P -> 800_000
-                StreamQuality.QUALITY_480P -> 1_400_000
-                StreamQuality.QUALITY_720P -> 2_500_000
-                StreamQuality.QUALITY_1080P -> 4_000_000
-                else -> Int.MAX_VALUE
-            }
-            builder.setMaxVideoSize(Int.MAX_VALUE, quality.height)
-                .setMaxVideoBitrate(maxBitrate)
+                .setForceHighestSupportedBitrate(false)
+                .build()
+            Log.d(TAG, "🎨 Quality set to AUTO")
+            return
         }
-        trackSelector.setParameters(builder.build())
-        applyVideoTrackOverride(quality)
+
+        applyFixedQuality(quality, force = true)
         Log.d(TAG, "🎨 Quality set to: $quality")
     }
 
-    private fun applyVideoTrackOverride(quality: StreamQuality) {
+    /**
+     * Pins video to the highest supported rendition ≤ [quality].height in one
+     * track-selection update (avoids double-reselection stutter).
+     */
+    private fun applyFixedQuality(quality: StreamQuality, force: Boolean) {
         if (quality == StreamQuality.AUTO) return
         val player = exoPlayer ?: return
+
+        var bestGroup: Tracks.Group? = null
+        var bestIdx = -1
+        var bestHeight = 0
+        var bestBitrate = -1
+
         for (group in player.currentTracks.groups) {
             if (group.type != C.TRACK_TYPE_VIDEO) continue
-            var bestIdx = -1
-            var bestHeight = 0
             for (i in 0 until group.length) {
-                val h = group.getTrackFormat(i).height
-                if (h > 0 && h <= quality.height && h >= bestHeight) {
-                    bestHeight = h
-                    bestIdx = i
+                if (!group.isTrackSupported(i)) continue
+                val format = group.getTrackFormat(i)
+                val h = format.height
+                val br = if (format.bitrate > 0) format.bitrate else 0
+                if (h > 0 && h <= quality.height) {
+                    if (h > bestHeight || (h == bestHeight && br >= bestBitrate)) {
+                        bestHeight = h
+                        bestBitrate = br
+                        bestIdx = i
+                        bestGroup = group
+                    }
                 }
             }
-            if (bestIdx >= 0) {
-                player.trackSelectionParameters = player.trackSelectionParameters
-                    .buildUpon()
-                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                    .addOverride(TrackSelectionOverride(group.mediaTrackGroup, bestIdx))
-                    .build()
-                Log.d(TAG, "🎨 Video track override: index=$bestIdx height=$bestHeight")
-                return
+        }
+
+        // Live manifests sometimes omit height — pick lowest bitrate as a safe pin.
+        if (bestGroup == null) {
+            var lowBitrate = Int.MAX_VALUE
+            for (group in player.currentTracks.groups) {
+                if (group.type != C.TRACK_TYPE_VIDEO) continue
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSupported(i)) continue
+                    val br = group.getTrackFormat(i).bitrate
+                    val effective = if (br > 0) br else Int.MAX_VALUE
+                    if (effective < lowBitrate) {
+                        lowBitrate = effective
+                        bestIdx = i
+                        bestGroup = group
+                        bestHeight = group.getTrackFormat(i).height
+                    }
+                }
             }
         }
+
+        if (bestGroup == null || bestIdx < 0) {
+            // Constraints only — let selector adapt within the height cap.
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .setMaxVideoSize(Int.MAX_VALUE, quality.height)
+                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setForceHighestSupportedBitrate(false)
+                .build()
+            return
+        }
+
+        if (!force && bestGroup.isTrackSelected(bestIdx)) {
+            return
+        }
+
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            .setMaxVideoSize(Int.MAX_VALUE, quality.height)
+            .setMaxVideoBitrate(Int.MAX_VALUE)
+            .setForceHighestSupportedBitrate(false)
+            .addOverride(TrackSelectionOverride(bestGroup.mediaTrackGroup, bestIdx))
+            .build()
+        Log.d(TAG, "🎨 Video track override: index=$bestIdx height=$bestHeight")
+    }
+
+    private fun applyVideoTrackOverride(quality: StreamQuality) {
+        applyFixedQuality(quality, force = false)
     }
 
     fun setAudioLanguage(language: String) {

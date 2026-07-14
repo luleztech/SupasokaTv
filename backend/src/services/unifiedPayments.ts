@@ -23,7 +23,7 @@ import {
 import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
-import { normalizePhoneToLocal0 } from '../lib/tzPhone';
+import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
@@ -150,6 +150,12 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     throw new HttpError(400, phoneNorm.error ?? 'Invalid phone', 'BAD_PHONE');
   }
   const localPhone = phoneNorm.local;
+  if (!isSupportedSonicPushWallet(localPhone)) {
+    logger.warn(
+      { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
+      'payment_start_unsupported_prefix',
+    );
+  }
   const amountTzs = Math.trunc(input.amountTzs);
   if (amountTzs < 1) {
     throw new HttpError(400, 'Amount must be at least 1 TZS', 'BAD_AMOUNT');
@@ -173,6 +179,8 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     buyerName,
     localPhone,
     amountTzs,
+    publicId: input.publicId,
+    planId: input.planId,
   });
   if (!sonic.ok || !sonic.orderId) {
     const userMsg = mapSonicInitiateUserError(
@@ -240,8 +248,7 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   if (!pool) return null;
   await ensurePaymentIntentsTable();
 
-  // Only first-time activation for paid orders that never granted premium (e.g. webhook missed).
-  // Never re-grant from orders that already consumed their one subscription window.
+  // Catch paid orders that never granted premium (missed webhook / status lag).
   const res = await pool.query<{ order_id: string }>(
     `SELECT order_id
      FROM payment_intents
@@ -250,14 +257,14 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
        AND updated_at > now() - interval '90 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC
-     LIMIT 5`,
+     LIMIT 25`,
     [trimmed],
   );
 
   for (const row of res.rows) {
     const ps = await resolvePaidStatusForOrder(row.order_id);
     if (!isPaymentCompletedStatus(ps)) continue;
-    const act = await activatePremiumIfCompletedOrder(row.order_id, { publicId: trimmed });
+    const act = await activatePremiumIfCompletedOrder(row.order_id, { publicId: trimmed }, { trustPaid: true });
     if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
       return act.premiumUntilMs!;
     }
@@ -307,6 +314,7 @@ async function writePremiumForOrder(
 export async function activatePremiumIfCompletedOrder(
   orderId: string,
   overrides?: ActivateOverrides,
+  opts?: { trustPaid?: boolean },
 ): Promise<{ activated: boolean; premiumUntilMs?: number }> {
   const intent = await getIntent(orderId);
   const identity = resolveOrderIdentity(orderId, intent, overrides);
@@ -324,9 +332,15 @@ export async function activatePremiumIfCompletedOrder(
     return { activated: false };
   }
 
-  const ps = await resolvePaidStatusForOrder(orderId);
-  if (!isPaymentCompletedStatus(ps)) {
-    return { activated: false };
+  // Webhook already said paid — do not wait on Sonic order_status lag (main miss cause).
+  if (!opts?.trustPaid) {
+    const ps = await resolvePaidStatusForOrder(orderId);
+    if (!isPaymentCompletedStatus(ps)) {
+      return { activated: false };
+    }
+    await updateIntentStatus({ orderId, providerStatus: ps || 'COMPLETED' });
+  } else {
+    await updateIntentStatus({ orderId, providerStatus: 'COMPLETED' });
   }
 
   const out = await writePremiumForOrder(orderId, identity);
@@ -336,6 +350,7 @@ export async function activatePremiumIfCompletedOrder(
 export async function ensurePremiumActivatedForPaidOrder(
   orderId: string,
   overrides?: ActivateOverrides,
+  opts?: { trustPaid?: boolean },
 ): Promise<{ activated: boolean; premiumUntilMs?: number }> {
   const trimmed = orderId.trim();
   if (!trimmed) return { activated: false };
@@ -348,23 +363,76 @@ export async function ensurePremiumActivatedForPaidOrder(
   }
 
   const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
-  if (await isUserPremiumRevokeLocked(identity.publicId)) {
+  // Admin revoke lock blocks casual reads — but a verified paid order must still unlock premium.
+  if (!opts?.trustPaid && (await isUserPremiumRevokeLocked(identity.publicId))) {
     return { activated: false };
   }
 
-  const existingUntil = await getUserPremiumStatus(identity.publicId);
-  if (isPremiumUntilActiveLocal(existingUntil)) {
-    return { activated: true, premiumUntilMs: existingUntil };
-  }
-
+  // Already activated this order → return current premium.
   if (intent?.activated_at_ms != null) {
+    const until = await getUserPremiumStatus(identity.publicId);
+    if (isPremiumUntilActiveLocal(until)) {
+      return { activated: true, premiumUntilMs: until };
+    }
     return { activated: false };
   }
 
-  const act = await activatePremiumIfCompletedOrder(trimmed, overrides);
+  // Paid but not yet applied to this intent — always activate (extends if already premium).
+  const act = await activatePremiumIfCompletedOrder(trimmed, overrides, opts);
   if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) return act;
 
   return { activated: false };
+}
+
+/**
+ * Background safety net: activate recent paid intents that never wrote premium_until_ms
+ * (missed webhook, Sonic status lag after paid, client left before poll finished).
+ */
+export async function reconcileUnactivatedPaidIntents(limit = 40): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  await ensurePaymentIntentsTable();
+
+  const res = await pool.query<{ order_id: string; public_id: string | null; plan_id: string | null; status: string }>(
+    `SELECT order_id, public_id, plan_id, status
+     FROM payment_intents
+     WHERE activated_at_ms IS NULL
+       AND public_id IS NOT NULL AND public_id <> ''
+       AND plan_id IS NOT NULL AND plan_id <> ''
+       AND updated_at > now() - interval '7 days'
+       AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
+     ORDER BY updated_at DESC
+     LIMIT $1`,
+    [Math.max(1, Math.min(100, limit))],
+  );
+
+  let activated = 0;
+  for (const row of res.rows) {
+    try {
+      const alreadyCompletedLocal = String(row.status ?? '').toUpperCase() === 'COMPLETED';
+      const ps = alreadyCompletedLocal ? 'COMPLETED' : await resolvePaidStatusForOrder(row.order_id);
+      if (!isPaymentCompletedStatus(ps)) continue;
+
+      const act = await ensurePremiumActivatedForPaidOrder(
+        row.order_id,
+        { publicId: row.public_id ?? undefined, planId: row.plan_id ?? undefined },
+        { trustPaid: true },
+      );
+      if (act.activated) {
+        activated += 1;
+        logger.info(
+          { orderId: row.order_id, publicId: row.public_id, premiumUntilMs: act.premiumUntilMs },
+          'payment_reconcile_sweep_activated',
+        );
+      }
+    } catch (e) {
+      logger.warn(
+        { orderId: row.order_id, err: e instanceof Error ? e.message : String(e) },
+        'payment_reconcile_sweep_failed',
+      );
+    }
+  }
+  return activated;
 }
 
 export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
@@ -387,15 +455,6 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     intentPlanId: local?.plan_id ?? undefined,
   };
   if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
-    const ps = await resolvePaidStatusForOrder(trimmed);
-    const providerPaid = isPaymentCompletedStatus(ps);
-    if (!providerPaid && local?.activated_at_ms == null) {
-      return {
-        status: ps || local?.provider_status || 'PENDING',
-        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
-        ...intentMeta,
-      };
-    }
     if (local?.activated_at_ms != null) {
       const { getUserPremiumStatus } = await import('./userDirectory');
       const publicId = String(local.public_id ?? '').trim();
@@ -409,11 +468,26 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
         ...intentMeta,
       };
     }
-    const act = await ensurePremiumActivatedForPaidOrder(trimmed, {
-      publicId: local?.public_id ?? undefined,
-      planId: local?.plan_id ?? undefined,
-    });
-    if (!providerPaid && !act.activated) {
+
+    // Local ledger already COMPLETED (e.g. webhook) but premium write pending — activate now.
+    const ps = await resolvePaidStatusForOrder(trimmed).catch(() => 'COMPLETED');
+    const providerPaid = isPaymentCompletedStatus(ps) || local?.status === 'COMPLETED';
+    if (!providerPaid) {
+      return {
+        status: ps || local?.provider_status || 'PENDING',
+        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
+        ...intentMeta,
+      };
+    }
+    const act = await ensurePremiumActivatedForPaidOrder(
+      trimmed,
+      {
+        publicId: local?.public_id ?? undefined,
+        planId: local?.plan_id ?? undefined,
+      },
+      { trustPaid: true },
+    );
+    if (!act.activated) {
       return {
         status: ps || 'PENDING',
         raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
@@ -444,7 +518,9 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
   }
   if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
     const intentAfter = (await getIntent(trimmed)) ?? local;
-    const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter));
+    const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter), {
+      trustPaid: true,
+    });
     return {
       status: 'COMPLETED',
       resultcode: '000',
@@ -512,7 +588,11 @@ export async function confirmPremiumForOrder(args: {
     throw new HttpError(code, 'Payment not completed', 'NOT_COMPLETED');
   }
 
-  const act = await ensurePremiumActivatedForPaidOrder(orderId, { publicId, planId, phone });
+  const act = await ensurePremiumActivatedForPaidOrder(
+    orderId,
+    { publicId, planId, phone },
+    { trustPaid: true },
+  );
   if (!act.activated || act.premiumUntilMs == null) {
     throw new HttpError(500, 'Payment completed but premium could not be activated', 'ACTIVATE_FAILED');
   }

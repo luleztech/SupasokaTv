@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
+import { logger } from '../lib/logger';
 import {
   isMobileMoneyStkSendFailure,
   isPaymentCreateRetryable,
@@ -11,8 +12,10 @@ import {
   detectTzMobileNetwork,
   formatPhoneToIntl255,
   isHalotelLocalPhone,
+  isSupportedSonicPushWallet,
   isVodacomMpesaLocalPhone,
   toLocal0Digits,
+  walletLabelForLocalPhone,
 } from '../lib/tzPhone';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
@@ -20,8 +23,9 @@ const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
 /** Docs: create_order_simple long-polls up to ~45s — client timeout ≥60s. */
 const SONIC_CREATE_SIMPLE_TIMEOUT_MS = 62_000;
-const SONIC_RETRY_DELAY_MS = 400;
-const SONIC_USSD_BUSY_DELAY_MS = 2_500;
+const SONIC_RETRY_DELAY_MS = 900;
+const SONIC_NETWORK_RETRY_DELAY_MS = 1_800;
+const SONIC_USSD_BUSY_DELAY_MS = 3_000;
 
 const sonicRetryDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -34,6 +38,7 @@ const SONIC_PAID_STATUSES = new Set([
   'APPROVED',
   'CONFIRMED',
   'SETTLED',
+  'SUCCESSFUL',
 ]);
 
 export function getSonicPesaRequestHeaders(): Record<string, string> {
@@ -122,7 +127,7 @@ export function isSonicPushUssdSentMessage(message: string): boolean {
   const m = String(message ?? '').toLowerCase();
   return (
     /push ussd sent|ussd sent|sent to your phone|payment order created successfully/i.test(m) ||
-    /you will receive a prompt/i.test(m)
+    /you will receive a prompt|prompt sent|waiting for customer/i.test(m)
   );
 }
 
@@ -249,39 +254,68 @@ type SonicCreateStep = {
   endpoint: 'payment/create_order' | 'payment/create_order_simple';
   buyer_phone: string;
   timeoutMs: number;
+  label: string;
 };
 
 /**
- * Build ordered steps to attempt when creating a SonicPesa order.
- * Tries the official docs-required international 255-prefix first (Airtel/Tigo/Vodacom
- * reject the local format), then national 0-prefix as fallback, for both create_order
- * and create_order_simple endpoints.
+ * Network-aware create steps. Sonic auto-routes wallet from MSISDN.
+ * Prefer 255… (required for M-Pesa / Tigo / Airtel / Halopesa), then simple endpoint,
+ * then local 0… only as a last-resort format retry — avoids 4 rapid STK blasts.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
+  const network = detectTzMobileNetwork(local0);
 
   if (env.sonicSendLocalPhone) {
     return [
-      { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
-      { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+      {
+        endpoint: 'payment/create_order',
+        buyer_phone: local0,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `local/${network}`,
+      },
+      {
+        endpoint: 'payment/create_order_simple',
+        buyer_phone: local0,
+        timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
+        label: `simple-local/${network}`,
+      },
     ];
   }
 
+  const preferLocalFallback = network === 'halotel' || network === 'unknown';
   const steps: SonicCreateStep[] = [
-    // International 255-prefix first — required by SonicPesa docs for Airtel/Tigo/Vodacom.
-    { endpoint: 'payment/create_order', buyer_phone: intl255, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
-    // Local 0-prefix as first fallback.
-    { endpoint: 'payment/create_order', buyer_phone: local0, timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS },
-    // create_order_simple with international format.
-    { endpoint: 'payment/create_order_simple', buyer_phone: intl255, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
-    // create_order_simple with local format as last resort.
-    { endpoint: 'payment/create_order_simple', buyer_phone: local0, timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS },
+    {
+      endpoint: 'payment/create_order',
+      buyer_phone: intl255,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: `intl/${network}`,
+    },
+    {
+      endpoint: 'payment/create_order_simple',
+      buyer_phone: intl255,
+      timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
+      label: `simple-intl/${network}`,
+    },
+    {
+      endpoint: 'payment/create_order',
+      buyer_phone: local0,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: preferLocalFallback ? `local/${network}` : `local-last/${network}`,
+    },
   ];
 
-  // Deduplicate (local0 === intl255 is impossible for valid TZ numbers but guard anyway).
   return steps.filter(
-    (s, i, arr) => arr.findIndex((t) => t.endpoint === s.endpoint && t.buyer_phone === s.buyer_phone) === i,
+    (s, i, arr) =>
+      arr.findIndex((t) => t.endpoint === s.endpoint && t.buyer_phone === s.buyer_phone) === i,
+  );
+}
+
+function isInvalidPhoneCreateError(message: string, code: string): boolean {
+  const combined = `${message} ${code}`.toLowerCase();
+  return /invalid phone|invalid msisdn|wrong number|invalid.*msisdn|nambari.*si sahihi|unsupported.*phone|phone.*format/i.test(
+    combined,
   );
 }
 
@@ -293,15 +327,31 @@ function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean
 
 async function postSonicCreateOrder(
   step: SonicCreateStep,
-  args: { buyerEmail: string; buyerName: string; amountTzs: number },
+  args: {
+    buyerEmail: string;
+    buyerName: string;
+    amountTzs: number;
+    publicId?: string;
+    planId?: string;
+  },
 ): Promise<{ response: Response; data: Record<string, unknown> }> {
+  const publicId = String(args.publicId ?? '').trim();
+  const planId = String(args.planId ?? '').trim();
+  const amount = Math.max(1, Math.trunc(Number(args.amountTzs) || 0));
   const payload: Record<string, unknown> = {
     buyer_email: args.buyerEmail,
     buyer_name: args.buyerName,
     buyer_phone: step.buyer_phone,
-    amount: args.amountTzs,
+    amount,
     currency: 'TZS',
   };
+  // Attach identity so webhooks can recover premium even if local intent insert raced.
+  if (publicId || planId) {
+    payload.metadata = {
+      ...(publicId ? { external_id: publicId, public_id: publicId } : {}),
+      ...(planId ? { plan_id: planId } : {}),
+    };
+  }
   return gatewayFetchJson(
     `${SONIC_API_BASE}/${step.endpoint}`,
     {
@@ -322,7 +372,7 @@ function isSonicCreateRetryable(errorMessage: string, errorCode: string): boolea
   return isPaymentCreateRetryable(errorMessage, errorCode);
 }
 
-/** Swahili user-facing message for SonicPesa checkout failures. */
+/** Swahili user-facing message for SonicPesa checkout failures — all TZ networks. */
 export function mapSonicInitiateUserError(
   localPhone: string,
   rawMessage: string,
@@ -331,6 +381,7 @@ export function mapSonicInitiateUserError(
   const code = String(rawCode ?? '').trim();
   const msg = String(rawMessage || '').trim();
   const hayajatumika = /hayajatumika|hayajaweza kutumika|hayajaweza kutuma/i.test(msg);
+  const wallet = walletLabelForLocalPhone(localPhone);
   if (code === '103' || /ongoing ussd/i.test(msg)) {
     return 'Simu yako ina USSD nyingine zinazoendelea. Funga dirisha la malipo/USSD kwenye simu, subiri sekunde 30, kisha jaribu tena.';
   }
@@ -343,22 +394,28 @@ export function mapSonicInitiateUserError(
     }
     const network = detectTzMobileNetwork(toLocal0Digits(localPhone));
     if (network === 'airtel') {
-      return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
+      return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi (068/069/078), una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
     }
     if (network === 'tigo_yas') {
-      return 'Hatukuweza kutuma ombi la Tigo/Yas kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na TigoPesa/Mixx inafanya kazi, kisha jaribu tena.';
+      return 'Hatukuweza kutuma ombi la TigoPesa/Mixx (Yas) kwenye simu yako. Hakikisha nambari ni sahihi (065/067/070/071/077), una salio, na TigoPesa inafanya kazi, kisha jaribu tena.';
     }
     if (network === 'vodacom' || isVodacomMpesaLocalPhone(localPhone)) {
       return 'Hatukuweza kutuma ombi la M-Pesa (Vodacom) kwenye simu yako. Hakikisha nambari 074, 075, 076 au 079 ni sahihi, una salio, na M-Pesa inafanya kazi, kisha jaribu tena.';
     }
-    return 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi na mtandao wa pesa unafanya kazi, kisha jaribu tena.';
+    if (network === 'ttcl' || network === 'smile' || network === 'cootel') {
+      return `Nambari hii inaonekana kama ${wallet}. Tumia nambari ya M-Pesa, TigoPesa/Yas, Airtel Money au Halopesa ili kupokea Push USSD.`;
+    }
+    return `Hatukuweza kutuma ombi la ${wallet} kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na mtandao wa pesa unafanya kazi, kisha jaribu tena.`;
   }
   if (
     /invalid phone|invalid msisdn|wrong number|invalid.*msisdn|nambari.*si sahihi|si sahihi.*nambari/i.test(
       `${msg} ${code}`,
     )
   ) {
-    return 'Hatukuweza kutuma ombi kwa nambari hii. Hakikisha unaandika nambari yako kamili ya simu ukianza na 0 (mfano 0712345678), una mtandao wa pesa, na jaribu tena.';
+    return 'Hatukuweza kutuma ombi kwa nambari hii. Hakikisha unaandika nambari yako kamili ya simu ukianza na 0 (mfano 0712345678), una M-Pesa/Tigo/Airtel/Halopesa, na jaribu tena.';
+  }
+  if (!isSupportedSonicPushWallet(localPhone)) {
+    return `Nambari hii (${wallet}) huenda isitumie Push USSD. Tumia M-Pesa (074–079), Tigo/Yas (065/067/070/071/077), Airtel (068/069/078) au Halopesa (061–063).`;
   }
   return msg || 'Malipo hayajatumika. Jaribu tena baada ya muda mfupi.';
 }
@@ -377,25 +434,37 @@ export async function tryCreateSonicOrder(args: {
   buyerName: string;
   localPhone: string;
   amountTzs: number;
+  publicId?: string;
+  planId?: string;
 }): Promise<SonicCreateResult> {
   ensureSonicPesaConfigured();
-  const steps = buildSonicCreateSteps(args.localPhone);
+  const local0 = toLocal0Digits(args.localPhone);
+  const network = detectTzMobileNetwork(local0);
+  const amountTzs = Math.max(1, Math.trunc(Number(args.amountTzs) || 0));
+  const steps = buildSonicCreateSteps(local0);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
   };
 
+  logger.info(
+    { network, wallet: walletLabelForLocalPhone(local0), steps: steps.map((s) => s.label) },
+    'sonic_create_begin',
+  );
+
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     try {
-      if (i > 0) await sonicRetryDelay(SONIC_RETRY_DELAY_MS);
-      last = await postSonicCreateOrder(step, args);
+      if (i > 0) {
+        await sonicRetryDelay(i === 1 ? SONIC_RETRY_DELAY_MS : SONIC_NETWORK_RETRY_DELAY_MS);
+      }
+      last = await postSonicCreateOrder(step, { ...args, amountTzs });
       const responseMessage = extractSonicResponseMessage(last.data);
       const responseCode = extractSonicResponseCode(last.data);
 
       if (isSonicUssdBusy(responseMessage, responseCode)) {
         await sonicRetryDelay(SONIC_USSD_BUSY_DELAY_MS);
-        last = await postSonicCreateOrder(step, args);
+        last = await postSonicCreateOrder(step, { ...args, amountTzs });
       }
 
       const retryMessage = extractSonicResponseMessage(last.data);
@@ -408,6 +477,10 @@ export async function tryCreateSonicOrder(args: {
           (isSonicPushUssdSentMessage(retryMessage) ||
             !isSonicStkSendFailure(retryMessage, retryCode))
         ) {
+          logger.info(
+            { orderId, network, step: step.label, phone: step.buyer_phone },
+            'sonic_create_ok',
+          );
           return {
             ok: true,
             orderId,
@@ -418,7 +491,7 @@ export async function tryCreateSonicOrder(args: {
             raw: last.data,
           };
         }
-        if (!isSonicCreateRetryable(retryMessage, retryCode)) continue;
+        if (!isSonicCreateRetryable(retryMessage, retryCode)) break;
         continue;
       }
 
@@ -434,12 +507,23 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      if (!isSonicCreateRetryable(errorMessage, errorCode)) continue;
+      if (!isSonicCreateRetryable(errorMessage, errorCode)) break;
+      // After create_order_simple STK failure, skip local retries that mostly rate-limit.
+      if (
+        isSonicStkSendFailure(errorMessage, errorCode) &&
+        !isInvalidPhoneCreateError(errorMessage, errorCode) &&
+        step.endpoint === 'payment/create_order_simple'
+      ) {
+        break;
+      }
     } catch (e) {
       last = {
         response: new Response(null, { status: 502 }),
         data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
       };
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/abort|timeout|network/i.test(msg) && i < steps.length - 1) continue;
+      break;
     }
   }
 
@@ -455,6 +539,7 @@ export async function tryCreateSonicOrder(args: {
       errorCode,
     };
   }
+  logger.warn({ network, errorMessage, errorCode }, 'sonic_create_failed');
   return {
     ok: false,
     orderId: '',

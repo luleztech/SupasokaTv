@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/app_update_service.dart';
+import 'package:supasoka/services/tanzania_phone.dart';
 import 'package:supasoka/services/user_identity.dart';
 class _SettingsApi {
   Future<Map<String, dynamic>> getWhatsAppNumber() async {
@@ -23,8 +24,6 @@ class _SettingsApi {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       return 'sonicpesa';
     }
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
-    final p = (j['paymentProvider'] ?? 'sonicpesa').toString().toLowerCase();
     return 'sonicpesa';
   }
 }
@@ -128,7 +127,7 @@ class _PaymentsApi {
     required String name,
     void Function(int attempt, int maxAttempts)? onAttempt,
   }) async {
-    final normalizedPhone = phone.trim();
+    final normalizedPhone = TanzaniaPhone.normalize(phone.trim()) ?? phone.trim();
     await Future.wait<void>([
       UserIdentity.registerWithBackend(phone: normalizedPhone),
       settingsApi.getActivePaymentProvider(),
@@ -234,14 +233,15 @@ class _PaymentsApi {
     if (premiumRaw is int) premiumUntilMs = premiumRaw;
     if (premiumRaw is num) premiumUntilMs = premiumRaw.toInt();
 
-    final intentPlanId = (j['intentPlanId'] ?? j['planId'])?.toString().trim();
+    final rawIntentPlanId = (j['intentPlanId'] ?? j['planId'])?.toString().trim();
+    final intentPlanId = (rawIntentPlanId != null && rawIntentPlanId.isNotEmpty) ? rawIntentPlanId : null;
 
     return {
       'status': ps,
       'raw': j,
-      if (premiumUntilMs != null) 'premiumUntilMs': premiumUntilMs,
+      'premiumUntilMs': ?premiumUntilMs,
       if (j['activated'] == true) 'activated': true,
-      if (intentPlanId != null && intentPlanId.isNotEmpty) 'intentPlanId': intentPlanId,
+      'intentPlanId': ?intentPlanId,
     };
   }
 

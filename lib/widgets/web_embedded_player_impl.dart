@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
+import 'dart:js_interop';
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/material.dart';
+import 'package:web/web.dart' as web;
 
 import '../player/web_playback_config.dart';
 import '../player/web_player_html.dart';
@@ -36,13 +37,13 @@ class _WebEmbeddedPlayerState extends State<WebEmbeddedPlayer> {
   bool _playingNotified = false;
   int _attemptIndex = 0;
   List<WebStreamProbeResult> _fallbackChain = const [];
-  StreamSubscription<html.MessageEvent>? _messageSub;
+  StreamSubscription<web.MessageEvent>? _messageSub;
   int _prepareGeneration = 0;
 
   @override
   void initState() {
     super.initState();
-    _messageSub = html.window.onMessage.listen(_onIframeMessage);
+    _messageSub = web.window.onMessage.listen(_onIframeMessage);
     unawaited(_prepare());
   }
 
@@ -74,11 +75,11 @@ class _WebEmbeddedPlayerState extends State<WebEmbeddedPlayer> {
     return true;
   }
 
-  void _onIframeMessage(html.MessageEvent event) {
+  void _onIframeMessage(web.MessageEvent event) {
     final raw = event.data;
-    if (raw is! String) return;
+    if (raw == null || !raw.isA<JSString>()) return;
     try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final data = jsonDecode((raw as JSString).toDart) as Map<String, dynamic>;
       if (data['type'] == 'eamax-player-error' && data['fatal'] == true) {
         unawaited(_tryNextFallback());
       }
@@ -177,13 +178,14 @@ class _WebEmbeddedPlayerState extends State<WebEmbeddedPlayer> {
     final htmlContent = _htmlForResult(result);
     final viewType = 'eamax-web-player-${_nextViewId++}';
     ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
-      final iframe = html.IFrameElement()
-        ..srcdoc = htmlContent
-        ..style.border = 'none'
-        ..style.width = '100%'
-        ..style.height = '100%'
-        ..style.backgroundColor = '#000'
+      final iframe = web.HTMLIFrameElement()
+        ..srcdoc = htmlContent.toJS
         ..allow = 'autoplay; encrypted-media; fullscreen';
+      iframe.style
+        ..setProperty('border', 'none')
+        ..setProperty('width', '100%')
+        ..setProperty('height', '100%')
+        ..setProperty('background-color', '#000');
       return iframe;
     });
 

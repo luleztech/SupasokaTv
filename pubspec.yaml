@@ -2,7 +2,7 @@ name: supasoka
 description: Supasoka — Live TV & movies (Flutter port of StreamZone).
 publish_to: "none"
 
-version: 1.2.8+23
+version: 1.2.9+24
 
 environment:
   sdk: ^3.11.4
@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   http: ^1.2.2
+  web: ^1.1.1
   provider: ^6.1.2
   google_fonts: ^8.1.0
   cached_network_image: ^3.4.1

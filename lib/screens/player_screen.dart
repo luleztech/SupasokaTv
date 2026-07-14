@@ -51,7 +51,6 @@ String _copyForIssue(_PlayerIssue issue) {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  late int _channelId;
   Channel? _channel;
 
   VideoPlayerController? _video;
@@ -71,7 +70,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _channelId = widget.channelId;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -193,6 +191,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } catch (_) {
       return null;
     }
+  }
 
   Future<void> _initWebView(String url) async {
     _webLoadingSafetyTimer?.cancel();

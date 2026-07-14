@@ -1,3 +1,6 @@
+// ignore_for_file: constant_identifier_names
+// Generated icon constants mirror the upstream Ionicons font's snake_case
+// names; renaming them would break every `Ionicons.xxx` call site.
 import 'package:flutter/widgets.dart';
 
 /// Use with the Icon class to show specific icons.

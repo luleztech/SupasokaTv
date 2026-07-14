@@ -50,10 +50,10 @@ function main() {
   const end = computePremiumEndMs(activatedAt, 7 * MS_DAY);
   assertEq(end, activatedAt + 7 * MS_DAY, 'exact weekly window');
 
-  // No stacking: second activation replaces from its own activation time.
-  const secondPaymentAt = activatedAt + 2 * MS_DAY;
-  const replaced = computePremiumEndMs(secondPaymentAt, 7 * MS_DAY);
-  assert(replaced < end + 7 * MS_DAY, 'second payment must not stack on old end');
+  // Renewals extend from remaining end (stack leftover time).
+  const remainingEnd = activatedAt + 5 * MS_DAY;
+  const renewed = computePremiumEndMs(remainingEnd, 7 * MS_DAY);
+  assertEq(renewed, remainingEnd + 7 * MS_DAY, 'renewal stacks onto remaining premium');
 
   const future = Date.now() + MS_DAY;
   const past = Date.now() - MS_DAY;

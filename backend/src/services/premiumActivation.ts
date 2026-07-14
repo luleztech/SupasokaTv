@@ -164,7 +164,10 @@ async function resolvePlanDurationMs(pool: Pool, planId: string): Promise<number
   return planDurationMsFromSlug(trimmed) ?? 30 * MS_DAY;
 }
 
-/** Each payment grants exactly one plan window from activation time (no stacking). */
+/**
+ * Premium end = base + plan duration.
+ * When renewing while still premium, base is the current end so leftover time is kept.
+ */
 export function computePremiumEndMs(activatedAtMs: number, durationMs: number): number {
   return Math.trunc(activatedAtMs + durationMs);
 }
@@ -203,7 +206,14 @@ export async function activatePremiumForUser(args: {
   const now = Date.now();
   const dur = await resolvePlanDurationMs(pool, planId);
 
-  const end = computePremiumEndMs(now, dur);
+  // Extend from remaining premium when still active (renewals keep leftover time).
+  const existing = await pool.query<{ premium_until_ms: string | null }>(
+    `SELECT premium_until_ms FROM users WHERE id = $1`,
+    [publicId],
+  );
+  const existingMs = Number(existing.rows[0]?.premium_until_ms ?? 0);
+  const baseMs = Number.isFinite(existingMs) && existingMs > now ? existingMs : now;
+  const end = computePremiumEndMs(baseMs, dur);
 
   const res = await pool.query(
     `UPDATE users

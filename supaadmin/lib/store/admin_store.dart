@@ -160,7 +160,7 @@ class AdminStore extends ChangeNotifier {
     Duration timeout = const Duration(seconds: 12),
   }) async {
     if (!hasAdminSession) return false;
-    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
+    final uri = Uri.parse('$resolvedApiBaseUrl$path');
     try {
       final res = await http
           .put(
@@ -175,30 +175,9 @@ class AdminStore extends ChangeNotifier {
     }
   }
 
-  Future<bool> _postJson(
-    String path,
-    Map<String, dynamic> body, {
-    Duration timeout = const Duration(seconds: 12),
-  }) async {
-    if (!hasAdminSession) return false;
-    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
-    try {
-      final res = await http
-          .post(
-            uri,
-            headers: _authHeaders(contentType: 'application/json'),
-            body: jsonEncode(body),
-          )
-          .timeout(timeout);
-      return _httpOk(res);
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<bool> _deleteApi(String path, {Duration timeout = const Duration(seconds: 12)}) async {
     if (!hasAdminSession) return false;
-    final uri = Uri.parse('${resolvedApiBaseUrl}$path');
+    final uri = Uri.parse('$resolvedApiBaseUrl$path');
     try {
       final res = await http
           .delete(uri, headers: _authHeaders())
@@ -875,8 +854,9 @@ class AdminStore extends ChangeNotifier {
     await _saveLocalThenBackground(() => _pushChannelDelete(id));
   }
 
+  /// `newIndex` arrives pre-adjusted for the removal at `oldIndex`
+  /// (Flutter's `onReorderItem` contract) — don't decrement it again here.
   Future<void> reorderChannels(int oldIndex, int newIndex) async {
-    if (newIndex > oldIndex) newIndex -= 1;
     final item = _config.channels.removeAt(oldIndex);
     _config.channels.insert(newIndex, item);
     _normalizeConfigForServer();
@@ -914,8 +894,9 @@ class AdminStore extends ChangeNotifier {
     await _saveLocalThenBackground(_pushCarouselReplace);
   }
 
+  /// `newIndex` arrives pre-adjusted for the removal at `oldIndex`
+  /// (Flutter's `onReorderItem` contract) — don't decrement it again here.
   Future<void> reorderCarousel(int oldIndex, int newIndex) async {
-    if (newIndex > oldIndex) newIndex -= 1;
     final item = _config.carousel.removeAt(oldIndex);
     _config.carousel.insert(newIndex, item);
     await _saveLocalConfigOnly();
@@ -1018,7 +999,7 @@ class AdminStore extends ChangeNotifier {
               decoded['notificationPersistError'].toString().trim().isNotEmpty;
           final n = decoded['notification'];
           if (n is Map) {
-            final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
+            final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n));
             _config.notificationLog.removeWhere((x) => x.id == entry.id);
             _config.notificationLog.insert(0, entry);
             notifyListeners();
@@ -1146,7 +1127,7 @@ class AdminStore extends ChangeNotifier {
         }
         final n = decoded['notification'];
         if (n is Map) {
-          final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n as Map));
+          final entry = NotificationEntryDto.fromJson(Map<String, dynamic>.from(n));
           _config.notificationLog.removeWhere((x) => x.id == entry.id);
           _config.notificationLog.insert(0, entry);
           notifyListeners();

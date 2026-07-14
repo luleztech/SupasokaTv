@@ -2,7 +2,6 @@ import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 
 import '../models/app_config.dart';
 import '../store/admin_store.dart';

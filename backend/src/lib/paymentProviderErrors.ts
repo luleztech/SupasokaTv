@@ -59,7 +59,8 @@ export function isRecoverablePaymentCreateError(message: string, code: string): 
     /hayajatumika|malipo hayajatumika|hayajaweza kutumika|not sent|could not send|push failed|failed to send/i.test(
       combined,
     ) ||
-    /no response from upstream|upstream system|ongoing ussd/i.test(combined)
+    /no response from upstream|upstream system|ongoing ussd|timeout|timed out|gateway/i.test(combined) ||
+    /temporarily unavailable|service unavailable|try again/i.test(combined)
   );
 }
 

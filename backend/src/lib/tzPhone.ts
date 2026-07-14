@@ -194,3 +194,32 @@ export function isHalotelLocalPhone(local0: string): boolean {
   const p = toLocal0Digits(local0);
   return p.startsWith('061') || p.startsWith('062') || p.startsWith('063');
 }
+
+/** Human-readable wallet label for UI / error copy (Swahili). */
+export function walletLabelForLocalPhone(local0: string): string {
+  switch (detectTzMobileNetwork(toLocal0Digits(local0))) {
+    case 'vodacom':
+    case 'mo_mobile':
+      return 'M-Pesa (Vodacom)';
+    case 'tigo_yas':
+      return 'TigoPesa / Mixx by Yas';
+    case 'airtel':
+      return 'Airtel Money';
+    case 'halotel':
+      return 'Halopesa';
+    case 'cootel':
+      return 'CooTel';
+    case 'smile':
+      return 'Smile';
+    case 'ttcl':
+      return 'TTCL';
+    default:
+      return 'mobile money';
+  }
+}
+
+/** True for the four push-USSD wallets SonicPesa officially routes (M-Pesa, Tigo/Yas, Airtel, Halopesa). */
+export function isSupportedSonicPushWallet(local0: string): boolean {
+  const n = detectTzMobileNetwork(toLocal0Digits(local0));
+  return n === 'vodacom' || n === 'mo_mobile' || n === 'tigo_yas' || n === 'airtel' || n === 'halotel';
+}
