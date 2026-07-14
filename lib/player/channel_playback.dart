@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
-import 'package:supasoka/player/cdn_token_headers.dart';
 import 'package:supasoka/player/playback_helpers.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
 import 'package:supasoka/screens/payment_screen.dart';
@@ -20,13 +19,8 @@ Future<void> _applyUpdatePayload(BuildContext context, Map<String, dynamic>? pay
 }
 
 bool _sessionNeedsFreshPlaybackResolve(ApiPlaybackSession session) {
-  if (playbackSessionMissingSecrets(session)) return true;
-  // Direct `tok_` CDN URLs should use the API relay when available.
-  if (CdnTokenHeaders.isTokenizedCdnUrl(session.streamUrl) &&
-      !session.streamUrl.contains('/relay/')) {
-    return true;
-  }
-  return false;
+  // Direct CDN `tok_` URLs are fine when playbackHeaders (Referer/Origin) are present.
+  return playbackSessionMissingSecrets(session);
 }
 
 Map<String, dynamic> _channelDataForSession(ApiPlaybackSession session, Channel? channel) {
@@ -87,8 +81,8 @@ Future<bool> _tryPremiumRecoveryAndPlay(
   BuildContext context,
   Channel channel,
 ) async {
-  final hasPending = await PremiumRecovery.hasRecentPendingPayment();
-  if (!hasPending) return false;
+  // Always ask the server — paid orders may unlock via reconcile even when
+  // local pending prefs were cleared (timeout / "Anza upya").
   final unlocked = await PremiumRecovery.ensurePremiumUnlocked();
   if (!unlocked) return false;
   invalidatePlaybackCache(channel.id);

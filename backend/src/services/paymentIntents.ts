@@ -28,12 +28,33 @@ function normalizeStatus(raw: string): PaymentIntentStatus {
     .trim()
     .toUpperCase();
   if (!s) return 'PENDING';
-  if (s === 'COMPLETED' || s === 'PAID' || s === 'SETTLED') return 'COMPLETED';
+  // Keep in sync with isPaymentCompletedStatus / Sonic SUCCESS synonyms.
+  if (
+    s === 'COMPLETED' ||
+    s === 'COMPLETE' ||
+    s === 'PAID' ||
+    s === 'SETTLED' ||
+    s === 'SUCCESS' ||
+    s === 'SUCCESSFUL' ||
+    s === 'SUCCEEDED' ||
+    s === 'APPROVED' ||
+    s === 'AUTHORIZED' ||
+    s === 'AUTHORISED' ||
+    s === 'CONFIRMED' ||
+    s === 'OK' ||
+    s === 'TRUE' ||
+    s === '1'
+  ) {
+    return 'COMPLETED';
+  }
   if (s === 'FAILED' || s === 'DECLINED') return 'FAILED';
-  if (s === 'CANCELLED' || s === 'CANCELED' || s === 'CANCEL') return 'CANCELLED';
+  if (s === 'CANCELLED' || s === 'CANCELED' || s === 'CANCEL' || s === 'USERCANCELLED') {
+    return 'CANCELLED';
+  }
   if (s === 'EXPIRED') return 'EXPIRED';
   if (s === 'REJECTED') return 'REJECTED';
   if (s === 'ERROR') return 'ERROR';
+  if (s === 'ADMIN_DELETED' || s === 'VOIDED') return 'CANCELLED';
   return 'PENDING';
 }
 

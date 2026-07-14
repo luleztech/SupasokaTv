@@ -85,18 +85,18 @@ export async function deleteUserById(id: string): Promise<boolean> {
   const trimmed = id.trim();
   if (!trimmed) return false;
 
-  // Neutralize any not-yet-activated payment intents first. Deleting the user
-  // row also erases its `premium_revoked` lock note, so a leftover pending (or
-  // paid-but-not-yet-activated) intent would otherwise let
-  // reconcilePremiumForUser silently re-grant premium the next time this
-  // device/public id checks in — making the delete look like it "worked" in
-  // the admin list while the subscription quietly comes back.
+  // Void not-yet-activated intents. Do NOT stamp activated_at_ms — that made
+  // real paid orders unrecoverable when the same User-xxxxx returned (paid but
+  // forever locked). CANCELLED keeps them out of reconcile sweeps.
   const { ensurePaymentIntentsTable } = await import('./paymentIntents');
   await ensurePaymentIntentsTable();
   await pool.query(
-    `UPDATE payment_intents SET activated_at_ms = $2, updated_at = now()
+    `UPDATE payment_intents
+     SET status = 'CANCELLED',
+         provider_status = 'ADMIN_DELETED',
+         updated_at = now()
      WHERE public_id = $1 AND activated_at_ms IS NULL`,
-    [trimmed, Date.now()],
+    [trimmed],
   );
 
   const res = await pool.query(`DELETE FROM users WHERE id = $1`, [trimmed]);
@@ -208,23 +208,28 @@ export async function setUserPremiumUntilMs(userId: string, premiumUntilMs: numb
   return (res.rowCount ?? 0) > 0;
 }
 
-export async function getUserPremiumRecord(userId: string): Promise<{ userExists: boolean; premiumUntilMs: number | null }> {
+export async function getUserPremiumRecord(userId: string): Promise<{
+  userExists: boolean;
+  premiumUntilMs: number | null;
+  note: string;
+}> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
   }
   const trimmed = userId.trim();
-  if (!trimmed) return { userExists: false, premiumUntilMs: null };
-  const res = await pool.query<{ premium_until_ms: string | null }>(
-    `SELECT premium_until_ms FROM users WHERE id = $1`,
+  if (!trimmed) return { userExists: false, premiumUntilMs: null, note: '' };
+  const res = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
+    `SELECT premium_until_ms, note FROM users WHERE id = $1`,
     [trimmed],
   );
   const row = res.rows[0];
-  if (!row) return { userExists: false, premiumUntilMs: null };
+  if (!row) return { userExists: false, premiumUntilMs: null, note: '' };
 
   const raw = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
   return {
     userExists: true,
     premiumUntilMs: raw,
+    note: String(row.note ?? ''),
   };
 }

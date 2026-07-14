@@ -5,7 +5,7 @@ import { reconcileUnactivatedPaidIntents } from './services/unifiedPayments';
 
 const app = createApp();
 
-const RECONCILE_MS = 90_000;
+const RECONCILE_MS = 45_000;
 let reconcileRunning = false;
 
 async function runPaymentReconcileSweep(): Promise<void> {

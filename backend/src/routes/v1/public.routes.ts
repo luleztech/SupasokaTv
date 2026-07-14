@@ -14,6 +14,7 @@ import { logger } from '../../lib/logger';
 import {
   ensurePaymentIntentsTable,
   getIntent,
+  updateIntentStatus,
   upsertPendingIntent,
 } from '../../services/paymentIntents';
 import { getSelectedPaymentProvider, PAYMENT_PROVIDERS } from '../../services/paymentProviderSettings';
@@ -347,29 +348,34 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
-    let tracked = await getIntent(orderId);
-
-    if (!tracked && paid) {
-      const meta = metadataFromProviderPayload(payload);
-      if (meta.publicId && meta.planId) {
-        await ensurePaymentIntentsTable();
-        await upsertPendingIntent({
-          orderId,
-          publicId: meta.publicId,
-          planId: meta.planId,
-          provider: PAYMENT_PROVIDERS.SONICPESA,
-          providerPayload: payload,
-        });
-        tracked = await getIntent(orderId);
-      }
-    }
-
     if (!paid) {
       res.json({ ok: true, received: true, activated: false });
       return;
     }
 
     const meta = metadataFromProviderPayload(payload);
+    let tracked = await getIntent(orderId);
+
+    // Always persist COMPLETED when webhook says paid — even if activate fails (missing meta).
+    // Sweep / poll / confirm can finish unlock once publicId+planId exist.
+    await ensurePaymentIntentsTable();
+    if (meta.publicId || meta.planId || !tracked) {
+      await upsertPendingIntent({
+        orderId,
+        publicId: meta.publicId || tracked?.public_id || undefined,
+        planId: meta.planId || tracked?.plan_id || undefined,
+        buyerPhone: tracked?.buyer_phone || undefined,
+        provider: PAYMENT_PROVIDERS.SONICPESA,
+        providerPayload: payload,
+      });
+      tracked = await getIntent(orderId);
+    }
+    await updateIntentStatus({
+      orderId,
+      providerStatus: 'COMPLETED',
+      providerPayload: payload,
+    });
+
     const act = await ensurePremiumActivatedForPaidOrder(
       orderId,
       {
@@ -381,12 +387,24 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       { trustPaid: true },
     );
     if (!act.activated) {
-      logger.warn({ orderId }, 'payment_sonic_webhook_activate_failed');
-      res.json({ ok: true, received: true, activated: false, reason: 'Activation failed' });
+      logger.warn(
+        {
+          orderId,
+          publicId: tracked?.public_id ?? meta.publicId,
+          planId: tracked?.plan_id ?? meta.planId,
+        },
+        'payment_sonic_webhook_activate_failed',
+      );
+      res.json({ ok: true, received: true, activated: false, reason: 'Activation pending reconcile' });
       return;
     }
     logger.info(
-      { orderId, publicId: tracked?.public_id, planId: tracked?.plan_id, premiumUntilMs: act.premiumUntilMs },
+      {
+        orderId,
+        publicId: tracked?.public_id ?? meta.publicId,
+        planId: tracked?.plan_id ?? meta.planId,
+        premiumUntilMs: act.premiumUntilMs,
+      },
       'payment_webhook_activated',
     );
     res.json({ ok: true, received: true, activated: true, premiumUntilMs: act.premiumUntilMs ?? null });

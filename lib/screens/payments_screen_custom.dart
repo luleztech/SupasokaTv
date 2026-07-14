@@ -35,7 +35,7 @@ const _payMuted = Color(0xFF8B9CAF);
 const _scaffold = BrandPalette.bgDeep;
 
 /// Active wait overlay while the user confirms USSD on the phone.
-const int _kPaymentWaitSeconds = 60;
+const int _kPaymentWaitSeconds = 90;
 
 /// Shown only after the server has activated premium (same moment admin sees it).
 const _kPremiumSuccessTitle = 'HONGERA';
@@ -321,13 +321,19 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             return;
           }
           final prefs = await SharedPreferences.getInstance();
-          final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+          final planFromIntent = (response['intentPlanId'] ?? response['planId'])?.toString().trim();
+          final planId = (prefs.getString('pendingPaymentPlanId')?.trim().isNotEmpty == true)
+              ? prefs.getString('pendingPaymentPlanId')!.trim()
+              : (planFromIntent ?? '');
+          if (planId.isNotEmpty && prefs.getString('pendingPaymentPlanId')?.trim() != planId) {
+            await prefs.setString('pendingPaymentPlanId', planId);
+          }
           final phone = prefs.getString('pendingPaymentPhone')?.trim();
           final publicId = await UserIdentity.getOrCreatePublicId();
           final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
             orderId: orderId,
             publicId: publicId,
-            planId: planId ?? '',
+            planId: planId,
             phone: phone ?? '',
           );
           if (serverUntil != null) {
@@ -420,13 +426,19 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             return;
           }
           final prefs = await SharedPreferences.getInstance();
-          final planId = prefs.getString('pendingPaymentPlanId')?.trim();
+          final planFromIntent = (response['intentPlanId'] ?? response['planId'])?.toString().trim();
+          final planId = (prefs.getString('pendingPaymentPlanId')?.trim().isNotEmpty == true)
+              ? prefs.getString('pendingPaymentPlanId')!.trim()
+              : (planFromIntent ?? '');
+          if (planId.isNotEmpty) {
+            await prefs.setString('pendingPaymentPlanId', planId);
+          }
           final phone = prefs.getString('pendingPaymentPhone')?.trim();
           final publicId = await UserIdentity.getOrCreatePublicId();
           final serverUntil = await PremiumRecovery.confirmPremiumOnBackend(
             orderId: id,
             publicId: publicId,
-            planId: planId ?? '',
+            planId: planId,
             phone: phone ?? '',
           );
           if (serverUntil != null) {
@@ -513,7 +525,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     _paymentCompletionInProgress = false;
     _waitExpiryHandling = false;
     _stopPaymentTimersOnly();
-    _clearPendingOrderPrefs();
+    // Keep pending order prefs so background recovery can still unlock if the
+    // previous payment actually completed after the user tapped "Anza upya".
     setState(() {
       _paymentUiPhase = _PaymentUiPhase.none;
       _pollingOrderId = null;
@@ -522,7 +535,6 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       _sessionEndDetail = null;
       _selectedBundle = null;
       _pendingBundleLabel = null;
-      _phoneCtrl.clear();
     });
   }
 

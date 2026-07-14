@@ -96,11 +96,46 @@ class PremiumRecovery {
 
     final prefs = await SharedPreferences.getInstance();
     final orderId = prefs.getString(_pendingOrderKey)?.trim() ?? '';
-    final planId = prefs.getString(_pendingPlanKey)?.trim() ?? '';
+    var planId = prefs.getString(_pendingPlanKey)?.trim() ?? '';
     final phone = prefs.getString(_pendingPhoneKey)?.trim() ?? '';
-    if (orderId.isEmpty || planId.isEmpty) return false;
-
     final publicId = await UserIdentity.getOrCreatePublicId();
+
+    // Prefer server reconcile via user-premium (heals missed webhooks).
+    final rec = await fetchUserPremiumRecord(publicId);
+    if (rec.premiumUntilMs != null) {
+      final end = DateTime.fromMillisecondsSinceEpoch(rec.premiumUntilMs!);
+      if (end.isAfter(DateTime.now())) {
+        await SubscriptionStore.setPremiumUntilMs(rec.premiumUntilMs!);
+        await _clearPendingOrderPrefs();
+        await SubscriptionStore.refreshNotifierFromPrefs();
+        return true;
+      }
+    }
+
+    if (orderId.isEmpty) return false;
+
+    if (planId.isEmpty) {
+      try {
+        final status = await paymentsApi.checkPaymentStatus(orderId);
+        final fromStatus = status['intentPlanId'] ?? status['planId'];
+        if (fromStatus is String && fromStatus.trim().isNotEmpty) {
+          planId = fromStatus.trim();
+          await prefs.setString(_pendingPlanKey, planId);
+        }
+        final premiumMs = status['premiumUntilMs'];
+        if (status['activated'] == true && premiumMs is num) {
+          final ms = premiumMs.toInt();
+          if (ms > DateTime.now().millisecondsSinceEpoch) {
+            await SubscriptionStore.setPremiumUntilMs(ms);
+            await _clearPendingOrderPrefs();
+            await SubscriptionStore.refreshNotifierFromPrefs();
+            return true;
+          }
+        }
+      } catch (_) {}
+    }
+    if (planId.isEmpty) return false;
+
     final serverUntil = await confirmPremiumOnBackend(
       orderId: orderId,
       publicId: publicId,
@@ -112,16 +147,6 @@ class PremiumRecovery {
       await _clearPendingOrderPrefs();
       await SubscriptionStore.refreshNotifierFromPrefs();
       return true;
-    }
-
-    final rec = await fetchUserPremiumRecord(publicId);
-    if (rec.premiumUntilMs != null) {
-      final end = DateTime.fromMillisecondsSinceEpoch(rec.premiumUntilMs!);
-      if (end.isAfter(DateTime.now())) {
-        await SubscriptionStore.setPremiumUntilMs(rec.premiumUntilMs!);
-        await _clearPendingOrderPrefs();
-        return true;
-      }
     }
     return false;
   }

@@ -6,7 +6,7 @@ import {
   fetchAppUpdateSettings,
   readClientAppIdentity,
 } from './appUpdatePolicy';
-import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive, isUserPremiumRevokeLocked } from './userDirectory';
+import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive } from './userDirectory';
 import { reconcilePremiumForUser } from './unifiedPayments';
 
 export type PlaybackSessionPayload = {
@@ -93,12 +93,10 @@ export async function resolvePlaybackForChannel(
     }
     const premium = await getUserPremiumRecord(trimmedUser);
     if (!isPremiumActive(premium.premiumUntilMs)) {
-      if (!(await isUserPremiumRevokeLocked(trimmedUser))) {
-        const reconciled = await reconcilePremiumForUser(trimmedUser);
-        if (!isPremiumActive(reconciled)) {
-          return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
-        }
-      } else {
+      // Always attempt reconcile — paid intents unlock via trustPaid even if a
+      // stale premium_revoked note remains from a previous admin action.
+      const reconciled = await reconcilePremiumForUser(trimmedUser);
+      if (!isPremiumActive(reconciled)) {
         return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
       }
     }

@@ -649,8 +649,24 @@ export function extractSonicWebhookPaid(payload: Record<string, unknown>): {
       ev === 'payment.success' ||
       ev === 'payment.completed' ||
       ev === 'payment_completed' ||
+      ev === 'payment.paid' ||
+      ev === 'order.paid' ||
+      ev === 'order.completed' ||
       ev === 'invoice.paid' ||
-      ev === 'charge.succeeded';
+      ev === 'charge.succeeded' ||
+      ev === 'transaction.success' ||
+      ev.endsWith('.success') ||
+      ev.endsWith('.completed') ||
+      ev.endsWith('.paid');
+  }
+  if (!paid) {
+    const rc = String(
+      payload.resultcode ?? payload.result_code ?? nest?.resultcode ?? nest?.result_code ?? '',
+    ).trim();
+    const msg = String(payload.message ?? nest?.message ?? '').toLowerCase();
+    if ((rc === '000' || rc === '0') && (msg.includes('success') || msg.includes('paid') || msg.includes('complete'))) {
+      paid = true;
+    }
   }
   return { orderId: orderId || null, paid };
 }

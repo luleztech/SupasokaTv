@@ -73,10 +73,40 @@ export function metadataFromProviderPayload(payload: unknown): { publicId: strin
     p.metadata && typeof p.metadata === 'object' && !Array.isArray(p.metadata)
       ? (p.metadata as Record<string, unknown>)
       : {};
+  const nest =
+    p.data && typeof p.data === 'object' && !Array.isArray(p.data)
+      ? (p.data as Record<string, unknown>)
+      : Array.isArray(p.data) && p.data.length > 0 && typeof p.data[0] === 'object'
+        ? (p.data[0] as Record<string, unknown>)
+        : {};
+  const nestMeta =
+    nest.metadata && typeof nest.metadata === 'object' && !Array.isArray(nest.metadata)
+      ? (nest.metadata as Record<string, unknown>)
+      : {};
   const publicId = String(
-    meta.external_id ?? meta.public_id ?? p.public_id ?? p.publicId ?? '',
+    meta.external_id ??
+      meta.public_id ??
+      meta.publicId ??
+      nestMeta.external_id ??
+      nestMeta.public_id ??
+      nest.external_id ??
+      nest.public_id ??
+      p.public_id ??
+      p.publicId ??
+      p.external_id ??
+      '',
   ).trim();
-  const planId = String(meta.plan_id ?? p.plan_id ?? p.planId ?? '').trim();
+  const planId = String(
+    meta.plan_id ??
+      meta.planId ??
+      nestMeta.plan_id ??
+      nestMeta.planId ??
+      nest.plan_id ??
+      nest.planId ??
+      p.plan_id ??
+      p.planId ??
+      '',
+  ).trim();
   return { publicId, planId };
 }
 
@@ -201,6 +231,20 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     providerPayload: sonic.raw,
   });
 
+  // create_order_simple can block ~60s; user may already have paid. Activate if Sonic already shows paid.
+  try {
+    await ensurePremiumActivatedForPaidOrder(
+      sonic.orderId,
+      { publicId: input.publicId, planId: input.planId, phone: localPhone },
+      { trustPaid: false },
+    );
+  } catch (e) {
+    logger.warn(
+      { orderId: sonic.orderId, err: e instanceof Error ? e.message : String(e) },
+      'payment_start_early_activate_failed',
+    );
+  }
+
   return {
     orderId: sonic.orderId,
     message: sonic.message,
@@ -238,9 +282,7 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
 
-  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
-  if (await isUserPremiumRevokeLocked(trimmed)) return null;
-
+  const { getUserPremiumStatus } = await import('./userDirectory');
   const existing = await getUserPremiumStatus(trimmed);
   if (isPremiumUntilActiveLocal(existing)) return existing;
 
@@ -248,12 +290,11 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   if (!pool) return null;
   await ensurePaymentIntentsTable();
 
-  // Catch paid orders that never granted premium (missed webhook / status lag).
-  const res = await pool.query<{ order_id: string }>(
-    `SELECT order_id
+  // Catch paid orders that never granted premium (missed webhook / status lag / stuck stamp).
+  const res = await pool.query<{ order_id: string; status: string; provider_status: string | null }>(
+    `SELECT order_id, status, provider_status
      FROM payment_intents
      WHERE public_id = $1
-       AND activated_at_ms IS NULL
        AND updated_at > now() - interval '90 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC
@@ -262,9 +303,21 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   );
 
   for (const row of res.rows) {
-    const ps = await resolvePaidStatusForOrder(row.order_id);
-    if (!isPaymentCompletedStatus(ps)) continue;
-    const act = await activatePremiumIfCompletedOrder(row.order_id, { publicId: trimmed }, { trustPaid: true });
+    const localPaid =
+      isPaymentCompletedStatus(row.status) || isPaymentCompletedStatus(row.provider_status ?? '');
+    let paid = localPaid;
+    if (!paid) {
+      const ps = await resolvePaidStatusForOrder(row.order_id);
+      paid = isPaymentCompletedStatus(ps);
+    }
+    if (!paid) continue;
+
+    // Verified paid order must unlock (trustPaid also clears/bypass revoke for never-granted repairs).
+    const act = await ensurePremiumActivatedForPaidOrder(
+      row.order_id,
+      { publicId: trimmed },
+      { trustPaid: true },
+    );
     if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
       return act.premiumUntilMs!;
     }
@@ -311,6 +364,41 @@ async function writePremiumForOrder(
   return { premiumUntilMs: activated.premiumUntilMs };
 }
 
+/**
+ * Handle intents already stamped activated_at_ms.
+ * - Active premium → success
+ * - Note has sonicpesa:orderId and premium expired → one-shot window, do not re-grant
+ * - Stamp without grant marker (delete/race stuck) → repair when paid/trustPaid
+ * - Admin revoke + grant marker → honor revoke unless trustPaid repair of never-granted
+ */
+async function resolveActivatedIntentPremium(
+  orderId: string,
+  identity: { publicId: string; planId: string; phone: string },
+  opts?: { trustPaid?: boolean },
+): Promise<{ activated: boolean; premiumUntilMs?: number }> {
+  const { getUserPremiumRecord } = await import('./userDirectory');
+  const rec = await getUserPremiumRecord(identity.publicId);
+  if (isPremiumUntilActiveLocal(rec.premiumUntilMs)) {
+    return { activated: true, premiumUntilMs: rec.premiumUntilMs };
+  }
+
+  const note = rec.note ?? '';
+  const grantedThisOrder = note.includes(`sonicpesa:${orderId}`);
+  if (grantedThisOrder) {
+    // Subscription window already consumed for this order (expired or revoked after grant).
+    return { activated: false };
+  }
+
+  // activated_at_ms set but premium never written for this order (legacy delete stamp / failed write).
+  if (!opts?.trustPaid) {
+    return { activated: false };
+  }
+
+  logger.warn({ orderId, publicId: identity.publicId }, 'payment_repair_activated_without_premium');
+  const out = await writePremiumForOrder(orderId, identity);
+  return { activated: true, premiumUntilMs: out.premiumUntilMs };
+}
+
 export async function activatePremiumIfCompletedOrder(
   orderId: string,
   overrides?: ActivateOverrides,
@@ -323,13 +411,7 @@ export async function activatePremiumIfCompletedOrder(
     return { activated: false };
   }
   if (intent?.activated_at_ms != null) {
-    const { getUserPremiumStatus } = await import('./userDirectory');
-    const until = await getUserPremiumStatus(identity.publicId);
-    if (isPremiumUntilActiveLocal(until)) {
-      return { activated: true, premiumUntilMs: until };
-    }
-    // One payment = one subscription window; expired premium is not restored from the same order.
-    return { activated: false };
+    return resolveActivatedIntentPremium(orderId, identity, opts);
   }
 
   // Webhook already said paid — do not wait on Sonic order_status lag (main miss cause).
@@ -355,29 +437,39 @@ export async function ensurePremiumActivatedForPaidOrder(
   const trimmed = orderId.trim();
   if (!trimmed) return { activated: false };
 
-  const intent = await getIntent(trimmed);
+  let intent = await getIntent(trimmed);
+  // Fill missing identity from overrides so webhook/poll can activate after late intent create.
+  if (
+    overrides &&
+    (!intent?.public_id || !intent?.plan_id) &&
+    (overrides.publicId || overrides.planId)
+  ) {
+    await upsertPendingIntent({
+      orderId: trimmed,
+      publicId: overrides.publicId ?? intent?.public_id ?? undefined,
+      planId: overrides.planId ?? intent?.plan_id ?? undefined,
+      buyerPhone: overrides.phone ?? intent?.buyer_phone ?? undefined,
+      provider: PAYMENT_PROVIDERS.SONICPESA,
+    });
+    intent = await getIntent(trimmed);
+  }
+
   const identity = resolveOrderIdentity(trimmed, intent, overrides);
   if (!identity.publicId || !identity.planId) {
     logger.warn({ orderId: trimmed }, 'payment_force_activate_missing_metadata');
     return { activated: false };
   }
 
-  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
-  // Admin revoke lock blocks casual reads — but a verified paid order must still unlock premium.
+  const { isUserPremiumRevokeLocked } = await import('./userDirectory');
+  // Admin revoke lock blocks casual paths — verified paid (trustPaid) still unlocks.
   if (!opts?.trustPaid && (await isUserPremiumRevokeLocked(identity.publicId))) {
     return { activated: false };
   }
 
-  // Already activated this order → return current premium.
   if (intent?.activated_at_ms != null) {
-    const until = await getUserPremiumStatus(identity.publicId);
-    if (isPremiumUntilActiveLocal(until)) {
-      return { activated: true, premiumUntilMs: until };
-    }
-    return { activated: false };
+    return resolveActivatedIntentPremium(trimmed, identity, opts);
   }
 
-  // Paid but not yet applied to this intent — always activate (extends if already premium).
   const act = await activatePremiumIfCompletedOrder(trimmed, overrides, opts);
   if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) return act;
 
@@ -393,13 +485,19 @@ export async function reconcileUnactivatedPaidIntents(limit = 40): Promise<numbe
   if (!pool) return 0;
   await ensurePaymentIntentsTable();
 
-  const res = await pool.query<{ order_id: string; public_id: string | null; plan_id: string | null; status: string }>(
-    `SELECT order_id, public_id, plan_id, status
+  const res = await pool.query<{
+    order_id: string;
+    public_id: string | null;
+    plan_id: string | null;
+    status: string;
+    provider_status: string | null;
+    activated_at_ms: string | null;
+  }>(
+    `SELECT order_id, public_id, plan_id, status, provider_status, activated_at_ms
      FROM payment_intents
-     WHERE activated_at_ms IS NULL
-       AND public_id IS NOT NULL AND public_id <> ''
+     WHERE public_id IS NOT NULL AND public_id <> ''
        AND plan_id IS NOT NULL AND plan_id <> ''
-       AND updated_at > now() - interval '7 days'
+       AND updated_at > now() - interval '14 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC
      LIMIT $1`,
@@ -409,7 +507,8 @@ export async function reconcileUnactivatedPaidIntents(limit = 40): Promise<numbe
   let activated = 0;
   for (const row of res.rows) {
     try {
-      const alreadyCompletedLocal = String(row.status ?? '').toUpperCase() === 'COMPLETED';
+      const alreadyCompletedLocal =
+        isPaymentCompletedStatus(row.status) || isPaymentCompletedStatus(row.provider_status ?? '');
       const ps = alreadyCompletedLocal ? 'COMPLETED' : await resolvePaidStatusForOrder(row.order_id);
       if (!isPaymentCompletedStatus(ps)) continue;
 
@@ -454,31 +553,12 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     intentPublicId: local?.public_id ?? undefined,
     intentPlanId: local?.plan_id ?? undefined,
   };
-  if (local?.activated_at_ms != null || local?.status === 'COMPLETED') {
-    if (local?.activated_at_ms != null) {
-      const { getUserPremiumStatus } = await import('./userDirectory');
-      const publicId = String(local.public_id ?? '').trim();
-      const existingUntil = publicId ? await getUserPremiumStatus(publicId) : null;
-      return {
-        status: 'COMPLETED',
-        resultcode: '000',
-        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
-        activated: isPremiumUntilActiveLocal(existingUntil),
-        premiumUntilMs: existingUntil ?? undefined,
-        ...intentMeta,
-      };
-    }
-
-    // Local ledger already COMPLETED (e.g. webhook) but premium write pending — activate now.
-    const ps = await resolvePaidStatusForOrder(trimmed).catch(() => 'COMPLETED');
-    const providerPaid = isPaymentCompletedStatus(ps) || local?.status === 'COMPLETED';
-    if (!providerPaid) {
-      return {
-        status: ps || local?.provider_status || 'PENDING',
-        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
-        ...intentMeta,
-      };
-    }
+  if (
+    local?.activated_at_ms != null ||
+    isPaymentCompletedStatus(local?.status ?? '') ||
+    isPaymentCompletedStatus(local?.provider_status ?? '')
+  ) {
+    // Local ledger says paid (or stamped) — activate / repair immediately; never leave paid stuck.
     const act = await ensurePremiumActivatedForPaidOrder(
       trimmed,
       {
@@ -487,19 +567,22 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       },
       { trustPaid: true },
     );
-    if (!act.activated) {
+    if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
       return {
-        status: ps || 'PENDING',
-        raw: local?.provider_payload ?? { data: [{ payment_status: ps || 'PENDING', order_id: trimmed }] },
+        status: 'COMPLETED',
+        resultcode: '000',
+        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+        activated: true,
+        premiumUntilMs: act.premiumUntilMs,
         ...intentMeta,
       };
     }
+    // Still paid at ledger — surface COMPLETED so the client keeps confirming.
     return {
       status: 'COMPLETED',
       resultcode: '000',
       raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
-      activated: act.activated,
-      premiumUntilMs: act.premiumUntilMs,
+      activated: false,
       ...intentMeta,
     };
   }
@@ -554,18 +637,6 @@ export async function confirmPremiumForOrder(args: {
   if (tracked?.plan_id && tracked.plan_id !== planId) {
     throw new HttpError(409, 'Order does not match selected plan', 'PLAN_MISMATCH');
   }
-  if (tracked?.activated_at_ms != null) {
-    const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
-    if (await isUserPremiumRevokeLocked(publicId)) {
-      throw new HttpError(403, 'Premium access was revoked for this account', 'PREMIUM_REVOKED');
-    }
-    const until = await getUserPremiumStatus(publicId);
-    if (isPremiumUntilActiveLocal(until)) {
-      return { premiumUntilMs: until };
-    }
-    throw new HttpError(409, 'Payment already used for premium', 'ORDER_ALREADY_ACTIVATED');
-  }
-
   if (!tracked?.public_id || !tracked.plan_id) {
     await upsertPendingIntent({
       orderId,
@@ -578,12 +649,15 @@ export async function confirmPremiumForOrder(args: {
   }
 
   const ps = await resolvePaidStatusForOrder(orderId);
+  const localPaid =
+    isPaymentCompletedStatus(tracked?.status ?? '') ||
+    isPaymentCompletedStatus(tracked?.provider_status ?? '');
 
   if (ps) {
     await updateIntentStatus({ orderId, providerStatus: ps });
   }
 
-  if (!isPaymentCompletedStatus(ps)) {
+  if (!isPaymentCompletedStatus(ps) && !localPaid) {
     const code = isPaymentTerminalFailure(ps) ? 409 : 402;
     throw new HttpError(code, 'Payment not completed', 'NOT_COMPLETED');
   }
@@ -593,10 +667,19 @@ export async function confirmPremiumForOrder(args: {
     { publicId, planId, phone },
     { trustPaid: true },
   );
-  if (!act.activated || act.premiumUntilMs == null) {
-    throw new HttpError(500, 'Payment completed but premium could not be activated', 'ACTIVATE_FAILED');
+  if (act.activated && isPremiumUntilActiveLocal(act.premiumUntilMs)) {
+    return { premiumUntilMs: act.premiumUntilMs! };
   }
-  return { premiumUntilMs: act.premiumUntilMs };
+
+  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
+  if (await isUserPremiumRevokeLocked(publicId)) {
+    throw new HttpError(403, 'Premium access was revoked for this account', 'PREMIUM_REVOKED');
+  }
+  const until = await getUserPremiumStatus(publicId);
+  if (isPremiumUntilActiveLocal(until)) {
+    return { premiumUntilMs: until };
+  }
+  throw new HttpError(500, 'Payment completed but premium could not be activated', 'ACTIVATE_FAILED');
 }
 
 export function providerHealthSnapshot(): {
