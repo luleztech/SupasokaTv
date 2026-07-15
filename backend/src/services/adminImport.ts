@@ -65,7 +65,10 @@ export async function importAppConfig(body: unknown): Promise<void> {
         throw new HttpError(400, 'Channel id must be a number', 'BAD_CHANNEL_ID');
       }
       channelIds.add(channelId);
-      const streamUrl = asString(ch.streamUrl ?? ch.url, '');
+      const streamUrl =
+        [ch.streamUrl, ch.url]
+          .map((v) => asString(v, '').trim())
+          .find((s) => s.length > 0) ?? '';
       await client.query(
         `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, sort_order)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,

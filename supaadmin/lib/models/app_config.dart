@@ -173,6 +173,8 @@ class ChannelDto {
         'free': free,
         'viewers': viewers,
         'url': url,
+        // Backend stores stream_url; send both keys so upsert never drops the URL.
+        'streamUrl': url,
         'enabled': enabled,
         'drm': drm,
         'clearKeyKidKey': clearKeyKidKey,
@@ -186,7 +188,11 @@ class ChannelDto {
         img: j['img'] as String,
         free: j['free'] as bool,
         viewers: j['viewers'] as String,
-        url: j['url'] as String? ?? '',
+        url: () {
+          final u = (j['url'] as String?)?.trim() ?? '';
+          if (u.isNotEmpty) return u;
+          return (j['streamUrl'] as String?)?.trim() ?? '';
+        }(),
         enabled: j['enabled'] as bool? ?? true,
         drm: normalizeChannelDrm(j['drm'] as String?),
         clearKeyKidKey: j['clearKeyKidKey'] as String? ?? '',

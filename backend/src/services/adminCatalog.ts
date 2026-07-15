@@ -40,6 +40,11 @@ function parseChannel(raw: unknown): ChannelBody {
   if (id === null) {
     throw new HttpError(400, 'Channel id must be a number', 'BAD_CHANNEL_ID');
   }
+  // Admin Flutter sends `url`; some clients send `streamUrl`. Prefer any non-empty value.
+  // Do NOT use `??` alone — empty string would shadow a valid `url` and wipe the DB.
+  const streamUrl = [c.streamUrl, c.url, c.stream_url]
+    .map((v) => asString(v, '').trim())
+    .find((s) => s.length > 0) ?? '';
   return {
     id,
     name: asString(c.name, ''),
@@ -47,8 +52,8 @@ function parseChannel(raw: unknown): ChannelBody {
     img: asString(c.img, ''),
     free: asBool(c.free, true),
     viewers: asString(c.viewers, ''),
-    url: asString(c.url, ''),
-    streamUrl: asString(c.streamUrl, ''),
+    url: streamUrl,
+    streamUrl,
     enabled: asBool(c.enabled, true),
     drm: asString(c.drm, 'none'),
     clearKeyKidKey: asString(c.clearKeyKidKey, ''),
@@ -59,7 +64,7 @@ function parseChannel(raw: unknown): ChannelBody {
 export async function upsertChannelFast(body: unknown): Promise<void> {
   const ch = parseChannel(body);
   const pool = requirePool();
-  const streamUrl = asString(ch.streamUrl ?? ch.url, '');
+  const streamUrl = ch.streamUrl || ch.url || '';
   const existing = await pool.query(`SELECT id FROM channels WHERE id = $1`, [ch.id]);
   if (existing.rowCount && existing.rowCount > 0) {
     await pool.query(
