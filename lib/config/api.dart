@@ -31,25 +31,13 @@ class _SettingsApi {
 class _PaymentsApi {
   static const _startPaymentTimeout = Duration(seconds: 95);
 
-  static const _maxStartRounds = 3;
+  /// Only retry true transport/server blips. Do not re-hit Sonic on wallet/STK failures —
+  /// especially Airtel — or the per-number rate limit shows "Subiri dakika 2–5".
+  static const _maxStartRounds = 2;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
-    if (_isTransientStartPaymentError(e)) return round < _maxStartRounds;
     if (round >= _maxStartRounds) return false;
-    return _isWalletStartFailure(e.toString().toLowerCase());
-  }
-
-  static bool _isWalletStartFailure(String lower) {
-    return lower.contains('hayajatumika') ||
-        lower.contains('hayajaweza kutumika') ||
-        lower.contains('hayajaweza kutuma') ||
-        lower.contains('hatukuweza kutuma ombi') ||
-        lower.contains('haikupokea ombi') ||
-        lower.contains('halijakubaliwa') ||
-        lower.contains('m-pesa') ||
-        lower.contains('vodacom') ||
-        lower.contains('malipo hayajatumika') ||
-        lower.contains('074, 075, 076 au 079');
+    return _isTransientStartPaymentError(e);
   }
 
   static bool _isTransientStartPaymentError(Object e) {

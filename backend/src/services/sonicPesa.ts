@@ -226,17 +226,18 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
 }
 
 /**
- * Phone candidates for SonicPesa buyer_phone: 255… international first, then local 0….
- * SonicPesa docs require 255XXXXXXXXX for Airtel/Tigo/Vodacom; sending the local format
- * first for these networks gets rejected and forces an immediate second live gateway call
- * for the same number, which can trip SonicPesa's own per-number rate limit on the very
- * first user attempt.
+ * Phone candidates for SonicPesa buyer_phone.
+ * M-Pesa / Tigo: 255… first (docs). Airtel / Halopesa: local 0… first — 255… is often
+ * rejected on Sonic and burns the per-number rate limit before the local retry runs.
  */
 export function sonicBuyerPhonesForApi(localPhone: string): string[] {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
   if (env.sonicSendLocalPhone) return [local0];
-  const out = [intl255, local0];
+  const network = detectTzMobileNetwork(local0);
+  const preferLocalFirst =
+    network === 'airtel' || network === 'halotel' || network === 'unknown';
+  const out = preferLocalFirst ? [local0, intl255] : [intl255, local0];
   return [...new Set(out.filter(Boolean))];
 }
 
@@ -259,8 +260,9 @@ type SonicCreateStep = {
 
 /**
  * Network-aware create steps. Sonic auto-routes wallet from MSISDN.
- * Prefer 255… (required for M-Pesa / Tigo / Airtel / Halopesa), then simple endpoint,
- * then local 0… only as a last-resort format retry — avoids 4 rapid STK blasts.
+ * M-Pesa / Tigo / MO Mobile: 255… first, then simple, then local last-resort.
+ * Airtel (068/069/078) / Halopesa: local 0… first — same as EaMax; intl 255… often fails
+ * and the extra gateway hits trip Sonic's per-number rate limit ("Subiri dakika 2–5").
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
@@ -284,27 +286,50 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     ];
   }
 
-  const preferLocalFallback = network === 'halotel' || network === 'unknown';
-  const steps: SonicCreateStep[] = [
-    {
-      endpoint: 'payment/create_order',
-      buyer_phone: intl255,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `intl/${network}`,
-    },
-    {
-      endpoint: 'payment/create_order_simple',
-      buyer_phone: intl255,
-      timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
-      label: `simple-intl/${network}`,
-    },
-    {
-      endpoint: 'payment/create_order',
-      buyer_phone: local0,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: preferLocalFallback ? `local/${network}` : `local-last/${network}`,
-    },
-  ];
+  const preferLocalFirst =
+    network === 'airtel' || network === 'halotel' || network === 'unknown';
+
+  const steps: SonicCreateStep[] = preferLocalFirst
+    ? [
+        {
+          endpoint: 'payment/create_order',
+          buyer_phone: local0,
+          timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+          label: `local/${network}`,
+        },
+        {
+          endpoint: 'payment/create_order_simple',
+          buyer_phone: local0,
+          timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
+          label: `simple-local/${network}`,
+        },
+        {
+          endpoint: 'payment/create_order',
+          buyer_phone: intl255,
+          timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+          label: `intl-last/${network}`,
+        },
+      ]
+    : [
+        {
+          endpoint: 'payment/create_order',
+          buyer_phone: intl255,
+          timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+          label: `intl/${network}`,
+        },
+        {
+          endpoint: 'payment/create_order_simple',
+          buyer_phone: intl255,
+          timeoutMs: SONIC_CREATE_SIMPLE_TIMEOUT_MS,
+          label: `simple-intl/${network}`,
+        },
+        {
+          endpoint: 'payment/create_order',
+          buyer_phone: local0,
+          timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+          label: `local-last/${network}`,
+        },
+      ];
 
   return steps.filter(
     (s, i, arr) =>
