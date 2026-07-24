@@ -1010,7 +1010,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                   keyboardType: TextInputType.number,
                                   inputFormatters: [
                                     FilteringTextInputFormatter.digitsOnly,
-                                    LengthLimitingTextInputFormatter(10),
+                                    // Allow paste of +255/255… then normalize down to 0XXXXXXXXX.
+                                    LengthLimitingTextInputFormatter(13),
                                   ],
                                   style: const TextStyle(
                                     color: Colors.white,
@@ -1036,7 +1037,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                                       ),
                                     ),
                                   ),
-                                  onChanged: (_) {
+                                  onChanged: (value) {
+                                    final normalized = TanzaniaPhone.normalize(value);
+                                    if (normalized != null && normalized != value) {
+                                      _phoneCtrl.value = TextEditingValue(
+                                        text: normalized,
+                                        selection: TextSelection.collapsed(offset: normalized.length),
+                                      );
+                                    }
                                     setState(() {
                                       if (!_phoneOk) _selectedBundle = null;
                                     });

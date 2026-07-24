@@ -136,19 +136,25 @@ export function isSonicInitiateSuccess(
   const responseMessage = extractSonicResponseMessage(sonicData);
   const responseCode = extractSonicResponseCode(sonicData);
   const orderId = extractSonicOrderId(sonicData);
+  const st = String(sonicData.status ?? '')
+    .toLowerCase()
+    .trim();
 
   if (orderId && isSonicPushUssdSentMessage(responseMessage)) return true;
+
+  // Explicit gateway failure — do not treat as started.
+  if (st === 'error' || st === 'failed') return false;
+
+  // EaMax-compatible: status success / success:true + order_id means Push was accepted.
+  // Do not reject solely on nested result codes (9009 etc.) when Sonic already minted an order —
+  // that pattern was blocking Vodacom 079 after a real create.
+  if (st === 'success' && orderId) return true;
+  if (sonicData.success === true && orderId) return true;
 
   if (isSonicStkSendFailure(responseMessage, responseCode) && !isSonicPushUssdSentMessage(responseMessage)) {
     return false;
   }
 
-  const st = String(sonicData.status ?? '')
-    .toLowerCase()
-    .trim();
-  if (st === 'error' || st === 'failed') return false;
-  if (st === 'success' && orderId) return true;
-  if (sonicData.success === true && orderId) return true;
   if (orderId && httpResponse.ok && isSonicPushUssdSentMessage(responseMessage)) return true;
   if (orderId && httpResponse.ok && st !== 'error' && st !== 'failed') return true;
   return false;
@@ -256,10 +262,9 @@ type SonicCreateStep = {
 };
 
 /**
- * One create_order per tap by default (preferred MSISDN format only).
- * Chaining create_order → create_order_simple → alt format burns Sonic's
- * per-number quota and forces "Subiri dakika 2–5" on the first user tap.
- * Alternate format is appended only on clear invalid-phone errors.
+ * Preferred MSISDN format first (255… for M-Pesa/Tigo, 0… for Airtel/Halo).
+ * At most one alternate-format retry on STK / invalid-phone — never create_order_simple
+ * cascades (those burn Sonic's per-number quota → Subiri 2–5).
  */
 function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
   const local0 = toLocal0Digits(localPhone);
@@ -314,6 +319,15 @@ function buildSonicAltCreateStep(localPhone: string): SonicCreateStep | null {
         timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
         label: `local-alt/${network}`,
       };
+}
+
+/** One controlled alt-format retry — STK push miss or bad MSISDN shape (not rate limits). */
+function shouldRetrySonicAltFormat(errorMessage: string, errorCode: string): boolean {
+  if (isPaymentRateLimitError(errorMessage, errorCode)) return false;
+  return (
+    isInvalidPhonePaymentError(errorMessage, errorCode) ||
+    isMobileMoneyStkSendFailure(errorMessage, errorCode)
+  );
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -467,11 +481,9 @@ export async function tryCreateSonicOrder(args: {
 
       if (isSonicInitiateSuccess(last.data, last.response)) {
         const orderId = extractSonicOrderId(last.data);
-        if (
-          orderId &&
-          (isSonicPushUssdSentMessage(retryMessage) ||
-            !isSonicStkSendFailure(retryMessage, retryCode))
-        ) {
+        // Trust gateway success + order id (same as EaMax). Push-sent wording is ideal
+        // but not required — rejecting here left Vodacom 079 stuck after a valid create.
+        if (orderId) {
           logger.info(
             { orderId, network, step: step.label, phone: step.buyer_phone },
             'sonic_create_ok',
@@ -486,8 +498,6 @@ export async function tryCreateSonicOrder(args: {
             raw: last.data,
           };
         }
-        // HTTP ok but STK not delivered — do not cascade to other endpoints.
-        break;
       }
 
       const errorMessage = retryMessage || 'Failed to start SonicPesa payment';
@@ -506,8 +516,9 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      // Only retry with alternate MSISDN format on clear invalid-phone errors.
-      if (!triedAltFormat && isInvalidPhonePaymentError(errorMessage, errorCode)) {
+      // Vodacom/M-Pesa (074–079): Sonic often needs one local 0… retry after 255… STK miss.
+      // Cap at one alt hit — never reintroduce create_order_simple cascades.
+      if (!triedAltFormat && shouldRetrySonicAltFormat(errorMessage, errorCode)) {
         const alt = buildSonicAltCreateStep(local0);
         if (alt && alt.buyer_phone !== step.buyer_phone) {
           triedAltFormat = true;
