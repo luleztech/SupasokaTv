@@ -77,18 +77,30 @@ class _PaymentsApi {
       String msg = 'Ombi la malipo halijakubaliwa.';
       if (res.statusCode == 426 || j['updateRequired'] == true) {
         msg = 'Update app yako kutoka Play Store ili kukamilisha malipo, kisha jaribu tena.';
-      } else if (res.statusCode == 429 ||
-          (j['error'] is String &&
-              (j['error'] as String).toLowerCase().contains('too many')) ||
-          (j['message']?.toString().toLowerCase().contains('too many') ?? false)) {
-        msg =
-            'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
       } else if (err is Map && err['message'] != null) {
         msg = err['message'].toString();
       } else if (j['error'] is String) {
         msg = j['error'] as String;
       } else if (j['message'] != null) {
         msg = j['message'].toString();
+      }
+      // Prefer backend Swahili. Only invent Subiri 2–5 for true per-number rate limits.
+      final lower = msg.toLowerCase();
+      final isWalletRateLimit = lower.contains('too many') ||
+          lower.contains('many attempt') ||
+          lower.contains('majaribio mengi') ||
+          lower.contains('rate limit') ||
+          lower.contains('limit reached');
+      if (isWalletRateLimit ||
+          (res.statusCode == 429 &&
+              (lower.contains('attempt') ||
+                  lower.contains('limit') ||
+                  lower.contains('mara') ||
+                  lower.contains('majaribio')))) {
+        msg =
+            'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
+      } else if (res.statusCode == 429) {
+        msg = 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
       }
       throw Exception(msg);
     }

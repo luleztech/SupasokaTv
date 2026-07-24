@@ -213,11 +213,11 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     planId: input.planId,
   });
   if (!sonic.ok || !sonic.orderId) {
-    const userMsg = mapSonicInitiateUserError(
-      localPhone,
-      sonic.errorMessage ?? sonic.message,
-      sonic.errorCode ?? '',
-    );
+    // tryCreateSonicOrder already maps to Swahili; do not re-map with raw codes
+    // (that falsely remapped STK codes like 9009 into "Subiri dakika 2–5").
+    const userMsg =
+      (sonic.errorMessage && sonic.errorMessage.trim()) ||
+      mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
     throw new HttpError(400, userMsg, 'SONIC_CREATE_FAILED');
   }
 

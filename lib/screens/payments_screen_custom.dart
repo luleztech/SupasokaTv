@@ -557,10 +557,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         lower.contains('timed out')) {
       return 'Hakuna muunganisho thabiti. Washa data ya simu au Wi-Fi, kisha ujaribu tena.';
     }
+    // Only remap true per-number rate limits — not generic "try again later".
     if (lower.contains('too many') ||
         lower.contains('many attempt') ||
+        lower.contains('majaribio mengi') ||
         lower.contains('rate limit') ||
-        lower.contains('try again later')) {
+        lower.contains('limit reached') ||
+        lower.contains('subiri dakika 2')) {
       return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
     }
     if (lower.contains('401') || lower.contains('403')) {
