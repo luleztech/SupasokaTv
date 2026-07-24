@@ -88,7 +88,7 @@ export async function deleteUserById(id: string): Promise<boolean> {
   // Void not-yet-activated intents. Do NOT stamp activated_at_ms — that made
   // real paid orders unrecoverable when the same User-xxxxx returned (paid but
   // forever locked). CANCELLED keeps them out of reconcile sweeps.
-  const { ensurePaymentIntentsTable } = await import('./paymentIntents');
+  const { ensurePaymentIntentsTable } = await import('./paymentIntents.js');
   await ensurePaymentIntentsTable();
   await pool.query(
     `UPDATE payment_intents

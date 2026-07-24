@@ -282,7 +282,7 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
 
-  const { getUserPremiumStatus } = await import('./userDirectory');
+  const { getUserPremiumStatus } = await import('./userDirectory.js');
   const existing = await getUserPremiumStatus(trimmed);
   if (isPremiumUntilActiveLocal(existing)) return existing;
 
@@ -376,7 +376,7 @@ async function resolveActivatedIntentPremium(
   identity: { publicId: string; planId: string; phone: string },
   opts?: { trustPaid?: boolean },
 ): Promise<{ activated: boolean; premiumUntilMs?: number }> {
-  const { getUserPremiumRecord } = await import('./userDirectory');
+  const { getUserPremiumRecord } = await import('./userDirectory.js');
   const rec = await getUserPremiumRecord(identity.publicId);
   if (isPremiumUntilActiveLocal(rec.premiumUntilMs)) {
     return { activated: true, premiumUntilMs: rec.premiumUntilMs };
@@ -460,7 +460,7 @@ export async function ensurePremiumActivatedForPaidOrder(
     return { activated: false };
   }
 
-  const { isUserPremiumRevokeLocked } = await import('./userDirectory');
+  const { isUserPremiumRevokeLocked } = await import('./userDirectory.js');
   // Admin revoke lock blocks casual paths — verified paid (trustPaid) still unlocks.
   if (!opts?.trustPaid && (await isUserPremiumRevokeLocked(identity.publicId))) {
     return { activated: false };
@@ -671,7 +671,7 @@ export async function confirmPremiumForOrder(args: {
     return { premiumUntilMs: act.premiumUntilMs! };
   }
 
-  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory');
+  const { getUserPremiumStatus, isUserPremiumRevokeLocked } = await import('./userDirectory.js');
   if (await isUserPremiumRevokeLocked(publicId)) {
     throw new HttpError(403, 'Premium access was revoked for this account', 'PREMIUM_REVOKED');
   }
