@@ -44,8 +44,11 @@ export function getSonicPesaRequestHeaders(): Record<string, string> {
     'X-API-KEY': env.sonicPesaApiKey,
     Accept: 'application/json',
   };
-  if (env.sonicPesaSecretKey.trim()) {
-    headers['X-SECRET-KEY'] = env.sonicPesaSecretKey.trim();
+  const secret = env.sonicPesaSecretKey.trim();
+  if (secret) {
+    // Sonic dashboard / error text vary: accept both header names.
+    headers['X-SECRET-KEY'] = secret;
+    headers['X-API-SECRET'] = secret;
   }
   return headers;
 }
@@ -259,10 +262,20 @@ type SonicCreateStep = {
   buyer_phone: string;
   timeoutMs: number;
   label: string;
+  /** Force wallet when Sonic auto-detect mis-routes (needed for Vodacom M-Pesa). */
+  channel?: string;
 };
+
+/** Sonic channel hint — Vodacom M-Pesa STK fails without this on some merchant accounts. */
+function sonicChannelForNetwork(localPhone: string): string | undefined {
+  const network = detectTzMobileNetwork(toLocal0Digits(localPhone));
+  if (network === 'vodacom' || network === 'mo_mobile') return 'MPESA';
+  return undefined;
+}
 
 /**
  * Preferred MSISDN format first (255… for M-Pesa/Tigo, 0… for Airtel/Halo).
+ * Vodacom always includes channel=MPESA (prod: Tigo works without channel; M-Pesa STK does not).
  * At most one alternate-format retry on STK / invalid-phone — never create_order_simple
  * cascades (those burn Sonic's per-number quota → Subiri 2–5).
  */
@@ -270,13 +283,15 @@ function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
   const network = detectTzMobileNetwork(local0);
+  const channel = sonicChannelForNetwork(local0);
 
   if (env.sonicSendLocalPhone) {
     return {
       endpoint: 'payment/create_order',
       buyer_phone: local0,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `local/${network}`,
+      label: channel ? `local/${network}/${channel}` : `local/${network}`,
+      channel,
     };
   }
 
@@ -288,13 +303,15 @@ function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
         endpoint: 'payment/create_order',
         buyer_phone: local0,
         timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `local/${network}`,
+        label: channel ? `local/${network}/${channel}` : `local/${network}`,
+        channel,
       }
     : {
         endpoint: 'payment/create_order',
         buyer_phone: intl255,
         timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `intl/${network}`,
+        label: channel ? `intl/${network}/${channel}` : `intl/${network}`,
+        channel,
       };
 }
 
@@ -303,6 +320,7 @@ function buildSonicAltCreateStep(localPhone: string): SonicCreateStep | null {
   const local0 = toLocal0Digits(localPhone);
   const intl255 = formatPhoneToIntl255(local0);
   const network = detectTzMobileNetwork(local0);
+  const channel = sonicChannelForNetwork(local0);
   const preferLocal =
     network === 'airtel' || network === 'halotel' || network === 'unknown';
 
@@ -311,13 +329,15 @@ function buildSonicAltCreateStep(localPhone: string): SonicCreateStep | null {
         endpoint: 'payment/create_order',
         buyer_phone: intl255,
         timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `intl-alt/${network}`,
+        label: channel ? `intl-alt/${network}/${channel}` : `intl-alt/${network}`,
+        channel,
       }
     : {
         endpoint: 'payment/create_order',
         buyer_phone: local0,
         timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `local-alt/${network}`,
+        label: channel ? `local-alt/${network}/${channel}` : `local-alt/${network}`,
+        channel,
       };
 }
 
@@ -356,6 +376,9 @@ async function postSonicCreateOrder(
     amount,
     currency: 'TZS',
   };
+  if (step.channel) {
+    payload.channel = step.channel;
+  }
   // Attach identity so webhooks can recover premium even if local intent insert raced.
   if (publicId || planId) {
     payload.metadata = {

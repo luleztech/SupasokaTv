@@ -2,11 +2,12 @@ import { getPool } from '../db/pool';
 
 export const PAYMENT_PROVIDER_SETTING_KEY = 'payment_provider';
 
-/** SonicPesa is the only supported mobile-money gateway. */
-export type PaymentProviderId = 'sonicpesa';
+/** SonicPesa is primary; Aurax is used as STK fallback (stored on payment_intents). */
+export type PaymentProviderId = 'sonicpesa' | 'aurax';
 
 export const PAYMENT_PROVIDERS = {
   SONICPESA: 'sonicpesa' as const,
+  AURAX: 'aurax' as const,
 };
 
 export function normalizePaymentProvider(_raw: unknown): PaymentProviderId {

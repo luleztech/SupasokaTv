@@ -5,6 +5,12 @@ import {
   mapSonicInitiateUserError,
   tryCreateSonicOrder,
 } from './sonicPesa';
+import {
+  fetchAuraxOrderStatus,
+  isAuraxConfigured,
+  isAuraxPaymentCompleted,
+  tryCreateAuraxOrder,
+} from './auraxPay';
 import { logger } from '../lib/logger';
 import {
   getSelectedPaymentProvider,
@@ -24,6 +30,10 @@ import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
 import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
+import {
+  isMobileMoneyStkSendFailure,
+  isPaymentRateLimitError,
+} from '../lib/paymentProviderErrors';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
@@ -213,8 +223,54 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     planId: input.planId,
   });
   if (!sonic.ok || !sonic.orderId) {
-    // tryCreateSonicOrder already maps to Swahili; do not re-map with raw codes
-    // (that falsely remapped STK codes like 9009 into "Subiri dakika 2–5").
+    const rawMsg = sonic.message || '';
+    const rawCode = sonic.errorCode ?? '';
+    // Prod: Sonic delivers Tigo fine but Vodacom/M-Pesa STK often fails — fall back to Aurax (EaMax).
+    const canAuraxFallback =
+      isAuraxConfigured() &&
+      !isPaymentRateLimitError(rawMsg, rawCode) &&
+      (isMobileMoneyStkSendFailure(rawMsg, rawCode) ||
+        detectTzMobileNetwork(localPhone) === 'vodacom' ||
+        detectTzMobileNetwork(localPhone) === 'mo_mobile');
+
+    if (canAuraxFallback) {
+      const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      logger.warn(
+        { phone: localPhone, network: detectTzMobileNetwork(localPhone), rawMsg, rawCode },
+        'payment_sonic_stk_failed_trying_aurax',
+      );
+      const aurax = await tryCreateAuraxOrder({
+        localPhone,
+        amountTzs,
+        buyerName,
+        buyerEmail,
+        publicId: input.publicId,
+        planId: input.planId,
+        clientOrderId,
+      });
+      if (aurax.ok && aurax.orderId) {
+        await upsertPendingIntent({
+          orderId: aurax.orderId,
+          publicId: input.publicId,
+          planId: input.planId,
+          amountTzs,
+          buyerPhone: localPhone,
+          provider: PAYMENT_PROVIDERS.AURAX,
+          providerPayload: { ...aurax.raw, fallbackFrom: 'sonicpesa', clientOrderId },
+        });
+        return {
+          orderId: aurax.orderId,
+          message: aurax.message,
+          provider: PAYMENT_PROVIDERS.AURAX,
+          status: 'pending',
+        };
+      }
+      logger.warn(
+        { phone: localPhone, auraxMsg: aurax.errorMessage ?? aurax.message },
+        'payment_aurax_fallback_failed',
+      );
+    }
+
     const userMsg =
       (sonic.errorMessage && sonic.errorMessage.trim()) ||
       mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
@@ -254,6 +310,13 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 }
 
 async function resolvePaidStatusForOrder(orderId: string): Promise<string> {
+  const intent = await getIntent(orderId);
+  const provider = String(intent?.payment_provider ?? '').toLowerCase();
+  if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
+    const { paymentStatus } = await fetchAuraxOrderStatus(orderId);
+    if (isAuraxPaymentCompleted(paymentStatus)) return paymentStatus || 'COMPLETED';
+    return paymentStatus;
+  }
   const { paymentStatus, raw } = await fetchSonicOrderStatus(orderId);
   if (isPaymentCompletedStatus(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
     return paymentStatus || 'COMPLETED';
@@ -587,6 +650,34 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
     };
   }
 
+  const provider = String(local?.payment_provider ?? '').toLowerCase();
+  if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
+    const { ok, paymentStatus, raw } = await fetchAuraxOrderStatus(trimmed);
+    if (paymentStatus) {
+      await updateIntentStatus({
+        orderId: trimmed,
+        providerStatus: paymentStatus,
+        providerPayload: raw,
+      });
+    }
+    if (isAuraxPaymentCompleted(paymentStatus)) {
+      const intentAfter = (await getIntent(trimmed)) ?? local;
+      const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter), {
+        trustPaid: true,
+      });
+      return {
+        status: 'COMPLETED',
+        resultcode: '000',
+        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+        activated: act.activated,
+        premiumUntilMs: act.premiumUntilMs,
+        intentPublicId: intentAfter?.public_id ?? local?.public_id ?? undefined,
+        intentPlanId: intentAfter?.plan_id ?? local?.plan_id ?? undefined,
+      };
+    }
+    return { status: paymentStatus || (ok ? 'PENDING' : 'PENDING'), raw, ...intentMeta };
+  }
+
   const { ok, paymentStatus, raw } = await fetchSonicOrderStatus(trimmed);
   const msg = String(raw.message ?? raw.error ?? '').toLowerCase();
   if (!ok && (msg.includes('not found') || msg.includes('no order'))) {
@@ -686,11 +777,14 @@ export function providerHealthSnapshot(): {
   paymentProvider: PaymentProviderId;
   configured: boolean;
   sonicConfigured: boolean;
+  auraxConfigured: boolean;
 } {
   const sonicConfigured = isSonicPesaConfigured();
+  const auraxConfigured = isAuraxConfigured();
   return {
     paymentProvider: PAYMENT_PROVIDERS.SONICPESA,
     configured: sonicConfigured,
     sonicConfigured,
+    auraxConfigured,
   };
 }

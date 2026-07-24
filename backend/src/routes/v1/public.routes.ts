@@ -34,6 +34,12 @@ import {
   extractSonicWebhookPaid,
   verifySonicPesaWebhookHmac,
 } from '../../services/sonicPesa';
+import {
+  ensureAuraxConfigured,
+  extractAuraxWebhookPaid,
+  isAuraxConfigured,
+  verifyAuraxWebhookHmac,
+} from '../../services/auraxPay';
 
 export const publicRouter = Router();
 
@@ -408,6 +414,88 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       'payment_webhook_activated',
     );
     res.json({ ok: true, received: true, activated: true, premiumUntilMs: act.premiumUntilMs ?? null });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Aurax Pay webhook — used when Sonic cannot deliver Vodacom/M-Pesa STK. */
+publicRouter.post('/aurax/webhook', async (req, res, next) => {
+  try {
+    if (!isAuraxConfigured()) {
+      ensureAuraxConfigured();
+    }
+    const rawBodyString =
+      (req as import('express').Request & { rawBody?: string }).rawBody ??
+      JSON.stringify(req.body ?? {});
+    const sigHeader =
+      (req.headers['x-aurax-signature'] as string | undefined) ??
+      (req.headers['x-webhook-signature'] as string | undefined) ??
+      (req.headers['x-signature'] as string | undefined);
+    const signatureValid = verifyAuraxWebhookHmac(rawBodyString, sigHeader);
+    const payload = (req.body ?? {}) as Record<string, unknown>;
+    const { orderId, allRefs, paid } = extractAuraxWebhookPaid(payload);
+
+    if (!orderId && allRefs.length === 0) {
+      res.status(400).json({ ok: false, error: 'Missing transaction reference' });
+      return;
+    }
+
+    const refs = allRefs.length ? allRefs : [orderId];
+    let tracked = null as Awaited<ReturnType<typeof getIntent>>;
+    for (const ref of refs) {
+      tracked = await getIntent(ref);
+      if (tracked) break;
+    }
+    const primaryId = tracked?.order_id || orderId || refs[0]!;
+
+    if (process.env.AURAXPAY_WEBHOOK_SECRET?.trim()) {
+      if (!signatureValid) {
+        res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
+        return;
+      }
+    } else if (!tracked) {
+      res.status(401).json({ ok: false, error: 'Webhook not verified' });
+      return;
+    }
+
+    if (!paid) {
+      res.json({ ok: true, received: true, activated: false });
+      return;
+    }
+
+    const meta = metadataFromProviderPayload(payload);
+    await ensurePaymentIntentsTable();
+    await upsertPendingIntent({
+      orderId: primaryId,
+      publicId: meta.publicId || tracked?.public_id || undefined,
+      planId: meta.planId || tracked?.plan_id || undefined,
+      buyerPhone: tracked?.buyer_phone || undefined,
+      provider: PAYMENT_PROVIDERS.AURAX,
+      providerPayload: payload,
+    });
+    tracked = await getIntent(primaryId);
+    await updateIntentStatus({
+      orderId: primaryId,
+      providerStatus: 'COMPLETED',
+      providerPayload: payload,
+    });
+
+    const act = await ensurePremiumActivatedForPaidOrder(
+      primaryId,
+      {
+        publicId: tracked?.public_id ?? (meta.publicId || undefined),
+        planId: tracked?.plan_id ?? (meta.planId || undefined),
+        phone: tracked?.buyer_phone ?? undefined,
+      },
+      { trustPaid: true },
+    );
+    res.json({
+      ok: true,
+      received: true,
+      activated: act.activated,
+      premiumUntilMs: act.premiumUntilMs ?? null,
+    });
   } catch (e) {
     next(e);
   }

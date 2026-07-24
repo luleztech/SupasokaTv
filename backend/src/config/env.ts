@@ -28,6 +28,17 @@ export const env = {
   sonicPesaWebhookSecret: process.env.SONICPESA_WEBHOOK_SECRET ?? '',
   /** Set to `1` to send local 0… MSISDN to Sonic (default: 255…). */
   sonicSendLocalPhone: process.env.SONIC_SEND_LOCAL_PHONE === '1',
+  /** Aurax Pay — fallback when Sonic cannot deliver Vodacom/M-Pesa STK (same as EaMax). */
+  auraxPayApiKey: process.env.AURAXPAY_API_KEY ?? '',
+  auraxPayWebhookSecret: process.env.AURAXPAY_WEBHOOK_SECRET ?? '',
+  auraxPayWebhookUrl: process.env.AURAXPAY_WEBHOOK_URL ?? '',
+  publicBaseUrl: (() => {
+    const explicit = (process.env.PUBLIC_BASE_URL ?? '').trim();
+    if (explicit) return explicit.replace(/\/$/, '');
+    const railway = (process.env.RAILWAY_PUBLIC_DOMAIN ?? '').trim();
+    if (railway) return `https://${railway.replace(/^https?:\/\//, '')}`;
+    return 'https://supasokatv-production.up.railway.app';
+  })(),
   /** FCM service-account credentials for backend push broadcast. */
   fcmProjectId: process.env.FCM_PROJECT_ID ?? '',
   fcmClientEmail: process.env.FCM_CLIENT_EMAIL ?? '',
