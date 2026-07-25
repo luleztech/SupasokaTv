@@ -114,9 +114,6 @@ class WebStreamProbe {
   ) async {
     try {
       final html = await _fetchBody(url, headers, gatewayStyle: true);
-      if (GatewayStreamExtractor.looksLikeBotChallenge(html)) {
-        return _gatewayFallback(url, config, headers);
-      }
       final extracted = GatewayStreamExtractor.extract(html) ??
           GatewayStreamExtractor.extractDrmFromHtml(html);
       if (extracted != null && extracted.streamUrl.startsWith('http')) {
@@ -164,6 +161,10 @@ class WebStreamProbe {
           authToken: config.token,
           drmType: config.normalizedDrmType,
         );
+      }
+
+      if (GatewayStreamExtractor.looksLikeHardBotChallenge(html)) {
+        return _gatewayFallback(url, config, headers);
       }
     } catch (_) {}
 

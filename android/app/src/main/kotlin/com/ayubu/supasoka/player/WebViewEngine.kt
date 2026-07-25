@@ -189,6 +189,7 @@ class WebViewEngine(
 
     private fun handlePageReady() {
         Log.d(TAG, "page ready audio=$preferredAudioLanguage")
+        hideCaptchaOverlays()
         ensurePlaybackApisInjected()
         nudgeVideoPlay()
         applyQualityAfterPageLoad()
@@ -196,6 +197,30 @@ class WebViewEngine(
         applyAudioLanguageJs(preferredAudioLanguage, scheduleRetries = true)
         onPlaybackStateChanged(PlaybackState.PLAYING)
         playbackStarted = true
+    }
+
+    /** Soft-hide Google reCAPTCHA / Cloudflare widgets if WebView fallback is unavoidable. */
+    private fun hideCaptchaOverlays() {
+        val js = """
+            (function(){
+              try {
+                var sel='.g-recaptcha,.grecaptcha-badge,iframe[src*="recaptcha"],iframe[src*="google.com/recaptcha"],#captcha,.cf-challenge,.cf-browser-verification';
+                document.querySelectorAll(sel).forEach(function(n){
+                  n.style.setProperty('display','none','important');
+                  n.style.setProperty('visibility','hidden','important');
+                  n.style.setProperty('pointer-events','none','important');
+                });
+                if (!document.getElementById('__supasoka_hide_captcha')) {
+                  var s=document.createElement('style');
+                  s.id='__supasoka_hide_captcha';
+                  s.textContent=sel+'{display:none!important;visibility:hidden!important;pointer-events:none!important}';
+                  (document.head||document.documentElement).appendChild(s);
+                }
+              } catch(e) {}
+              true;
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(js, null)
     }
 
     fun play() = nudgeVideoPlay()

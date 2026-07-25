@@ -7,6 +7,28 @@ const String kPhpGatewayRecoveryJs = '''
 
   var lastNudgeAt = 0;
 
+  function hideCaptchaOverlays() {
+    try {
+      var nodes = document.querySelectorAll(
+        '.g-recaptcha, .grecaptcha-badge, iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"], #captcha, .cf-challenge, .cf-browser-verification'
+      );
+      for (var i = 0; i < nodes.length; i++) {
+        try {
+          nodes[i].style.setProperty('display', 'none', 'important');
+          nodes[i].style.setProperty('visibility', 'hidden', 'important');
+          nodes[i].style.setProperty('pointer-events', 'none', 'important');
+        } catch (e) {}
+      }
+      var style = document.getElementById('__supasoka_hide_captcha');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = '__supasoka_hide_captcha';
+        style.textContent = '.g-recaptcha,.grecaptcha-badge,iframe[src*="recaptcha"],.cf-challenge{display:none!important;visibility:hidden!important;pointer-events:none!important}';
+        (document.head || document.documentElement).appendChild(style);
+      }
+    } catch (e) {}
+  }
+
   function getVideo() {
     return document.querySelector('video');
   }
@@ -43,6 +65,7 @@ const String kPhpGatewayRecoveryJs = '''
 
   function startMonitor() {
     setInterval(function () {
+      hideCaptchaOverlays();
       if (window.__eaMaxPlaybackLocked) return;
       var video = getVideo();
       if (!video || video.ended || !video.paused) return;
@@ -57,6 +80,7 @@ const String kPhpGatewayRecoveryJs = '''
 
   try {
     var observer = new MutationObserver(function () {
+      hideCaptchaOverlays();
       if (window.__eaMaxPlaybackLocked) return;
       var v = getVideo();
       if (v) bindVideo(v);
@@ -64,6 +88,7 @@ const String kPhpGatewayRecoveryJs = '''
     observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
   } catch (e) {}
 
+  hideCaptchaOverlays();
   bindVideo(getVideo());
   startMonitor();
   true;

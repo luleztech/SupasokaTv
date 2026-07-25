@@ -36,11 +36,8 @@ object GatewayPlaybackResolver {
         }
 
         val html = fetchHtml(gatewayUrl, reqHeaders) ?: return null
-        if (GatewayStreamExtractor.looksLikeBotChallenge(html)) {
-            Log.w(TAG, "Gateway HTML looks like bot challenge — will try WebView fallback")
-            return null
-        }
 
+        // Prefer decrypting embedded stream even when the page mentions reCAPTCHA.
         val encrypted = GatewayStreamExtractor.extract(html)
             ?: GatewayStreamExtractor.extractDrmFromHtml(html)
         if (encrypted != null && encrypted.streamUrl.lowercase().startsWith("http")) {
@@ -56,6 +53,11 @@ object GatewayPlaybackResolver {
                 licenseUrl = session.licenseUrl,
                 authToken = session.token,
             )
+        }
+
+        if (GatewayStreamExtractor.looksLikeHardBotChallenge(html)) {
+            Log.w(TAG, "Gateway HTML is a hard bot challenge with no stream payload")
+            return null
         }
 
         return null

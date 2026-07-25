@@ -48,10 +48,10 @@ class GatewayStreamExtractor {
 
   static GatewayExtracted? extract(String html) {
     if (html.isEmpty) return null;
-    if (looksLikeBotChallenge(html)) return null;
     final blocked = html.trim().toLowerCase() == 'blocked' ||
         (html.length < 200 && html.toLowerCase().contains('blocked'));
     if (blocked) return null;
+    // Extract encrypted stream even if the page also loads reCAPTCHA scripts.
 
     final fields = _parseFields(html, requireStream: true);
     if (fields != null) return _toExtracted(fields);
@@ -221,16 +221,31 @@ class GatewayStreamExtractor {
     }
   }
 
-  static bool looksLikeBotChallenge(String html) {
+  /// Hard bot walls only (Cloudflare / human-check) with no encrypted stream payload.
+  /// Soft `recaptcha` script tags on PHP gateways must not match.
+  static bool looksLikeHardBotChallenge(String html) {
     final t = html.toLowerCase();
-    return t.contains('g-recaptcha') ||
-        t.contains('recaptcha') ||
-        t.contains('cf-challenge') ||
+    final hasStreamPayload = t.contains('encryptedmpd') ||
+        t.contains('encryptedstream') ||
+        t.contains('encryptedurl') ||
+        t.contains('encryptedhls') ||
+        t.contains('encrypteddash') ||
+        t.contains('encryptedmanifest') ||
+        t.contains('keypart') ||
+        t.contains('xorkey') ||
+        t.contains('decryptkey');
+    if (hasStreamPayload) return false;
+    return t.contains('cf-challenge') ||
         t.contains('challenge-platform') ||
         t.contains('just a moment') ||
         t.contains('verify you are human') ||
-        t.contains('attention required');
+        t.contains('attention required') ||
+        t.contains('checking your browser') ||
+        (t.contains('g-recaptcha') && t.contains('data-sitekey') && html.length < 12000);
   }
+
+  @Deprecated('Use looksLikeHardBotChallenge')
+  static bool looksLikeBotChallenge(String html) => looksLikeHardBotChallenge(html);
 }
 
 class _ParsedFields {

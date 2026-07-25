@@ -29,7 +29,9 @@ object GatewayStreamExtractor {
         val blocked = html.trim().lowercase() == "blocked" ||
             (html.length < 200 && html.lowercase().contains("blocked"))
         if (blocked) return null
-        if (looksLikeBotChallenge(html)) return null
+        // Do NOT bail on "recaptcha" in the page — many PHP gateways embed Google
+        // reCAPTCHA scripts alongside encryptedMpd/keyPart. Skipping extract forces
+        // WebView and shows the captcha to users.
 
         parseFields(html, requireStream = true)?.let { return it.toExtracted() }
         extractInlineDrm(html)?.let { return it }
@@ -183,14 +185,33 @@ object GatewayStreamExtractor {
         }
     }
 
-    fun looksLikeBotChallenge(html: String): Boolean {
+    /**
+     * True only for hard bot walls (Cloudflare interstitial / human-check pages)
+     * with no embedded stream payload. Soft "recaptcha" script tags on PHP gateways
+     * must NOT match — those pages still contain encryptedMpd.
+     */
+    fun looksLikeHardBotChallenge(html: String): Boolean {
         val t = html.lowercase()
-        return t.contains("g-recaptcha") ||
-            t.contains("recaptcha") ||
-            t.contains("cf-challenge") ||
+        val hasStreamPayload =
+            t.contains("encryptedmpd") ||
+                t.contains("encryptedstream") ||
+                t.contains("encryptedurl") ||
+                t.contains("encryptedhls") ||
+                t.contains("encrypteddash") ||
+                t.contains("encryptedmanifest") ||
+                t.contains("keypart") ||
+                t.contains("xorkey") ||
+                t.contains("decryptkey")
+        if (hasStreamPayload) return false
+        return t.contains("cf-challenge") ||
             t.contains("challenge-platform") ||
             t.contains("just a moment") ||
             t.contains("verify you are human") ||
-            t.contains("attention required")
+            t.contains("attention required") ||
+            t.contains("checking your browser") ||
+            (t.contains("g-recaptcha") && t.contains("data-sitekey") && html.length < 12_000)
     }
+
+    @Deprecated("Use looksLikeHardBotChallenge", ReplaceWith("looksLikeHardBotChallenge(html)"))
+    fun looksLikeBotChallenge(html: String): Boolean = looksLikeHardBotChallenge(html)
 }
