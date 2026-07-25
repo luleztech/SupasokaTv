@@ -108,12 +108,13 @@ object GatewayPlaybackResolver {
                 headers.forEach { (k, v) -> setRequestProperty(k, v) }
             }
             val code = connection.responseCode
-            val stream: InputStream? = if (code in 200..299) connection.inputStream else connection.errorStream
+            val stream: InputStream? =
+                if (code in 200..299) connection.inputStream else connection.errorStream
             if (stream == null) {
-                Log.w(TAG, "Gateway fetch HTTP $code")
+                Log.w(TAG, "Gateway fetch HTTP $code (no body)")
                 return null
             }
-            stream.bufferedReader(Charsets.UTF_8).use { reader ->
+            val body = stream.bufferedReader(Charsets.UTF_8).use { reader ->
                 val sb = StringBuilder()
                 val buf = CharArray(8192)
                 var total = 0
@@ -126,6 +127,12 @@ object GatewayPlaybackResolver {
                 }
                 sb.toString()
             }
+            if (code !in 200..299) {
+                Log.w(TAG, "Gateway fetch HTTP $code bodyLen=${body.length} (not usable for extract)")
+                return null
+            }
+            Log.d(TAG, "Gateway fetch HTTP $code bodyLen=${body.length}")
+            body
         } catch (e: Exception) {
             Log.w(TAG, "Gateway fetch failed: ${e.message}")
             null

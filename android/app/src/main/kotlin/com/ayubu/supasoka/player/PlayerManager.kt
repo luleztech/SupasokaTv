@@ -1,6 +1,8 @@
 package com.ayubu.supasoka.player
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebView
 import androidx.media3.common.Tracks
 import com.ayubu.supasoka.domain.model.PlaybackState
@@ -12,6 +14,10 @@ import android.util.Log
 /**
  * EaMax player facade — based on NixSwahili reference player.
  * Routes direct manifests to ExoPlayer; PHP / gateway pages to WebView.
+ *
+ * For gateways: try plain HTTP extract first, then a **hidden** WebView extract
+ * (intercept m3u8/mpd / decrypt encryptedMpd) so Google reCAPTCHA is never shown.
+ * Visible WebView is only the last resort.
  */
 class PlayerManager(
     private val context: Context,
@@ -23,6 +29,8 @@ class PlayerManager(
     private var webViewEngine: WebViewEngine? = null
     private var currentSession: StreamSession? = null
     private var isInitialized = false
+    private var initGeneration = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private enum class ActiveEngine { NONE, EXO, WEBVIEW }
     private var activeEngine = ActiveEngine.NONE
@@ -41,25 +49,55 @@ class PlayerManager(
         val gatewayCandidate = streamSession.playerMode == PlayerMode.WEB ||
             StreamUrlClassifier.needsWebPlayer(streamSession.mpdUrl)
 
-        if (gatewayCandidate) {
-            val resolved = GatewayPlaybackResolver.resolve(streamSession)
-            if (resolved != null) {
-                val session = applyResolvedSession(streamSession, resolved)
-                currentSession = session
-                startExoEngine(session)
-                isInitialized = true
-                return
-            }
-            Log.d(TAG, "Gateway probe failed — WebView fallback")
+        if (!gatewayCandidate) {
             currentSession = streamSession
-            startWebViewEngine(streamSession)
+            startExoEngine(streamSession)
             isInitialized = true
             return
         }
 
+        // Keep UI on a loading/buffering state while we resolve off-screen.
+        onStateChanged(PlaybackState.BUFFERING)
+        val gen = ++initGeneration
         currentSession = streamSession
-        startExoEngine(streamSession)
-        isInitialized = true
+
+        Thread({
+            val httpResolved = try {
+                GatewayPlaybackResolver.resolve(streamSession)
+            } catch (e: Exception) {
+                Log.w(TAG, "HTTP gateway resolve error: ${e.message}")
+                null
+            }
+
+            mainHandler.post {
+                if (gen != initGeneration) return@post
+                if (httpResolved != null) {
+                    val session = applyResolvedSession(streamSession, httpResolved)
+                    currentSession = session
+                    startExoEngine(session)
+                    isInitialized = true
+                    Log.i(TAG, "Gateway resolved via HTTP → ExoPlayer")
+                    return@post
+                }
+
+                Log.d(TAG, "HTTP gateway probe failed — trying hidden WebView extract")
+                GatewayWebViewExtractor.extractAsync(context, streamSession) { webResolved ->
+                    if (gen != initGeneration) return@extractAsync
+                    if (webResolved != null) {
+                        val session = applyResolvedSession(streamSession, webResolved)
+                        currentSession = session
+                        startExoEngine(session)
+                        isInitialized = true
+                        Log.i(TAG, "Gateway resolved via hidden WebView → ExoPlayer")
+                        return@extractAsync
+                    }
+                    Log.d(TAG, "Hidden WebView extract failed — visible WebView last resort")
+                    currentSession = streamSession
+                    startWebViewEngine(streamSession)
+                    isInitialized = true
+                }
+            }
+        }, "gateway-resolve").start()
     }
 
     private fun applyResolvedSession(
@@ -141,6 +179,7 @@ class PlayerManager(
 
     fun release() {
         Log.d(TAG, "Releasing player")
+        initGeneration++
         engine?.release()
         engine = null
         webViewEngine?.release()
