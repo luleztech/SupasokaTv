@@ -419,7 +419,7 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
   }
 });
 
-/** Aurax Pay webhook — used when Sonic cannot deliver Vodacom/M-Pesa STK. */
+/** Aurax Pay webhook — used when Sonic cannot deliver Vodacom M-Pesa or Halopesa STK. */
 publicRouter.post('/aurax/webhook', async (req, res, next) => {
   try {
     if (!isAuraxConfigured()) {

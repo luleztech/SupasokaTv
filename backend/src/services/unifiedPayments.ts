@@ -179,6 +179,12 @@ export function startPaymentSuccessJson(out: {
   };
 }
 
+/** Wallets with an alternate Push-USSD route when SonicPesa cannot deliver. */
+function canUseAuraxStkFallback(localPhone: string): boolean {
+  const network = detectTzMobileNetwork(localPhone);
+  return network === 'vodacom' || network === 'mo_mobile' || network === 'halotel';
+}
+
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   orderId: string;
   message: string;
@@ -225,13 +231,14 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   if (!sonic.ok || !sonic.orderId) {
     const rawMsg = sonic.message || '';
     const rawCode = sonic.errorCode ?? '';
-    // Prod: Sonic delivers Tigo fine but Vodacom/M-Pesa STK often fails — fall back to Aurax (EaMax).
+    // If Sonic cannot deliver, route M-Pesa and HaloPesa through the configured
+    // alternate gateway. Both routes use the normalized local MSISDN and Aurax
+    // selects MPESA or HALOPESA from the prefix.
     const canAuraxFallback =
       isAuraxConfigured() &&
       !isPaymentRateLimitError(rawMsg, rawCode) &&
       (isMobileMoneyStkSendFailure(rawMsg, rawCode) ||
-        detectTzMobileNetwork(localPhone) === 'vodacom' ||
-        detectTzMobileNetwork(localPhone) === 'mo_mobile');
+        canUseAuraxStkFallback(localPhone));
 
     if (canAuraxFallback) {
       const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

@@ -5,29 +5,6 @@ import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
 import 'package:supasoka/services/user_identity.dart';
-class _SettingsApi {
-  Future<Map<String, dynamic>> getWhatsAppNumber() async {
-    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/config');
-    final res = await http.get(uri, headers: const {'Accept': 'application/json'});
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw Exception('HTTP ${res.statusCode}');
-    }
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
-    return {'number': (j['customerCareWhatsapp'] ?? '').toString()};
-  }
-
-  Future<String> getActivePaymentProvider() async {
-    final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
-    final uri = Uri.parse('$origin/api/v1/public/settings/payment-provider');
-    final res = await http.get(uri, headers: const {'Accept': 'application/json'});
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      return 'sonicpesa';
-    }
-    return 'sonicpesa';
-  }
-}
-
 class _PaymentsApi {
   static const _startPaymentTimeout = Duration(seconds: 95);
 
@@ -128,11 +105,10 @@ class _PaymentsApi {
     void Function(int attempt, int maxAttempts)? onAttempt,
   }) async {
     final normalizedPhone = TanzaniaPhone.normalize(phone.trim()) ?? phone.trim();
-    await Future.wait<void>([
-      UserIdentity.registerWithBackend(phone: normalizedPhone),
-      settingsApi.getActivePaymentProvider(),
-    ]);
-    const expectedProvider = 'sonicpesa';
+    // Registration is best-effort. Do not make payment initiation depend on a
+    // separate provider-settings request: the backend can safely select its
+    // SonicPesa or Aurax delivery route for the supplied number.
+    await UserIdentity.registerWithBackend(phone: normalizedPhone);
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/payments/start');
     final versionHeaders = await appVersionHeaders();
@@ -160,12 +136,6 @@ class _PaymentsApi {
       onAttempt?.call(round + 1, _maxStartRounds);
       try {
         final out = await _postStartPayment(uri: uri, headers: headers, bodyJson: bodyJson);
-        final provider = (out['provider'] ?? 'sonicpesa').toString().toLowerCase();
-        if (expectedProvider == 'sonicpesa' && provider != 'sonicpesa') {
-          throw Exception(
-            'Seva imerudisha $provider lakini SonicPesa imewashwa. Hakikisha backend imedeploy na jaribu tena.',
-          );
-        }
         return out;
       } catch (e) {
         lastErr = e;
@@ -267,5 +237,4 @@ class _PaymentsApi {
   Future<Map<String, dynamic>> checkZenoStatus(String orderId) => checkPaymentStatus(orderId);
 }
 
-final settingsApi = _SettingsApi();
 final paymentsApi = _PaymentsApi();

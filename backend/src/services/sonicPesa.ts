@@ -3,7 +3,6 @@ import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
 import { logger } from '../lib/logger';
 import {
-  isInvalidPhonePaymentError,
   isMobileMoneyStkSendFailure,
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
@@ -21,10 +20,9 @@ import {
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 /** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
 const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
-const SONIC_RETRY_DELAY_MS = 900;
 const SONIC_USSD_BUSY_DELAY_MS = 3_000;
 
-const sonicRetryDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const sonicDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const SONIC_PAID_STATUSES = new Set([
   'SUCCESS',
@@ -232,24 +230,17 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
 }
 
 /**
- * Phone candidates for SonicPesa buyer_phone.
- * M-Pesa / Tigo: 255… first (docs). Airtel / Halopesa: local 0… first — 255… is often
- * rejected on Sonic and burns the per-number rate limit before the local retry runs.
+ * SonicPesa requires the international 255XXXXXXXXX MSISDN for every supported
+ * Tanzanian wallet. Keeping one canonical format prevents 061 HaloPesa and 079
+ * M-Pesa requests from being mis-routed or retried as a second charge attempt.
  */
 export function sonicBuyerPhonesForApi(localPhone: string): string[] {
   const local0 = toLocal0Digits(localPhone);
-  const intl255 = formatPhoneToIntl255(local0);
-  if (env.sonicSendLocalPhone) return [local0];
-  const network = detectTzMobileNetwork(local0);
-  const preferLocalFirst =
-    network === 'airtel' || network === 'halotel' || network === 'unknown';
-  const out = preferLocalFirst ? [local0, intl255] : [intl255, local0];
-  return [...new Set(out.filter(Boolean))];
+  return [formatPhoneToIntl255(local0)].filter(Boolean);
 }
 
-/** Local 0… for DB. */
+/** Canonical SonicPesa API MSISDN: 255XXXXXXXXX. */
 export function formatPhoneForSonicPesaApi(local0: string): string {
-  if (env.sonicSendLocalPhone) return toLocal0Digits(local0);
   return formatPhoneToIntl255(local0);
 }
 
@@ -262,92 +253,22 @@ type SonicCreateStep = {
   buyer_phone: string;
   timeoutMs: number;
   label: string;
-  /** Force wallet when Sonic auto-detect mis-routes (needed for Vodacom M-Pesa). */
-  channel?: string;
 };
 
-/** Sonic channel hint — Vodacom M-Pesa STK fails without this on some merchant accounts. */
-function sonicChannelForNetwork(localPhone: string): string | undefined {
-  const network = detectTzMobileNetwork(toLocal0Digits(localPhone));
-  if (network === 'vodacom' || network === 'mo_mobile') return 'MPESA';
-  return undefined;
-}
-
 /**
- * Preferred MSISDN format first (255… for M-Pesa/Tigo, 0… for Airtel/Halo).
- * Vodacom always includes channel=MPESA (prod: Tigo works without channel; M-Pesa STK does not).
- * At most one alternate-format retry on STK / invalid-phone — never create_order_simple
- * cascades (those burn Sonic's per-number quota → Subiri 2–5).
+ * SonicPesa's documented create_order body contains the international MSISDN and
+ * does not accept a wallet/channel override. A single create request avoids
+ * duplicate USSD prompts and the gateway's per-number attempt limits.
  */
 function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
   const local0 = toLocal0Digits(localPhone);
-  const intl255 = formatPhoneToIntl255(local0);
   const network = detectTzMobileNetwork(local0);
-  const channel = sonicChannelForNetwork(local0);
-
-  if (env.sonicSendLocalPhone) {
-    return {
-      endpoint: 'payment/create_order',
-      buyer_phone: local0,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: channel ? `local/${network}/${channel}` : `local/${network}`,
-      channel,
-    };
-  }
-
-  const preferLocal =
-    network === 'airtel' || network === 'halotel' || network === 'unknown';
-
-  return preferLocal
-    ? {
-        endpoint: 'payment/create_order',
-        buyer_phone: local0,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: channel ? `local/${network}/${channel}` : `local/${network}`,
-        channel,
-      }
-    : {
-        endpoint: 'payment/create_order',
-        buyer_phone: intl255,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: channel ? `intl/${network}/${channel}` : `intl/${network}`,
-        channel,
-      };
-}
-
-function buildSonicAltCreateStep(localPhone: string): SonicCreateStep | null {
-  if (env.sonicSendLocalPhone) return null;
-  const local0 = toLocal0Digits(localPhone);
-  const intl255 = formatPhoneToIntl255(local0);
-  const network = detectTzMobileNetwork(local0);
-  const channel = sonicChannelForNetwork(local0);
-  const preferLocal =
-    network === 'airtel' || network === 'halotel' || network === 'unknown';
-
-  return preferLocal
-    ? {
-        endpoint: 'payment/create_order',
-        buyer_phone: intl255,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: channel ? `intl-alt/${network}/${channel}` : `intl-alt/${network}`,
-        channel,
-      }
-    : {
-        endpoint: 'payment/create_order',
-        buyer_phone: local0,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: channel ? `local-alt/${network}/${channel}` : `local-alt/${network}`,
-        channel,
-      };
-}
-
-/** One controlled alt-format retry — STK push miss or bad MSISDN shape (not rate limits). */
-function shouldRetrySonicAltFormat(errorMessage: string, errorCode: string): boolean {
-  if (isPaymentRateLimitError(errorMessage, errorCode)) return false;
-  return (
-    isInvalidPhonePaymentError(errorMessage, errorCode) ||
-    isMobileMoneyStkSendFailure(errorMessage, errorCode)
-  );
+  return {
+    endpoint: 'payment/create_order',
+    buyer_phone: formatPhoneToIntl255(local0),
+    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    label: `intl/${network}`,
+  };
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -376,9 +297,6 @@ async function postSonicCreateOrder(
     amount,
     currency: 'TZS',
   };
-  if (step.channel) {
-    payload.channel = step.channel;
-  }
   // Attach identity so webhooks can recover premium even if local intent insert raced.
   if (publicId || planId) {
     payload.metadata = {
@@ -472,7 +390,6 @@ export async function tryCreateSonicOrder(args: {
   const network = detectTzMobileNetwork(local0);
   const amountTzs = Math.max(1, Math.trunc(Number(args.amountTzs) || 0));
   const steps: SonicCreateStep[] = [buildSonicPrimaryCreateStep(local0)];
-  let triedAltFormat = false;
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
@@ -486,16 +403,13 @@ export async function tryCreateSonicOrder(args: {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     try {
-      if (i > 0) {
-        await sonicRetryDelay(SONIC_RETRY_DELAY_MS);
-      }
       last = await postSonicCreateOrder(step, { ...args, amountTzs });
       const responseMessage = extractSonicResponseMessage(last.data);
       const responseCode = extractSonicResponseCode(last.data);
 
       // Same-step retry only when handset already has an open USSD session.
       if (isSonicUssdBusy(responseMessage, responseCode)) {
-        await sonicRetryDelay(SONIC_USSD_BUSY_DELAY_MS);
+        await sonicDelay(SONIC_USSD_BUSY_DELAY_MS);
         last = await postSonicCreateOrder(step, { ...args, amountTzs });
       }
 
@@ -538,16 +452,6 @@ export async function tryCreateSonicOrder(args: {
           errorMessage: paymentRateLimitUserMessage(),
           errorCode,
         };
-      }
-      // Vodacom/M-Pesa (074–079): Sonic often needs one local 0… retry after 255… STK miss.
-      // Cap at one alt hit — never reintroduce create_order_simple cascades.
-      if (!triedAltFormat && shouldRetrySonicAltFormat(errorMessage, errorCode)) {
-        const alt = buildSonicAltCreateStep(local0);
-        if (alt && alt.buyer_phone !== step.buyer_phone) {
-          triedAltFormat = true;
-          steps.push(alt);
-          continue;
-        }
       }
       break;
     } catch (e) {

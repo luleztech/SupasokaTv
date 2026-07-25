@@ -26,9 +26,7 @@ export const env = {
     process.env.SONICPESA_SECRETE_KEY ??
     '',
   sonicPesaWebhookSecret: process.env.SONICPESA_WEBHOOK_SECRET ?? '',
-  /** Set to `1` to send local 0… MSISDN to Sonic (default: 255…). */
-  sonicSendLocalPhone: process.env.SONIC_SEND_LOCAL_PHONE === '1',
-  /** Aurax Pay — fallback when Sonic cannot deliver Vodacom/M-Pesa STK (same as EaMax). */
+  /** Aurax Pay — fallback when Sonic cannot deliver Vodacom M-Pesa or Halopesa STK. */
   auraxPayApiKey: process.env.AURAXPAY_API_KEY ?? '',
   auraxPayWebhookSecret: process.env.AURAXPAY_WEBHOOK_SECRET ?? '',
   auraxPayWebhookUrl: process.env.AURAXPAY_WEBHOOK_URL ?? '',
