@@ -181,8 +181,7 @@ export function startPaymentSuccessJson(out: {
 
 /** Wallets with an alternate Push-USSD route when SonicPesa cannot deliver. */
 function canUseAuraxStkFallback(localPhone: string): boolean {
-  const network = detectTzMobileNetwork(localPhone);
-  return network === 'vodacom' || network === 'mo_mobile' || network === 'halotel';
+  return isSupportedSonicPushWallet(localPhone);
 }
 
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{

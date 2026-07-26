@@ -9,7 +9,7 @@ class TanzaniaPhone {
 
   static const vodacomPrefixes = ['074', '075', '076', '079'];
   static const tigoYasPrefixes = ['065', '067', '070', '071', '077'];
-  static const airtelPrefixes = ['068', '069', '078'];
+  static const airtelPrefixes = ['066', '068', '069', '078'];
   static const halopesaPrefixes = ['061', '062', '063'];
 
   /// Documented operator prefixes (subset of [_mobileLocalRe]).
@@ -17,7 +17,6 @@ class TanzaniaPhone {
     ...halopesaPrefixes,
     '064',
     ...tigoYasPrefixes,
-    '066',
     ...airtelPrefixes,
     '072',
     '073',
@@ -102,7 +101,6 @@ class TanzaniaPhone {
       return 'M-Pesa';
     }
     if (local.startsWith('073')) return 'TTCL';
-    if (local.startsWith('066')) return 'Smile';
     if (local.startsWith('064')) return 'CooTel';
     return null;
   }
@@ -120,5 +118,5 @@ class TanzaniaPhone {
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Inakubaliwa: M-Pesa (074/075/076/079), Tigo/Yas (065/067/070/071/077), Airtel (068/069/078), Halopesa (061–063).';
+      'Inakubaliwa: M-Pesa (074/075/076/079), Tigo/Yas (065/067/070/071/077), Airtel (066/068/069/078), Halopesa (061–063).';
 }

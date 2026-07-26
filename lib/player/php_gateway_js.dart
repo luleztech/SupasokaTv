@@ -7,24 +7,48 @@ const String kPhpGatewayRecoveryJs = '''
 
   var lastNudgeAt = 0;
 
-  function hideCaptchaOverlays() {
+  function patchRecaptchaExecute() {
     try {
-      var nodes = document.querySelectorAll(
-        '.g-recaptcha, .grecaptcha-badge, iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"], #captcha, .cf-challenge, .cf-browser-verification'
-      );
-      for (var i = 0; i < nodes.length; i++) {
-        try {
-          nodes[i].style.setProperty('display', 'none', 'important');
-          nodes[i].style.setProperty('visibility', 'hidden', 'important');
-          nodes[i].style.setProperty('pointer-events', 'none', 'important');
-        } catch (e) {}
+      if (window.__supasokaCaptchaFix) return;
+      window.__supasokaCaptchaFix = true;
+      function patch() {
+        if (!window.grecaptcha || typeof grecaptcha.execute !== 'function') return false;
+        if (grecaptcha.__supasokaPatched) return true;
+        var orig = grecaptcha.execute.bind(grecaptcha);
+        grecaptcha.execute = function(siteKey, opts) {
+          try {
+            var el = document.querySelector('.g-recaptcha');
+            var size = (el && el.getAttribute('data-size')) || '';
+            if (size === 'invisible') return orig(siteKey, opts);
+            return new Promise(function(resolve, reject) {
+              var n = 0;
+              var t = setInterval(function() {
+                n++;
+                var token = '';
+                try {
+                  if (typeof grecaptcha.getResponse === 'function') {
+                    token = grecaptcha.getResponse() || '';
+                    if (!token) {
+                      for (var i = 0; i < 8; i++) {
+                        try { token = grecaptcha.getResponse(i) || ''; if (token) break; } catch (e) {}
+                      }
+                    }
+                  }
+                } catch (e) {}
+                if (token) { clearInterval(t); resolve(token); }
+                else if (n > 360) { clearInterval(t); reject(new Error('captcha_timeout')); }
+              }, 500);
+            });
+          } catch (e) {
+            return orig(siteKey, opts);
+          }
+        };
+        grecaptcha.__supasokaPatched = true;
+        return true;
       }
-      var style = document.getElementById('__supasoka_hide_captcha');
-      if (!style) {
-        style = document.createElement('style');
-        style.id = '__supasoka_hide_captcha';
-        style.textContent = '.g-recaptcha,.grecaptcha-badge,iframe[src*="recaptcha"],.cf-challenge{display:none!important;visibility:hidden!important;pointer-events:none!important}';
-        (document.head || document.documentElement).appendChild(style);
+      if (!patch()) {
+        var iv = setInterval(function() { if (patch()) clearInterval(iv); }, 400);
+        setTimeout(function() { clearInterval(iv); }, 25000);
       }
     } catch (e) {}
   }
@@ -65,7 +89,7 @@ const String kPhpGatewayRecoveryJs = '''
 
   function startMonitor() {
     setInterval(function () {
-      hideCaptchaOverlays();
+      patchRecaptchaExecute();
       if (window.__eaMaxPlaybackLocked) return;
       var video = getVideo();
       if (!video || video.ended || !video.paused) return;
@@ -80,7 +104,7 @@ const String kPhpGatewayRecoveryJs = '''
 
   try {
     var observer = new MutationObserver(function () {
-      hideCaptchaOverlays();
+      patchRecaptchaExecute();
       if (window.__eaMaxPlaybackLocked) return;
       var v = getVideo();
       if (v) bindVideo(v);
@@ -88,7 +112,7 @@ const String kPhpGatewayRecoveryJs = '''
     observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
   } catch (e) {}
 
-  hideCaptchaOverlays();
+  patchRecaptchaExecute();
   bindVideo(getVideo());
   startMonitor();
   true;

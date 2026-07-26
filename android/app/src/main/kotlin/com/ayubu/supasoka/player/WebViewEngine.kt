@@ -123,6 +123,8 @@ class WebViewEngine(
                     override fun onPageFinished(view: WebView?, finishedUrl: String?) {
                         super.onPageFinished(view, finishedUrl)
                         if (!isExternalWebPage) return
+                        // Install captcha patch ASAP (before delayed ready), so early execute() calls work.
+                        injectRecaptchaUnlockHelper()
                         val gen = pageLoadGeneration
                         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
                         val r = Runnable {
@@ -189,7 +191,9 @@ class WebViewEngine(
 
     private fun handlePageReady() {
         Log.d(TAG, "page ready audio=$preferredAudioLanguage")
-        hideCaptchaOverlays()
+        // Do NOT hide reCAPTCHA — nur/mpilali gateways only unlock after the checkbox.
+        // Hiding it left users stuck on "verify" with players:0 forever.
+        injectRecaptchaUnlockHelper()
         ensurePlaybackApisInjected()
         nudgeVideoPlay()
         applyQualityAfterPageLoad()
@@ -199,24 +203,57 @@ class WebViewEngine(
         playbackStarted = true
     }
 
-    /** Soft-hide Google reCAPTCHA / Cloudflare widgets if WebView fallback is unavoidable. */
-    private fun hideCaptchaOverlays() {
+    /**
+     * Many PHP gateways call `grecaptcha.execute()` even though the widget is
+     * `size=normal` (checkbox). That throws and never unlocks the player.
+     * Patch execute to wait for [grecaptcha.getResponse] after the user ticks the box.
+     */
+    private fun injectRecaptchaUnlockHelper() {
         val js = """
             (function(){
-              try {
-                var sel='.g-recaptcha,.grecaptcha-badge,iframe[src*="recaptcha"],iframe[src*="google.com/recaptcha"],#captcha,.cf-challenge,.cf-browser-verification';
-                document.querySelectorAll(sel).forEach(function(n){
-                  n.style.setProperty('display','none','important');
-                  n.style.setProperty('visibility','hidden','important');
-                  n.style.setProperty('pointer-events','none','important');
-                });
-                if (!document.getElementById('__supasoka_hide_captcha')) {
-                  var s=document.createElement('style');
-                  s.id='__supasoka_hide_captcha';
-                  s.textContent=sel+'{display:none!important;visibility:hidden!important;pointer-events:none!important}';
-                  (document.head||document.documentElement).appendChild(s);
-                }
-              } catch(e) {}
+              if (window.__supasokaCaptchaFix) return true;
+              window.__supasokaCaptchaFix = true;
+              function patch(){
+                try {
+                  if (!window.grecaptcha || typeof grecaptcha.execute !== 'function') return false;
+                  if (grecaptcha.__supasokaPatched) return true;
+                  var orig = grecaptcha.execute.bind(grecaptcha);
+                  grecaptcha.execute = function(siteKey, opts){
+                    try {
+                      var el = document.querySelector('.g-recaptcha');
+                      var size = (el && el.getAttribute('data-size')) || '';
+                      if (size === 'invisible') return orig(siteKey, opts);
+                      return new Promise(function(resolve, reject){
+                        var n = 0;
+                        var t = setInterval(function(){
+                          n++;
+                          var token = '';
+                          try {
+                            if (typeof grecaptcha.getResponse === 'function') {
+                              token = grecaptcha.getResponse() || '';
+                              if (!token) {
+                                for (var i = 0; i < 8; i++) {
+                                  try { token = grecaptcha.getResponse(i) || ''; if (token) break; } catch (e) {}
+                                }
+                              }
+                            }
+                          } catch (e) {}
+                          if (token) { clearInterval(t); resolve(token); }
+                          else if (n > 360) { clearInterval(t); reject(new Error('captcha_timeout')); }
+                        }, 500);
+                      });
+                    } catch (e) {
+                      return orig(siteKey, opts);
+                    }
+                  };
+                  grecaptcha.__supasokaPatched = true;
+                  return true;
+                } catch (e) { return false; }
+              }
+              if (!patch()) {
+                var iv = setInterval(function(){ if (patch()) clearInterval(iv); }, 400);
+                setTimeout(function(){ clearInterval(iv); }, 25000);
+              }
               true;
             })();
         """.trimIndent()

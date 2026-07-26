@@ -6,8 +6,7 @@ export const TZ_MOBILE_PREFIXES = [
   '061', '062', '063', // Halotel / Viettel / Amotel
   '064', // CooTel (Wiafrica)
   '065', '067', '070', '071', '077', // Yas / tiGo (MIC)
-  '066', // Smile
-  '068', '069', '078', // Airtel
+  '066', '068', '069', '078', // Airtel
   '072', // MO Mobile (legacy; may use M-Pesa via portability)
   '073', // TTCL
   '074', '075', '076', '079', // Vodacom M-Pesa
@@ -64,8 +63,7 @@ export function detectTzMobileNetwork(local0: string): TzMobileNetwork {
   if (/^06[123]/.test(p)) return 'halotel';
   if (p.startsWith('064')) return 'cootel';
   if (['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre))) return 'tigo_yas';
-  if (p.startsWith('066')) return 'smile';
-  if (/^06[89]/.test(p) || p.startsWith('078')) return 'airtel';
+  if (['066', '068', '069', '078'].some((pre) => p.startsWith(pre))) return 'airtel';
   if (p.startsWith('072')) return 'mo_mobile';
   if (isVodacomMpesaLocalPhone(p)) return 'vodacom';
   if (p.startsWith('073')) return 'ttcl';

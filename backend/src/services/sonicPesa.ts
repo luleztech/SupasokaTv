@@ -13,6 +13,8 @@ import {
   isHalotelLocalPhone,
   isSupportedSonicPushWallet,
   isVodacomMpesaLocalPhone,
+  phoneCandidatesForSonicPesaApi,
+  sonicChannelHintsForNetwork,
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
@@ -235,8 +237,7 @@ export function isSonicRawPaymentCompleted(data: Record<string, unknown>): boole
  * M-Pesa requests from being mis-routed or retried as a second charge attempt.
  */
 export function sonicBuyerPhonesForApi(localPhone: string): string[] {
-  const local0 = toLocal0Digits(localPhone);
-  return [formatPhoneToIntl255(local0)].filter(Boolean);
+  return phoneCandidatesForSonicPesaApi(localPhone);
 }
 
 /** Canonical SonicPesa API MSISDN: 255XXXXXXXXX. */
@@ -245,7 +246,7 @@ export function formatPhoneForSonicPesaApi(local0: string): string {
 }
 
 export function sonicPhoneCandidatesForApi(local0: string): string[] {
-  return sonicBuyerPhonesForApi(local0);
+  return phoneCandidatesForSonicPesaApi(local0);
 }
 
 type SonicCreateStep = {
@@ -253,22 +254,81 @@ type SonicCreateStep = {
   buyer_phone: string;
   timeoutMs: number;
   label: string;
+  channel?: string;
 };
 
-/**
- * SonicPesa's documented create_order body contains the international MSISDN and
- * does not accept a wallet/channel override. A single create request avoids
- * duplicate USSD prompts and the gateway's per-number attempt limits.
- */
 function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
+  const channels = sonicChannelHintsForNetwork(local0);
+  const primaryChannel = channels[0];
   return {
     endpoint: 'payment/create_order',
     buyer_phone: formatPhoneToIntl255(local0),
     timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    label: `intl/${network}`,
+    label: primaryChannel ? `intl/${network}/${primaryChannel}` : `intl/${network}`,
+    channel: primaryChannel,
   };
+}
+
+function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
+  const local0 = toLocal0Digits(localPhone);
+  const network = detectTzMobileNetwork(local0);
+  const phones = phoneCandidatesForSonicPesaApi(local0);
+  const channels = sonicChannelHintsForNetwork(local0);
+  const primaryChannel = channels[0];
+  const secondChannel = channels[1];
+  const steps: SonicCreateStep[] = [];
+  const seen = new Set<string>();
+
+  const addStep = (step: SonicCreateStep) => {
+    const key = `${step.endpoint}|${step.buyer_phone}|${step.channel ?? ''}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      steps.push(step);
+    }
+  };
+
+  for (const phone of phones) {
+    if (primaryChannel) {
+      addStep({
+        endpoint: 'payment/create_order',
+        buyer_phone: phone,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `intl/${network}/${primaryChannel}`,
+        channel: primaryChannel,
+      });
+    }
+    addStep({
+      endpoint: 'payment/create_order',
+      buyer_phone: phone,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: `intl/${network}/auto`,
+    });
+    if (secondChannel) {
+      addStep({
+        endpoint: 'payment/create_order',
+        buyer_phone: phone,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `intl/${network}/${secondChannel}`,
+        channel: secondChannel,
+      });
+    }
+    if (primaryChannel) {
+      addStep({
+        endpoint: 'payment/create_order_simple',
+        buyer_phone: phone,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `simple/${network}/${primaryChannel}`,
+        channel: primaryChannel,
+      });
+    }
+  }
+
+  if (steps.length === 0) {
+    steps.push(buildSonicPrimaryCreateStep(local0));
+  }
+  return steps;
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -297,6 +357,12 @@ async function postSonicCreateOrder(
     amount,
     currency: 'TZS',
   };
+  if (step.channel) {
+    payload.channel = step.channel;
+    payload.provider = step.channel;
+    payload.network = step.channel;
+    payload.operator = step.channel;
+  }
   // Attach identity so webhooks can recover premium even if local intent insert raced.
   if (publicId || planId) {
     payload.metadata = {
@@ -342,7 +408,7 @@ export function mapSonicInitiateUserError(
     }
     const network = detectTzMobileNetwork(toLocal0Digits(localPhone));
     if (network === 'airtel') {
-      return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi (068/069/078), una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
+      return 'Hatukuweza kutuma ombi la Airtel Money kwenye simu yako. Hakikisha nambari ni sahihi (066/068/069/078), una salio, na Airtel Money inafanya kazi, kisha jaribu tena.';
     }
     if (network === 'tigo_yas') {
       return 'Hatukuweza kutuma ombi la TigoPesa/Mixx (Yas) kwenye simu yako. Hakikisha nambari ni sahihi (065/067/070/071/077), una salio, na TigoPesa inafanya kazi, kisha jaribu tena.';
@@ -363,7 +429,7 @@ export function mapSonicInitiateUserError(
     return 'Hatukuweza kutuma ombi kwa nambari hii. Hakikisha unaandika nambari yako kamili ya simu ukianza na 0 (mfano 0712345678), una M-Pesa/Tigo/Airtel/Halopesa, na jaribu tena.';
   }
   if (!isSupportedSonicPushWallet(localPhone)) {
-    return `Nambari hii (${wallet}) huenda isitumie Push USSD. Tumia M-Pesa (074–079), Tigo/Yas (065/067/070/071/077), Airtel (068/069/078) au Halopesa (061–063).`;
+    return `Nambari hii (${wallet}) huenda isitumie Push USSD. Tumia M-Pesa (074–079), Tigo/Yas (065/067/070/071/077), Airtel (066/068/069/078) au Halopesa (061–063).`;
   }
   return msg || 'Malipo hayajatumika. Jaribu tena baada ya muda mfupi.';
 }
@@ -389,7 +455,7 @@ export async function tryCreateSonicOrder(args: {
   const local0 = toLocal0Digits(args.localPhone);
   const network = detectTzMobileNetwork(local0);
   const amountTzs = Math.max(1, Math.trunc(Number(args.amountTzs) || 0));
-  const steps: SonicCreateStep[] = [buildSonicPrimaryCreateStep(local0)];
+  const steps: SonicCreateStep[] = buildSonicCreateSteps(local0);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },

@@ -39,10 +39,35 @@ export function resolveAuraxChannelFromPhone(local0: string): string {
   return 'MPESA';
 }
 
+export function auraxChannelCandidates(local0: string): string[] {
+  const p = toLocal0Digits(local0);
+  const network = detectTzMobileNetwork(p);
+  switch (network) {
+    case 'airtel':
+      return ['AIRTEL_MONEY', 'AIRTEL'];
+    case 'halotel':
+      return ['HALOPESA', 'HALOTEL'];
+    case 'tigo_yas':
+      return ['TIGO_PESA', 'TIGOPESA', 'TIGO'];
+    case 'vodacom':
+    case 'mo_mobile':
+      return ['MPESA', 'VODACOM', 'VODACOMMPESA'];
+    default:
+      return [resolveAuraxChannelFromPhone(local0)];
+  }
+}
+
 /** Aurax requires E.164 `+255XXXXXXXXX`. */
 export function formatPhoneForAuraxPayApi(local0: string): string {
   const intl = formatPhoneToIntl255(toLocal0Digits(local0));
   return intl.startsWith('+') ? intl : `+${intl}`;
+}
+
+export function auraxPhoneCandidates(local0: string): string[] {
+  const p = toLocal0Digits(local0);
+  const intl = formatPhoneToIntl255(p);
+  const plusIntl = intl.startsWith('+') ? intl : `+${intl}`;
+  return [...new Set([plusIntl, intl, p])].filter((s) => s.length > 0);
 }
 
 function auraxHeaders(): Record<string, string> {
@@ -111,83 +136,110 @@ export async function tryCreateAuraxOrder(args: {
 }> {
   ensureAuraxConfigured();
   const amount = Math.max(AURAX_MIN_AMOUNT, Math.trunc(Number(args.amountTzs) || 0));
-  const channel = resolveAuraxChannelFromPhone(args.localPhone);
-  const buyerPhone = formatPhoneForAuraxPayApi(args.localPhone);
+  const channels = auraxChannelCandidates(args.localPhone);
+  const phones = auraxPhoneCandidates(args.localPhone);
   const callbackUrl =
     env.auraxPayWebhookUrl.trim() ||
     `${env.publicBaseUrl.replace(/\/$/, '')}/api/v1/public/aurax/webhook`;
 
-  const payload = {
-    amount,
-    currency: 'TZS',
-    channel,
-    buyerPhone,
-    buyerName: args.buyerName,
-    buyerEmail: args.buyerEmail,
-    description: `Supasoka ${args.planId}`,
-    callbackUrl,
-    metadata: {
-      orderId: args.clientOrderId,
-      public_id: args.publicId,
-      external_id: args.publicId,
-      plan_id: args.planId,
-    },
+  const combinations: { channel: string; phone: string }[] = [];
+  for (const ch of channels) {
+    for (const ph of phones) {
+      combinations.push({ channel: ch, phone: ph });
+    }
+  }
+  if (combinations.length === 0) {
+    combinations.push({
+      channel: resolveAuraxChannelFromPhone(args.localPhone),
+      phone: formatPhoneForAuraxPayApi(args.localPhone),
+    });
+  }
+
+  let lastFailResult: {
+    ok: false;
+    orderId: string;
+    message: string;
+    raw: Record<string, unknown>;
+    errorMessage?: string;
+  } = {
+    ok: false,
+    orderId: '',
+    message: 'Failed to start Aurax Pay',
+    raw: {},
+    errorMessage: 'Hatukuweza kuanzisha malipo. Jaribu tena.',
   };
 
-  logger.info(
-    { channel, phone: buyerPhone, amount, clientOrderId: args.clientOrderId },
-    'aurax_create_begin',
-  );
+  for (const combo of combinations) {
+    const payload = {
+      amount,
+      currency: 'TZS',
+      channel: combo.channel,
+      buyerPhone: combo.phone,
+      buyerName: args.buyerName,
+      buyerEmail: args.buyerEmail,
+      description: `Supasoka ${args.planId}`,
+      callbackUrl,
+      metadata: {
+        orderId: args.clientOrderId,
+        public_id: args.publicId,
+        external_id: args.publicId,
+        plan_id: args.planId,
+      },
+    };
 
-  try {
-    const { response, data } = await auraxFetchJson('/payments', {
-      method: 'POST',
-      headers: auraxHeaders(),
-      body: JSON.stringify(payload),
-    });
-    if (!isAuraxInitiateSuccess(data, response)) {
-      const msg = String(data.message ?? data.error ?? 'Failed to start Aurax Pay').trim();
-      logger.warn({ channel, msg, status: response.status }, 'aurax_create_failed');
+    logger.info(
+      { channel: combo.channel, phone: combo.phone, amount, clientOrderId: args.clientOrderId },
+      'aurax_create_begin',
+    );
+
+    try {
+      const { response, data } = await auraxFetchJson('/payments', {
+        method: 'POST',
+        headers: auraxHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (!isAuraxInitiateSuccess(data, response)) {
+        const msg = String(data.message ?? data.error ?? 'Failed to start Aurax Pay').trim();
+        logger.warn({ channel: combo.channel, msg, status: response.status }, 'aurax_create_failed');
+        lastFailResult = {
+          ok: false,
+          orderId: '',
+          message: msg,
+          raw: data,
+          errorMessage:
+            'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, kisha jaribu tena.',
+        };
+        continue;
+      }
+      const gatewayRef = extractAuraxTransactionRef(data);
+      if (!gatewayRef) {
+        lastFailResult = {
+          ok: false,
+          orderId: '',
+          message: 'Aurax Pay did not return a transaction id',
+          raw: data,
+          errorMessage: 'Hatukuweza kuanzisha malipo. Jaribu tena.',
+        };
+        continue;
+      }
+      logger.info({ orderId: gatewayRef, channel: combo.channel }, 'aurax_create_ok');
       return {
-        ok: false,
-        orderId: '',
-        message: msg,
+        ok: true,
+        orderId: gatewayRef,
+        message: String(
+          data.message ??
+            'Ombi limetumwa. Angalia simu yako na uingize PIN ya malipo.',
+        ),
         raw: data,
-        errorMessage:
-          'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, kisha jaribu tena.',
       };
+    } catch (e) {
+      if (combinations.indexOf(combo) === combinations.length - 1) {
+        throw e;
+      }
+      logger.warn({ err: e, channel: combo.channel, phone: combo.phone }, 'aurax_create_error_retry');
     }
-    const gatewayRef = extractAuraxTransactionRef(data);
-    if (!gatewayRef) {
-      return {
-        ok: false,
-        orderId: '',
-        message: 'Aurax Pay did not return a transaction id',
-        raw: data,
-        errorMessage: 'Hatukuweza kuanzisha malipo. Jaribu tena.',
-      };
-    }
-    logger.info({ orderId: gatewayRef, channel }, 'aurax_create_ok');
-    return {
-      ok: true,
-      orderId: gatewayRef,
-      message: String(
-        data.message ??
-          'Ombi limetumwa. Angalia simu yako na uingize PIN ya malipo.',
-      ),
-      raw: data,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    logger.warn({ err: msg }, 'aurax_create_exception');
-    return {
-      ok: false,
-      orderId: '',
-      message: msg,
-      raw: { status: 'error', message: msg },
-      errorMessage: 'Hatukuweza kuunganisha na huduma ya malipo. Jaribu tena.',
-    };
   }
+  return lastFailResult;
 }
 
 export async function fetchAuraxOrderStatus(orderId: string): Promise<{

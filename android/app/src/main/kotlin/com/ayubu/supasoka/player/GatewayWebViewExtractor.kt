@@ -91,8 +91,8 @@ object GatewayWebViewExtractor {
                     mediaPlaybackRequiresUserGesture = false
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     userAgentString = PlaybackBrowserHeaders.CHROME_MOBILE_UA
-                    // Block network images — less captcha chrome.
-                    blockNetworkImage = true
+                    // Keep images on — blocking them can break gateway / captcha scripts.
+                    blockNetworkImage = false
                 }
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -124,23 +124,48 @@ object GatewayWebViewExtractor {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         if (done.get()) return
-                        view?.evaluateJavascript(
-                            "(function(){try{return document.documentElement.outerHTML;}catch(e){return '';}})();",
-                        ) { raw ->
-                            if (done.get()) return@evaluateJavascript
-                            val html = unescapeJsString(raw)
-                            if (html.isBlank()) return@evaluateJavascript
-                            Log.d(
-                                TAG,
-                                "Hidden page htmlLen=${html.length} recaptcha=${html.contains("recaptcha", true)} " +
-                                    "encrypted=${html.contains("encrypted", true)} keyPart=${html.contains("keyPart", true)}",
-                            )
-                            val resolved = resolveFromHtml(html, gatewayUrl, session, reqHeaders)
-                            if (resolved != null) {
-                                mainHandler.removeCallbacks(timeout)
-                                finish(resolved)
+                        // Poll a few times — some gateways inject encryptedMpd after JS/captcha.
+                        fun tryReadHtml(attempt: Int) {
+                            if (done.get()) return
+                            view?.evaluateJavascript(
+                                "(function(){try{return document.documentElement.outerHTML;}catch(e){return '';}})();",
+                            ) { raw ->
+                                if (done.get()) return@evaluateJavascript
+                                val html = unescapeJsString(raw)
+                                if (html.isBlank()) {
+                                    if (attempt < 4) {
+                                        mainHandler.postDelayed({ tryReadHtml(attempt + 1) }, 1500L)
+                                    }
+                                    return@evaluateJavascript
+                                }
+                                val hasCaptcha = html.contains("recaptcha", true) ||
+                                    html.contains("g-recaptcha", true)
+                                val hasEncrypted = html.contains("encrypted", true)
+                                val hasKey = html.contains("keyPart", true)
+                                Log.d(
+                                    TAG,
+                                    "Hidden page htmlLen=${html.length} recaptcha=$hasCaptcha " +
+                                        "encrypted=$hasEncrypted keyPart=$hasKey attempt=$attempt",
+                                )
+                                val resolved = resolveFromHtml(html, gatewayUrl, session, reqHeaders)
+                                if (resolved != null) {
+                                    mainHandler.removeCallbacks(timeout)
+                                    finish(resolved)
+                                    return@evaluateJavascript
+                                }
+                                // Hard captcha wall with no stream payload — visible WebView needed.
+                                if (hasCaptcha && !hasEncrypted && !hasKey && attempt >= 2) {
+                                    Log.i(TAG, "Captcha wall without stream payload — aborting hidden extract")
+                                    mainHandler.removeCallbacks(timeout)
+                                    finish(null)
+                                    return@evaluateJavascript
+                                }
+                                if (attempt < 4) {
+                                    mainHandler.postDelayed({ tryReadHtml(attempt + 1) }, 1500L)
+                                }
                             }
                         }
+                        tryReadHtml(0)
                     }
                 }
             }
