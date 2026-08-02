@@ -4,6 +4,8 @@ export type EamaxMirrorInput = {
   title: string;
   body: string;
   scope: 'broadcast' | 'user';
+  /** all | premium | free — maps to FCM topics on the partner side */
+  target?: string;
   externalId?: string;
 };
 
@@ -15,31 +17,48 @@ export type EamaxMirrorResult = {
   messageId?: string;
   reason?: string;
   error?: string;
+  partner?: string;
 };
 
 const BRIDGE_PATH = '/api/partner/supa-push';
 const REQUEST_TIMEOUT_MS = 20_000;
 
-function bridgeConfigured(): boolean {
-  return Boolean(env.eamaxApiBaseUrl.trim() && env.eamaxBridgeSecret.trim());
+type PartnerConfig = {
+  name: string;
+  baseUrl: string;
+  secret: string;
+};
+
+function partners(): PartnerConfig[] {
+  const list: PartnerConfig[] = [];
+  if (env.eamaxApiBaseUrl.trim() && env.eamaxBridgeSecret.trim()) {
+    list.push({
+      name: 'eamax',
+      baseUrl: env.eamaxApiBaseUrl.trim(),
+      secret: env.eamaxBridgeSecret.trim(),
+    });
+  }
+  if (env.jamboplusApiBaseUrl.trim() && env.jamboplusBridgeSecret.trim()) {
+    list.push({
+      name: 'jamboplus',
+      baseUrl: env.jamboplusApiBaseUrl.trim(),
+      secret: env.jamboplusBridgeSecret.trim(),
+    });
+  }
+  return list;
 }
 
-/**
- * Forward SupaAdmin push to EaMax FCM (topic all_users or per-user token).
- * Non-blocking for Supasoka sends: failures are logged and returned, not thrown.
- */
-export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxMirrorResult> {
-  if (!bridgeConfigured()) {
-    return { ok: true, skipped: true, reason: 'eamax_bridge_not_configured' };
-  }
-
+async function mirrorToPartner(
+  partner: PartnerConfig,
+  input: EamaxMirrorInput,
+): Promise<EamaxMirrorResult> {
   const title = input.title.trim();
   const message = input.body.trim();
   if (!title || !message) {
-    return { ok: false, error: 'title and body are required' };
+    return { ok: false, error: 'title and body are required', partner: partner.name };
   }
 
-  const base = env.eamaxApiBaseUrl.replace(/\/+$/, '');
+  const base = partner.baseUrl.replace(/\/+$/, '');
   const url = `${base}${BRIDGE_PATH}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -49,6 +68,7 @@ export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxM
       title,
       message,
       scope: input.scope,
+      target: (input.target || 'all').trim() || 'all',
     };
     if (input.scope === 'user' && input.externalId?.trim()) {
       body.externalId = input.externalId.trim();
@@ -58,7 +78,7 @@ export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxM
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Partner-Secret': env.eamaxBridgeSecret,
+        'X-Partner-Secret': partner.secret,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -77,13 +97,14 @@ export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxM
     if (!res.ok) {
       const errMsg =
         (typeof parsed.error === 'string' && parsed.error) ||
-        `EaMax bridge HTTP ${res.status}`;
-      console.warn('[EaMax bridge]', errMsg);
-      return { ok: false, error: errMsg };
+        `${partner.name} bridge HTTP ${res.status}`;
+      console.warn(`[${partner.name} bridge]`, errMsg);
+      return { ok: false, error: errMsg, partner: partner.name };
     }
 
     return {
       ok: true,
+      partner: partner.name,
       scope: typeof parsed.scope === 'string' ? parsed.scope : input.scope,
       delivered:
         typeof parsed.delivered === 'boolean' ? parsed.delivered : undefined,
@@ -93,20 +114,60 @@ export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxM
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn('[EaMax bridge] request failed:', msg);
-    return { ok: false, error: msg };
+    console.warn(`[${partner.name} bridge] request failed:`, msg);
+    return { ok: false, error: msg, partner: partner.name };
   } finally {
     clearTimeout(timer);
   }
 }
 
+/**
+ * Forward SupaAdmin push to EaMax + JamboPlus (when configured).
+ * Failures are logged and returned, not thrown.
+ */
+export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxMirrorResult> {
+  const configured = partners();
+  if (configured.length === 0) {
+    return { ok: true, skipped: true, reason: 'no_push_partners_configured' };
+  }
+
+  const results = await Promise.all(configured.map((p) => mirrorToPartner(p, input)));
+  const failed = results.filter((r) => !r.ok);
+  const ok = results.some((r) => r.ok) || failed.length === 0;
+
+  // Prefer jamboplus result details when present, else first result.
+  const primary =
+    results.find((r) => r.partner === 'jamboplus' && r.ok) ||
+    results.find((r) => r.ok) ||
+    results[0];
+
+  if (failed.length) {
+    console.warn(
+      '[push partners]',
+      failed.map((f) => `${f.partner}: ${f.error}`).join('; '),
+    );
+  }
+
+  return {
+    ...primary,
+    ok,
+    reason:
+      primary.reason ||
+      (failed.length ? failed.map((f) => f.error).join('; ') : undefined),
+  };
+}
+
 export function checkEamaxBridgeConfiguration(): { ok: boolean; message: string } {
-  if (!bridgeConfigured()) {
+  const configured = partners();
+  if (configured.length === 0) {
     return {
       ok: false,
       message:
-        'EaMax mirror not configured. Set EAMAX_API_BASE_URL and EAMAX_BRIDGE_SECRET (must match EaMax SUPA_EAMAX_BRIDGE_SECRET).',
+        'No push partners configured. Set EAMAX_API_BASE_URL + EAMAX_BRIDGE_SECRET and/or JAMBOPLUS_API_BASE_URL + JAMBOPLUS_BRIDGE_SECRET.',
     };
   }
-  return { ok: true, message: 'EaMax push mirror is configured.' };
+  return {
+    ok: true,
+    message: `Push partners: ${configured.map((p) => p.name).join(', ')}`,
+  };
 }

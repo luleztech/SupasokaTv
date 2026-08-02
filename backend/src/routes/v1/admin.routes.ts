@@ -329,7 +329,7 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
     }
     const [out, eamaxMirror] = await Promise.all([
       sendPushToTopic({ title, body, target }),
-      mirrorPushToEamax({ title, body, scope: 'broadcast' }),
+      mirrorPushToEamax({ title, body, scope: 'broadcast', target }),
     ]);
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;

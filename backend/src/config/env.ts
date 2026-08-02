@@ -49,4 +49,8 @@ export const env = {
   eamaxApiBaseUrl: process.env.EAMAX_API_BASE_URL ?? '',
   /** Shared secret; must match EaMax SUPA_EAMAX_BRIDGE_SECRET. */
   eamaxBridgeSecret: process.env.EAMAX_BRIDGE_SECRET ?? '',
+  /** JamboPlus API base — mirrors SupaAdmin push to JamboPlus FCM topics. */
+  jamboplusApiBaseUrl: process.env.JAMBOPLUS_API_BASE_URL ?? '',
+  /** Shared secret; must match JamboPlus SUPA_JAMBOPLUS_BRIDGE_SECRET. */
+  jamboplusBridgeSecret: process.env.JAMBOPLUS_BRIDGE_SECRET ?? '',
 } as const;
