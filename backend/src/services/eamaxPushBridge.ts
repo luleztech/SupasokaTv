@@ -136,10 +136,10 @@ export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxM
   const ok = results.some((r) => r.ok) || failed.length === 0;
 
   // Prefer jamboplus result details when present, else first result.
-  const primary =
+  const primary: EamaxMirrorResult =
     results.find((r) => r.partner === 'jamboplus' && r.ok) ||
     results.find((r) => r.ok) ||
-    results[0];
+    results[0] || { ok: false, error: 'no partner results' };
 
   if (failed.length) {
     console.warn(
