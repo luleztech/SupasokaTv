@@ -21,6 +21,7 @@ class AudioGuideCard extends StatefulWidget {
     required this.assetPath,
     required this.title,
     this.subtitle,
+    this.autoPlay = false,
     this.accent = const Color(0xFF22C55E),
     this.accentSecondary = const Color(0xFF06B6D4),
   });
@@ -29,6 +30,8 @@ class AudioGuideCard extends StatefulWidget {
   final String assetPath;
   final String title;
   final String? subtitle;
+  /// Start playback as soon as the card mounts (e.g. payments screen open).
+  final bool autoPlay;
   final Color accent;
   final Color accentSecondary;
 
@@ -81,6 +84,22 @@ class _AudioGuideCardState extends State<AudioGuideCard>
         _position = Duration.zero;
       });
     });
+
+    if (widget.autoPlay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_startPlayback());
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AudioGuideCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.autoPlay && !oldWidget.autoPlay) {
+      unawaited(_startPlayback());
+    } else if (!widget.autoPlay && oldWidget.autoPlay) {
+      unawaited(_stop());
+    }
   }
 
   @override
@@ -97,6 +116,22 @@ class _AudioGuideCardState extends State<AudioGuideCard>
   bool get _isPlaying => _state == PlayerState.playing;
   bool get _hasStarted => _position > Duration.zero || _isPlaying;
 
+  Future<void> _startPlayback() async {
+    if (_loading || _isPlaying) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await _player.play(AssetSource(widget.assetPath));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Imeshindikana kuanzisha sauti. Jaribu tena.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _toggle() async {
     if (_loading) return;
     try {
@@ -108,16 +143,10 @@ class _AudioGuideCardState extends State<AudioGuideCard>
         await _player.resume();
         return;
       }
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-      await _player.play(AssetSource(widget.assetPath));
-    } catch (e) {
+      await _startPlayback();
+    } catch (_) {
       if (!mounted) return;
       setState(() => _error = 'Imeshindikana kuanzisha sauti. Jaribu tena.');
-    } finally {
-      if (mounted) setState(() => _loading = false);
     }
   }
 

@@ -897,6 +897,8 @@ class _ChannelRailSection extends StatelessWidget {
     required this.channels,
     required this.lockedFor,
     required this.onChannel,
+    this.tileWidth = _kHomeRailTileWidth,
+    this.posterHeight = _kHomeRailPosterHeight,
   });
 
   final String title;
@@ -904,12 +906,14 @@ class _ChannelRailSection extends StatelessWidget {
   final List<Channel> channels;
   final bool Function(Channel) lockedFor;
   final void Function(Channel) onChannel;
+  final double tileWidth;
+  final double posterHeight;
 
   @override
   Widget build(BuildContext context) {
     if (channels.isEmpty) return const SizedBox.shrink();
-    const tileW = _kHomeRailTileWidth;
-    const tileH = _kHomeRailTileHeight;
+    final tileW = tileWidth;
+    final tileH = posterHeight + 44;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: _kHomeSectionGap),
@@ -938,7 +942,7 @@ class _ChannelRailSection extends StatelessWidget {
                       ChannelCard(
                         channel: ch,
                         width: tileW,
-                        posterHeight: _kHomeRailPosterHeight,
+                        posterHeight: posterHeight,
                         locked: lockedFor(ch),
                         onPress: () => onChannel(ch),
                       ),

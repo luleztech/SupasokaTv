@@ -81,7 +81,7 @@ object GatewayPlaybackResolver {
         if (session.drmType != DrmType.NONE) {
             drm = session.drmType
         } else if (license.isNotBlank()) {
-            drm = if (license.lowercase().contains("playready")) DrmType.PLAYREADY else DrmType.WIDEVINE
+            drm = if (license.lowercase().contains("playready")) DrmType.PLAYREADY else DrmType.WIDEVINE_L3
         } else if (clearKey.isNotBlank()) {
             drm = DrmType.CLEARKEY
         }
@@ -102,8 +102,8 @@ object GatewayPlaybackResolver {
         return try {
             connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
-                connectTimeout = 15_000
-                readTimeout = 15_000
+                connectTimeout = 6_000
+                readTimeout = 6_000
                 requestMethod = "GET"
                 headers.forEach { (k, v) -> setRequestProperty(k, v) }
             }

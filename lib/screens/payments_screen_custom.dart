@@ -62,11 +62,14 @@ class PaymentsScreen extends StatefulWidget {
     this.accentColor = _accentBlue,
     this.bottomPadding = 0,
     this.onPaymentSuccess,
+    this.autoPlayGuide = true,
   });
 
   final Color accentColor;
   final double bottomPadding;
   final Future<void> Function()? onPaymentSuccess;
+  /// Auto-start the audio guide while this screen is the active payments view.
+  final bool autoPlayGuide;
 
   @override
   State<PaymentsScreen> createState() => _PaymentsScreenState();
@@ -959,10 +962,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                   _Reveal(
                     controller: _entryCtrlSafe,
                     delay: 0.00,
-                    child: const AudioGuideCard(
+                    child: AudioGuideCard(
                       assetPath: 'audio/fungua_zote_guide.mp3',
-                      title: 'Jinsi ya kufungua channel zote — bonyeza hapa kusikiliza',
+                      title: 'Jinsi ya kufungua channel zote',
                       subtitle: 'Mwongozo mfupi wa hatua zote',
+                      autoPlay: widget.autoPlayGuide,
                     ),
                   ),
                   const SizedBox(height: 18),

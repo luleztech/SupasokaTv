@@ -18,7 +18,8 @@ object GatewayStreamExtractor {
     )
     private val licenseFields = listOf(
         "encryptedLicense", "encryptedLicence", "encryptedDrm", "encryptedWidevine",
-        "encryptedLicenseUrl",
+        "encryptedLicenseUrl", "encryptedLic", "encryptedWV", "encryptedWidevineUrl",
+        "licUrl", "license_url",
     )
     private val tokenFields = listOf("encryptedToken", "encryptedAuth", "encryptedAuthToken")
     private val keyFields = listOf("keyPart", "key", "xorKey", "decryptKey")
@@ -138,9 +139,11 @@ object GatewayStreamExtractor {
         val patterns = listOf(
             """['"]com\.widevine\.alpha['"]\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
             """['"]com\.widevine['"]\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """servers\s*:\s*\{[^}]*com\.widevine\.alpha['"]?\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
+            """licenseServer(?:s|Url)?\s*[:=]\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
             """licenseUrl\s*:\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
             """Lic_?url\s*=\s*['"](https?://[^'"]+)['"]""".toRegex(RegexOption.IGNORE_CASE),
-            """(https?://[^\s"'<>]*(?:license|widevine|RightsManager|AcquireLicense|/wv/|/drm/)[^\s"'<>]*)""".toRegex(RegexOption.IGNORE_CASE),
+            """(https?://[^\s"'<>]*(?:license|widevine|RightsManager|AcquireLicense|/wv/|/drm/|/proxy/)[^\s"'<>]*)""".toRegex(RegexOption.IGNORE_CASE),
         )
         for (re in patterns) {
             val url = re.find(html)?.groupValues?.getOrNull(1)?.trim().orEmpty()

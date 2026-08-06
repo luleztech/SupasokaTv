@@ -76,7 +76,10 @@ class _MainShellState extends State<MainShell> {
                   index: nav.currentTab,
                   children: const [
                     HomeScreen(key: ValueKey('home_tab')),
-                    PaymentScreen(key: ValueKey('unlock_tab')),
+                    PaymentScreen(
+                      key: ValueKey('unlock_tab'),
+                      playGuideWhenTabActive: true,
+                    ),
                     ProfileScreen(key: ValueKey('profile_tab')),
                   ],
                 ),

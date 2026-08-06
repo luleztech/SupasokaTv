@@ -10,6 +10,8 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.ayubu.supasoka.domain.model.PlaybackState
 import com.ayubu.supasoka.domain.model.StreamQuality
 import com.ayubu.supasoka.domain.model.StreamSession
@@ -22,6 +24,7 @@ class WebViewEngine(
     private val context: Context,
     private val onPlaybackStateChanged: (PlaybackState) -> Unit,
     private val onError: (String) -> Unit,
+    private val onHumanCheck: (Boolean) -> Unit = {},
 ) {
     private var webView: WebView? = null
     private var currentSession: StreamSession? = null
@@ -39,6 +42,8 @@ class WebViewEngine(
     private var audioLanguageConfirmed = false
     private var pageLoadGeneration = 0
     private var pageFinishRunnable: Runnable? = null
+    private var captchaPollRunnable: Runnable? = null
+    private var humanCheckActive = false
     private val pendingRunnables = mutableListOf<Runnable>()
 
     companion object {
@@ -105,6 +110,9 @@ class WebViewEngine(
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
+                // Player hooks only — never stub/hide reCAPTCHA in the visible WebView.
+                installDocumentStartHooks(this)
+
                 webViewClient = object : WebViewClient() {
                     override fun onPageStarted(
                         view: WebView?,
@@ -114,25 +122,34 @@ class WebViewEngine(
                         pageLoadGeneration++
                         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
                         pageFinishRunnable = null
+                        stopCaptchaPoll()
+                        if (humanCheckActive) {
+                            humanCheckActive = false
+                            onHumanCheck(false)
+                        }
                         playbackStarted = false
                         playbackApisInjected = false
                         audioLanguageConfirmed = false
+                        drm4012Handled = false
+                        // Patch execute() to wait for checkbox; do NOT hide the widget.
+                        injectRecaptchaUnlockHelper()
+                        injectPlayerCaptureHook()
+                        injectWidevineL3Fallback()
                         onPlaybackStateChanged(PlaybackState.BUFFERING)
                     }
 
                     override fun onPageFinished(view: WebView?, finishedUrl: String?) {
                         super.onPageFinished(view, finishedUrl)
                         if (!isExternalWebPage) return
-                        // Install captcha patch ASAP (before delayed ready), so early execute() calls work.
                         injectRecaptchaUnlockHelper()
                         val gen = pageLoadGeneration
                         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
                         val r = Runnable {
                             if (gen != pageLoadGeneration) return@Runnable
-                            handlePageReady()
+                            classifyPageThenReady(gen)
                         }
                         pageFinishRunnable = r
-                        mainHandler.postDelayed(r, 600)
+                        mainHandler.postDelayed(r, 450)
                     }
 
                     override fun onReceivedError(
@@ -150,10 +167,15 @@ class WebViewEngine(
                     override fun onConsoleMessage(
                         consoleMessage: android.webkit.ConsoleMessage?,
                     ): Boolean {
+                        val msg = consoleMessage?.message().orEmpty()
                         Log.d(
                             "ShakaConsole",
-                            "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()}",
+                            "[${consoleMessage?.messageLevel()}] $msg",
                         )
+                        // Shaka 4012 = RESTRICTIONS_CANNOT_BE_MET (often HDCP / L1-only video).
+                        if (msg.contains("4012") && msg.contains("Shaka", ignoreCase = true)) {
+                            mainHandler.post { handleDrmRestrictedError() }
+                        }
                         return true
                     }
                 }
@@ -167,7 +189,9 @@ class WebViewEngine(
                         }
                     },
                     onQualityProbe = { wanted, maxH, activeH, applied ->
-                        if (applied) {
+                        val expected = qualityModeFor(selectedQuality)
+                        // Ignore stale probes from a previous quality pick.
+                        if (applied && wanted == expected) {
                             qualityConfirmed = true
                             Log.d(QUALITY_TAG, "quality confirmed wanted=$wanted maxH=$maxH activeH=$activeH")
                         }
@@ -189,11 +213,114 @@ class WebViewEngine(
         }
     }
 
-    private fun handlePageReady() {
-        Log.d(TAG, "page ready audio=$preferredAudioLanguage")
-        // Do NOT hide reCAPTCHA — nur/mpilali gateways only unlock after the checkbox.
-        // Hiding it left users stuck on "verify" with players:0 forever.
+    /**
+     * Visible WebView: wait for a real checkbox token. Do not stub or hide reCAPTCHA —
+     * hiding left users stuck on "verify you are not a robot" with no box to tick.
+     */
+    private fun injectRecaptchaUnlockHelper() {
+        webView?.evaluateJavascript(GatewayPlaybackJs.checkboxRecaptchaUnlockScript(), null)
+    }
+
+    private fun installDocumentStartHooks(wv: WebView) {
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(
+                    wv,
+                    GatewayPlaybackJs.checkboxRecaptchaUnlockScript() + "\n" +
+                        GatewayPlaybackJs.playerCaptureHookScript() + "\n" +
+                        GatewayPlaybackJs.widevineL3FallbackScript(),
+                    setOf("*"),
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "document-start hooks unavailable: ${e.message}")
+        }
+    }
+
+    private fun injectPlayerCaptureHook() {
+        webView?.evaluateJavascript(GatewayPlaybackJs.playerCaptureHookScript(), null)
+    }
+
+    private fun classifyPageThenReady(gen: Int) {
+        if (gen != pageLoadGeneration) return
         injectRecaptchaUnlockHelper()
+        webView?.evaluateJavascript(GatewayPlaybackJs.pageCaptchaStateScript()) { raw ->
+            if (gen != pageLoadGeneration) return@evaluateJavascript
+            val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
+            if (status == "captcha") {
+                enterCaptchaMode(gen)
+            } else {
+                exitCaptchaModeIfNeeded()
+                handlePageReady()
+            }
+        }
+    }
+
+    private fun enterCaptchaMode(gen: Int) {
+        if (gen != pageLoadGeneration) return
+        Log.i(TAG, "Human check required — revealing reCAPTCHA for user")
+        if (!humanCheckActive) {
+            humanCheckActive = true
+            onHumanCheck(true)
+        }
+        webView?.evaluateJavascript(GatewayPlaybackJs.revealCaptchaScript(), null)
+        injectRecaptchaUnlockHelper()
+        injectPlayerCaptureHook()
+        injectWidevineL3Fallback()
+        onPlaybackStateChanged(PlaybackState.BUFFERING)
+        startCaptchaPoll(gen)
+    }
+
+    private fun startCaptchaPoll(gen: Int) {
+        stopCaptchaPoll()
+        var attempts = 0
+        val poll = object : Runnable {
+            override fun run() {
+                if (gen != pageLoadGeneration) return
+                attempts++
+                injectRecaptchaUnlockHelper()
+                webView?.evaluateJavascript(GatewayPlaybackJs.revealCaptchaScript(), null)
+                webView?.evaluateJavascript(GatewayPlaybackJs.pageCaptchaStateScript()) { raw ->
+                    if (gen != pageLoadGeneration) return@evaluateJavascript
+                    val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
+                    if (status == "playing" || status == "ok") {
+                        Log.i(TAG, "Human check cleared ($status) — starting playback")
+                        exitCaptchaModeIfNeeded()
+                        handlePageReady()
+                        return@evaluateJavascript
+                    }
+                    if (attempts < 180) {
+                        captchaPollRunnable = this
+                        mainHandler.postDelayed(this, 500)
+                    } else {
+                        Log.w(TAG, "Human check still pending after timeout — keep UI clear")
+                    }
+                }
+            }
+        }
+        captchaPollRunnable = poll
+        mainHandler.postDelayed(poll, 400)
+    }
+
+    private fun exitCaptchaModeIfNeeded() {
+        if (!humanCheckActive) {
+            onHumanCheck(false)
+            return
+        }
+        humanCheckActive = false
+        onHumanCheck(false)
+    }
+
+    private fun stopCaptchaPoll() {
+        captchaPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        captchaPollRunnable = null
+    }
+
+    private fun handlePageReady() {
+        Log.d(TAG, "page ready — autoplay audio=$preferredAudioLanguage")
+        injectRecaptchaUnlockHelper()
+        injectPlayerCaptureHook()
+        injectWidevineL3Fallback()
         ensurePlaybackApisInjected()
         nudgeVideoPlay()
         applyQualityAfterPageLoad()
@@ -201,63 +328,45 @@ class WebViewEngine(
         applyAudioLanguageJs(preferredAudioLanguage, scheduleRetries = true)
         onPlaybackStateChanged(PlaybackState.PLAYING)
         playbackStarted = true
+        scheduleForceAutoplay(pageLoadGeneration, 0)
     }
 
-    /**
-     * Many PHP gateways call `grecaptcha.execute()` even though the widget is
-     * `size=normal` (checkbox). That throws and never unlocks the player.
-     * Patch execute to wait for [grecaptcha.getResponse] after the user ticks the box.
-     */
-    private fun injectRecaptchaUnlockHelper() {
-        val js = """
-            (function(){
-              if (window.__supasokaCaptchaFix) return true;
-              window.__supasokaCaptchaFix = true;
-              function patch(){
-                try {
-                  if (!window.grecaptcha || typeof grecaptcha.execute !== 'function') return false;
-                  if (grecaptcha.__supasokaPatched) return true;
-                  var orig = grecaptcha.execute.bind(grecaptcha);
-                  grecaptcha.execute = function(siteKey, opts){
-                    try {
-                      var el = document.querySelector('.g-recaptcha');
-                      var size = (el && el.getAttribute('data-size')) || '';
-                      if (size === 'invisible') return orig(siteKey, opts);
-                      return new Promise(function(resolve, reject){
-                        var n = 0;
-                        var t = setInterval(function(){
-                          n++;
-                          var token = '';
-                          try {
-                            if (typeof grecaptcha.getResponse === 'function') {
-                              token = grecaptcha.getResponse() || '';
-                              if (!token) {
-                                for (var i = 0; i < 8; i++) {
-                                  try { token = grecaptcha.getResponse(i) || ''; if (token) break; } catch (e) {}
-                                }
-                              }
-                            }
-                          } catch (e) {}
-                          if (token) { clearInterval(t); resolve(token); }
-                          else if (n > 360) { clearInterval(t); reject(new Error('captcha_timeout')); }
-                        }, 500);
-                      });
-                    } catch (e) {
-                      return orig(siteKey, opts);
-                    }
-                  };
-                  grecaptcha.__supasokaPatched = true;
-                  return true;
-                } catch (e) { return false; }
-              }
-              if (!patch()) {
-                var iv = setInterval(function(){ if (patch()) clearInterval(iv); }, 400);
-                setTimeout(function(){ clearInterval(iv); }, 25000);
-              }
-              true;
-            })();
-        """.trimIndent()
-        webView?.evaluateJavascript(js, null)
+    private fun injectWidevineL3Fallback() {
+        webView?.evaluateJavascript(GatewayPlaybackJs.widevineL3FallbackScript(), null)
+    }
+
+    private var drm4012Handled = false
+
+    private fun handleDrmRestrictedError() {
+        if (drm4012Handled) return
+        drm4012Handled = true
+        Log.w(QUALITY_TAG, "Shaka 4012 DRM restricted — clearing app restrictions + L3")
+        injectWidevineL3Fallback()
+        webView?.evaluateJavascript(
+            "try{window.__supasokaHandleDrm4012&&window.__supasokaHandleDrm4012();}catch(e){}",
+            null,
+        )
+        postDelayed({
+            injectWidevineL3Fallback()
+            play()
+        }, 500)
+    }
+
+    /** Keep forcing play until the video is actually running (no user gesture needed). */
+    private fun scheduleForceAutoplay(gen: Int, attempt: Int) {
+        if (gen != pageLoadGeneration) return
+        if (humanCheckActive) return
+        if (attempt > 30) return
+        postDelayed({
+            if (gen != pageLoadGeneration || humanCheckActive) return@postDelayed
+            injectRecaptchaUnlockHelper()
+            webView?.evaluateJavascript(GatewayPlaybackJs.forceAutoplayScript()) { raw ->
+                val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
+                if (status != "playing" && attempt < 30) {
+                    scheduleForceAutoplay(gen, attempt + 1)
+                }
+            }
+        }, if (attempt == 0) 300L else 700L)
     }
 
     fun play() = nudgeVideoPlay()
@@ -273,15 +382,47 @@ class WebViewEngine(
 
     private fun nudgeVideoPlay() {
         webView?.evaluateJavascript(
-            "(function(){" +
-                "function playIn(doc){" +
-                "try{var v=doc.querySelector('video');if(v){var p=v.play();if(p&&p.catch)p.catch(function(){});return true;}}catch(e){}" +
-                "var iframes=doc.querySelectorAll('iframe');" +
-                "for(var i=0;i<iframes.length;i++){try{var d=iframes[i].contentDocument||iframes[i].contentWindow.document;if(d&&playIn(d))return true;}catch(e){}}" +
-                "return false;" +
-                "}" +
-                "playIn(document);" +
-                "})();",
+            """
+            (function(){
+              function muteExtras(doc){
+                try{
+                  var vids=doc.querySelectorAll('video');
+                  if(!vids||vids.length<=1)return;
+                  var primary=null,best=-1;
+                  for(var i=0;i<vids.length;i++){
+                    var v=vids[i];
+                    var score=(v.clientWidth||0)*(v.clientHeight||0);
+                    if(!v.paused&&!v.ended)score+=1e9;
+                    if(score>best){best=score;primary=v;}
+                  }
+                  for(var j=0;j<vids.length;j++){
+                    if(vids[j]===primary){try{vids[j].muted=false;}catch(e){}}
+                    else{try{vids[j].muted=true;vids[j].pause();}catch(e){}}
+                  }
+                }catch(e){}
+              }
+              function playIn(doc){
+                muteExtras(doc);
+                try{
+                  var v=doc.querySelector('video');
+                  if(v && v.paused && !v.ended && v.readyState>=2){
+                    var p=v.play();
+                    if(p&&p.catch)p.catch(function(){});
+                    return true;
+                  }
+                }catch(e){}
+                var iframes=doc.querySelectorAll('iframe');
+                for(var i=0;i<iframes.length;i++){
+                  try{
+                    var d=iframes[i].contentDocument||iframes[i].contentWindow.document;
+                    if(d&&playIn(d))return true;
+                  }catch(e){}
+                }
+                return false;
+              }
+              playIn(document);
+            })();
+            """.trimIndent(),
             null,
         )
     }
@@ -301,7 +442,14 @@ class WebViewEngine(
         qualityRetryGeneration++
         val mode = qualityModeFor(quality)
         Log.d(QUALITY_TAG, "setQuality $quality mode=$mode fromUser=$fromUser")
-        applyQualityJs(mode, fromUser, scheduleRetries = true)
+        try {
+            ensurePlaybackApisInjected()
+            applyQualityJs(mode, fromUser, scheduleRetries = true)
+            // Keep playback going after quality change.
+            postDelayed({ play() }, 400)
+        } catch (e: Exception) {
+            Log.e(QUALITY_TAG, "setQuality failed: ${e.message}")
+        }
     }
 
     private fun qualityModeFor(quality: StreamQuality): String = when (quality) {
@@ -310,7 +458,9 @@ class WebViewEngine(
     }
 
     private fun applyQualityAfterPageLoad() {
-        val mode = if (userPickedQuality) qualityModeFor(selectedQuality) else "360"
+        // Startup: use AUTO (no maxHeight clamp). Forcing 360p via restrictions on DRM
+        // live streams that only offer 540p caused Shaka 4012 hasAppRestrictions + audio-only.
+        val mode = if (userPickedQuality) qualityModeFor(selectedQuality) else "auto"
         val fromUser = userPickedQuality
         Log.d(QUALITY_TAG, "applyQualityAfterPageLoad mode=$mode fromUser=$fromUser")
         applyQualityJs(mode, fromUser, scheduleRetries = true)
@@ -322,7 +472,7 @@ class WebViewEngine(
         if (!scheduleRetries) return
         // Keep retries light — re-selecting every few hundred ms causes scratch/pause loops.
         val delays = if (fromUser) {
-            listOf(500L, 1400L, 3000L)
+            listOf(400L, 1200L, 2500L, 4500L)
         } else {
             listOf(800L, 2000L, 4500L)
         }
@@ -347,27 +497,34 @@ class WebViewEngine(
 
         Log.d(TAG, "setAudioLanguage request=$lang (loaded=$lastLoadedAudioLanguage)")
         preferredAudioLanguage = lang
+        audioLanguageConfirmed = false
+        lastLoadedAudioLanguage = lang
 
-        if (shouldUseWebView(session.mpdUrl) && lang != lastLoadedAudioLanguage) {
-            cancelPendingRunnables()
-            playbackStarted = false
-            playbackApisInjected = false
-            audioLanguageConfirmed = false
-            lastLoadedAudioLanguage = lang
-            val headers = buildLoadHeaders(session, lang)
-            headers["User-Agent"]?.let { w.settings.userAgentString = it }
-            Log.d(TAG, "Reloading gateway for audio=$lang Accept-Language=${headers["Accept-Language"]}")
-            w.loadUrl(session.mpdUrl, headers)
-            return
+        // Prefer in-page Shaka/hls.js switch — full reload often breaks playback / shows captcha.
+        try {
+            ensurePlaybackApisInjected()
+            applyAudioLanguageJs(lang, scheduleRetries = true)
+            postDelayed({ play() }, 500)
+            postDelayed({
+                if (!audioLanguageConfirmed) {
+                    applyAudioLanguageJs(lang, scheduleRetries = false)
+                    play()
+                }
+            }, 2000)
+        } catch (e: Exception) {
+            Log.e(TAG, "setAudioLanguage JS failed: ${e.message}")
         }
-
-        applyAudioLanguageJs(lang, scheduleRetries = true)
     }
 
     fun release() {
         cancelPendingRunnables()
+        stopCaptchaPoll()
         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
         pageFinishRunnable = null
+        if (humanCheckActive) {
+            humanCheckActive = false
+            onHumanCheck(false)
+        }
         webView?.apply {
             stopLoading()
             clearHistory()
@@ -397,6 +554,9 @@ class WebViewEngine(
 
     private fun ensurePlaybackApisInjected() {
         val w = webView ?: return
+        // Always re-arm capture — Shaka may load after first inject.
+        injectPlayerCaptureHook()
+        injectWidevineL3Fallback()
         if (playbackApisInjected) return
         playbackApisInjected = true
         w.evaluateJavascript(GatewayPlaybackJs.eaMaxOkoaQualityApiScript(), null)
@@ -431,7 +591,8 @@ class WebViewEngine(
             null,
         )
         if (scheduleRetries) {
-            listOf(800L, 2000L, 4000L, 7000L).forEach { delayMs ->
+            // Fewer retries — aggressive re-apply was causing scratch + double audio.
+            listOf(1500L, 4500L).forEach { delayMs ->
                 postDelayed({
                     if (audioLanguageConfirmed) return@postDelayed
                     applyAudioLanguageJs(lang, scheduleRetries = false)

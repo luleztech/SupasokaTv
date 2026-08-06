@@ -12,6 +12,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
@@ -97,24 +98,27 @@ class ExoPlayerEngine(
     private var currentSession: StreamSession? = null
     private var preferredAudioLanguage = "sw"
     private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
+    /** Avoid re-overriding the same audio track on every live playlist refresh. */
+    private var lastAudioOverrideKey: String? = null
 
     companion object {
         private const val TAG = "ExoPlayerEngine"
         
-        // Buffer configuration (optimized for mobile streaming)
-        private const val MIN_BUFFER_MS = 15000  // 15 seconds
-        private const val MAX_BUFFER_MS = 50000  // 50 seconds
-        private const val BUFFER_FOR_PLAYBACK_MS = 2500  // Start playback after 2.5s
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5000  // 5s after rebuffer
-        
+        // Buffer configuration — smart/fast start (leotena-style goals)
+        private const val MIN_BUFFER_MS = 8_000
+        private const val MAX_BUFFER_MS = 30_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 1_200
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2_500
+
         // Timeout configuration
-        private const val CONNECT_TIMEOUT_MS = 30000  // 30 seconds
-        private const val READ_TIMEOUT_MS = 30000     // 30 seconds
+        private const val CONNECT_TIMEOUT_MS = 12_000
+        private const val READ_TIMEOUT_MS = 12_000
     }
 
     fun initialize(streamSession: StreamSession) {
         currentSession = streamSession
         preferredAudioLanguage = normalizeAudioLanguage(streamSession.preferredAudioLanguage)
+        lastAudioOverrideKey = null
         
         Log.d(TAG, "=".repeat(70))
         Log.d(TAG, "INITIALIZING UNIVERSAL STREAM PLAYER v4.0")
@@ -152,25 +156,34 @@ class ExoPlayerEngine(
             )
             Log.d(TAG, "✅ Media source created: $streamFormat")
 
-            // Step 6: Build and configure player
+            // Step 6: Build and configure player with real load control (was unused before).
+            val loadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    MIN_BUFFER_MS,
+                    MAX_BUFFER_MS,
+                    BUFFER_FOR_PLAYBACK_MS,
+                    BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                )
+                .build()
+
+            // Configure preferred audio before build (avoid ExoPlayer.trackSelector nullable shadow).
+            trackSelector.parameters = trackSelector.parameters.buildUpon()
+                .setForceHighestSupportedBitrate(false)
+                .setPreferredAudioLanguages(
+                    *preferredAudioLanguageAliases(preferredAudioLanguage).toTypedArray(),
+                )
+                .build()
+
             exoPlayer = ExoPlayer.Builder(context)
                 .setTrackSelector(trackSelector)
+                .setLoadControl(loadControl)
                 .build()
                 .apply {
-                    // Configure track selector for better adaptive streaming
-                    trackSelector?.let { selector ->
-                        selector.parameters = selector.getParameters().buildUpon()
-                            .setForceHighestSupportedBitrate(false)  // Enable adaptive bitrate
-                            .setPreferredAudioLanguage(preferredAudioLanguage)
-                            .build()
-                    }
-                    
                     addListener(PlayerEventListener())
                     setMediaSource(mediaSource)
                     prepare()
-                    // 🔥 FIX: Set playWhenReady to true to avoid black screen
                     playWhenReady = true
-                    Log.d(TAG, "✅ Player prepared with playWhenReady=true")
+                    Log.d(TAG, "✅ Player prepared with playWhenReady=true loadControl=${MIN_BUFFER_MS}-${MAX_BUFFER_MS}ms")
                 }
 
             setQuality(StreamQuality.QUALITY_360P)
@@ -331,6 +344,19 @@ class ExoPlayerEngine(
         val mediaItemBuilder = MediaItem.Builder()
             .setUri(streamSession.mpdUrl)
             .setMimeType(mimeType) // ✅ ADD THIS
+
+        // Live offset window reduces chase-the-edge stutter / rebuffer loops.
+        if (format == StreamFormat.HLS || format == StreamFormat.DASH) {
+            mediaItemBuilder.setLiveConfiguration(
+                MediaItem.LiveConfiguration.Builder()
+                    .setTargetOffsetMs(35_000)
+                    .setMinOffsetMs(20_000)
+                    .setMaxOffsetMs(70_000)
+                    .setMinPlaybackSpeed(0.97f)
+                    .setMaxPlaybackSpeed(1.03f)
+                    .build(),
+            )
+        }
 
         // Add DRM configuration if needed
         if (streamSession.drmType != DrmType.NONE) {
@@ -520,12 +546,25 @@ class ExoPlayerEngine(
                         .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
                         .setReadTimeoutMs(READ_TIMEOUT_MS)
                 )
+
+                // Prefer L3 on mobile — L1/HDCP restrictions cause audio-only (Shaka 4012 /
+                // Media3 DRM key status OUTPUT_RESTRICTED) on many Huawei devices.
+                val forceL3 = streamSession.drmType != DrmType.WIDEVINE_L1
+                val mediaDrmProvider = androidx.media3.exoplayer.drm.ExoMediaDrm.Provider { uuid ->
+                    val drm = FrameworkMediaDrm.newInstance(uuid)
+                    if (forceL3) {
+                        try {
+                            drm.setPropertyString("securityLevel", "L3")
+                            Log.d(TAG, "  Forced Widevine securityLevel=L3")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "  Cannot force L3: ${e.message}")
+                        }
+                    }
+                    drm
+                }
                 
                 DefaultDrmSessionManager.Builder()
-                    .setUuidAndExoMediaDrmProvider(
-                        C.WIDEVINE_UUID,
-                        FrameworkMediaDrm.DEFAULT_PROVIDER
-                    )
+                    .setUuidAndExoMediaDrmProvider(C.WIDEVINE_UUID, mediaDrmProvider)
                     .build(drmCallback)
             }
             
@@ -605,8 +644,9 @@ class ExoPlayerEngine(
     // ========== PLAYBACK CONTROL METHODS ==========
 
     fun play() {
+        exoPlayer?.playWhenReady = true
         exoPlayer?.play()
-        Log.d(TAG, "▶️ Play called")
+        Log.d(TAG, "▶️ Play called (autoplay)")
     }
 
     fun pause() {
@@ -628,21 +668,59 @@ class ExoPlayerEngine(
     fun setQuality(quality: StreamQuality) {
         selectedQuality = quality
         val player = exoPlayer ?: return
+        try {
+            if (quality == StreamQuality.AUTO) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .clearVideoSizeConstraints()
+                    .setMaxVideoBitrate(Int.MAX_VALUE)
+                    .setForceHighestSupportedBitrate(false)
+                    .build()
+                Log.d(TAG, "🎨 Quality set to AUTO")
+                play()
+                return
+            }
 
-        if (quality == StreamQuality.AUTO) {
-            player.trackSelectionParameters = player.trackSelectionParameters
-                .buildUpon()
-                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                .clearVideoSizeConstraints()
-                .setMaxVideoBitrate(Int.MAX_VALUE)
-                .setForceHighestSupportedBitrate(false)
-                .build()
-            Log.d(TAG, "🎨 Quality set to AUTO")
-            return
+            applyFixedQuality(quality, force = true)
+            // If tracks were not ready yet, constraints-only was applied — retry shortly.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (exoPlayer === player && selectedQuality == quality) {
+                    try {
+                        applyFixedQuality(quality, force = true)
+                        play()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "setQuality retry: ${e.message}")
+                    }
+                }
+            }, 700)
+            play()
+            Log.d(TAG, "🎨 Quality set to: $quality")
+        } catch (e: Exception) {
+            Log.e(TAG, "setQuality failed for $quality", e)
+            try {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .setMaxVideoSize(Int.MAX_VALUE, quality.height.coerceAtLeast(240))
+                    .setMaxVideoBitrate(bitrateCapForQuality(quality))
+                    .setForceHighestSupportedBitrate(false)
+                    .build()
+                play()
+            } catch (e2: Exception) {
+                Log.e(TAG, "setQuality fallback failed", e2)
+            }
         }
+    }
 
-        applyFixedQuality(quality, force = true)
-        Log.d(TAG, "🎨 Quality set to: $quality")
+    /** Approximate max bitrate when manifests omit height (common on some live HLS). */
+    private fun bitrateCapForQuality(quality: StreamQuality): Int = when (quality) {
+        StreamQuality.QUALITY_240P -> 500_000
+        StreamQuality.QUALITY_360P -> 1_000_000
+        StreamQuality.QUALITY_480P -> 2_000_000
+        StreamQuality.QUALITY_720P -> 4_000_000
+        StreamQuality.QUALITY_1080P -> 8_000_000
+        StreamQuality.AUTO -> Int.MAX_VALUE
     }
 
     /**
@@ -652,96 +730,163 @@ class ExoPlayerEngine(
     private fun applyFixedQuality(quality: StreamQuality, force: Boolean) {
         if (quality == StreamQuality.AUTO) return
         val player = exoPlayer ?: return
+        val maxBitrate = bitrateCapForQuality(quality)
 
-        var bestGroup: Tracks.Group? = null
-        var bestIdx = -1
-        var bestHeight = 0
-        var bestBitrate = -1
+        data class Candidate(val group: Tracks.Group, val index: Int, val height: Int, val bitrate: Int, val supported: Boolean)
 
+        val candidates = mutableListOf<Candidate>()
         for (group in player.currentTracks.groups) {
             if (group.type != C.TRACK_TYPE_VIDEO) continue
             for (i in 0 until group.length) {
-                if (!group.isTrackSupported(i)) continue
                 val format = group.getTrackFormat(i)
-                val h = format.height
-                val br = if (format.bitrate > 0) format.bitrate else 0
-                if (h > 0 && h <= quality.height) {
-                    if (h > bestHeight || (h == bestHeight && br >= bestBitrate)) {
-                        bestHeight = h
-                        bestBitrate = br
-                        bestIdx = i
-                        bestGroup = group
-                    }
-                }
+                candidates.add(
+                    Candidate(
+                        group = group,
+                        index = i,
+                        height = format.height,
+                        bitrate = if (format.bitrate > 0) format.bitrate else 0,
+                        supported = group.isTrackSupported(i),
+                    ),
+                )
             }
         }
-
-        // Live manifests sometimes omit height — pick lowest bitrate as a safe pin.
-        if (bestGroup == null) {
-            var lowBitrate = Int.MAX_VALUE
-            for (group in player.currentTracks.groups) {
-                if (group.type != C.TRACK_TYPE_VIDEO) continue
-                for (i in 0 until group.length) {
-                    if (!group.isTrackSupported(i)) continue
-                    val br = group.getTrackFormat(i).bitrate
-                    val effective = if (br > 0) br else Int.MAX_VALUE
-                    if (effective < lowBitrate) {
-                        lowBitrate = effective
-                        bestIdx = i
-                        bestGroup = group
-                        bestHeight = group.getTrackFormat(i).height
-                    }
-                }
-            }
-        }
-
-        if (bestGroup == null || bestIdx < 0) {
-            // Constraints only — let selector adapt within the height cap.
+        if (candidates.isEmpty()) {
             player.trackSelectionParameters = player.trackSelectionParameters
                 .buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                 .setMaxVideoSize(Int.MAX_VALUE, quality.height)
-                .setMaxVideoBitrate(Int.MAX_VALUE)
+                .setMaxVideoBitrate(maxBitrate)
                 .setForceHighestSupportedBitrate(false)
                 .build()
+            Log.d(TAG, "🎨 Quality $quality — no video tracks yet (constraints only)")
             return
         }
 
-        if (!force && bestGroup.isTrackSelected(bestIdx)) {
+        fun pick(preferSupported: Boolean): Candidate? {
+            // 1) Highest height ≤ target
+            var best: Candidate? = null
+            for (c in candidates) {
+                if (preferSupported && !c.supported) continue
+                if (c.height <= 0 || c.height > quality.height) continue
+                if (best == null ||
+                    c.height > best.height ||
+                    (c.height == best.height && c.bitrate >= best.bitrate)
+                ) {
+                    best = c
+                }
+            }
+            if (best != null) return best
+            // 2) Highest bitrate ≤ cap (heightless manifests)
+            for (c in candidates) {
+                if (preferSupported && !c.supported) continue
+                if (c.bitrate <= 0 || c.bitrate > maxBitrate) continue
+                if (best == null || c.bitrate >= best.bitrate) best = c
+            }
+            if (best != null) return best
+            // 3) Closest height at or below target, else lowest height
+            val withHeight = candidates.filter { (!preferSupported || it.supported) && it.height > 0 }
+            if (withHeight.isNotEmpty()) {
+                val below = withHeight.filter { it.height <= quality.height }
+                return (if (below.isNotEmpty()) below else withHeight).maxByOrNull { it.height }
+            }
+            // 4) Any track (prefer middle-low index for lower qualities)
+            val pool = if (preferSupported) candidates.filter { it.supported }.ifEmpty { candidates } else candidates
+            if (pool.isEmpty()) return null
+            val sorted = pool.sortedWith(compareBy<Candidate> { it.bitrate }.thenBy { it.height })
+            val idx = when (quality) {
+                StreamQuality.QUALITY_240P -> 0
+                StreamQuality.QUALITY_360P -> (sorted.size * 1 / 4).coerceAtMost(sorted.lastIndex)
+                StreamQuality.QUALITY_480P -> (sorted.size * 2 / 4).coerceAtMost(sorted.lastIndex)
+                StreamQuality.QUALITY_720P -> (sorted.size * 3 / 4).coerceAtMost(sorted.lastIndex)
+                else -> sorted.lastIndex
+            }
+            return sorted[idx]
+        }
+
+        val chosen = pick(preferSupported = true) ?: pick(preferSupported = false)
+        if (chosen == null) {
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .setMaxVideoSize(Int.MAX_VALUE, quality.height)
+                .setMaxVideoBitrate(maxBitrate)
+                .setForceHighestSupportedBitrate(false)
+                .build()
+            Log.w(TAG, "🎨 Quality $quality — could not pick track (constraints only)")
+            return
+        }
+
+        if (!force && chosen.group.isTrackSelected(chosen.index)) {
             return
         }
 
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-            .setMaxVideoSize(Int.MAX_VALUE, quality.height)
-            .setMaxVideoBitrate(Int.MAX_VALUE)
+            .setMaxVideoSize(Int.MAX_VALUE, quality.height.coerceAtLeast(1))
+            .setMaxVideoBitrate(maxBitrate)
             .setForceHighestSupportedBitrate(false)
-            .addOverride(TrackSelectionOverride(bestGroup.mediaTrackGroup, bestIdx))
+            .addOverride(TrackSelectionOverride(chosen.group.mediaTrackGroup, listOf(chosen.index)))
             .build()
-        Log.d(TAG, "🎨 Video track override: index=$bestIdx height=$bestHeight")
+        Log.d(
+            TAG,
+            "🎨 Video track override: index=${chosen.index} height=${chosen.height} " +
+                "bitrate=${chosen.bitrate} supported=${chosen.supported} quality=$quality",
+        )
     }
 
     private fun applyVideoTrackOverride(quality: StreamQuality) {
-        applyFixedQuality(quality, force = false)
+        try {
+            applyFixedQuality(quality, force = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "applyVideoTrackOverride: ${e.message}")
+        }
     }
 
     fun setAudioLanguage(language: String) {
         val lang = normalizeAudioLanguage(language)
         preferredAudioLanguage = lang
-        trackSelector.setParameters(
-            trackSelector.buildUponParameters()
-                .setPreferredAudioLanguage(lang)
+        lastAudioOverrideKey = null
+        val player = exoPlayer ?: return
+        try {
+            // Prefer player.trackSelectionParameters (keeps DefaultTrackSelector in sync).
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .setPreferredAudioLanguages(*preferredAudioLanguageAliases(lang).toTypedArray())
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                .build(),
-        )
-        applyAudioTrackOverride(lang)
-        Log.d(TAG, "🔊 Audio language set to: $lang")
+                .build()
+            applyAudioTrackOverride(lang)
+            // Tracks may still be loading — retry once shortly after.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (exoPlayer === player && preferredAudioLanguage == lang) {
+                    try {
+                        if (!isPreferredAudioAlreadySelected(lang)) {
+                            applyAudioTrackOverride(lang)
+                        }
+                        play()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "setAudioLanguage retry: ${e.message}")
+                    }
+                }
+            }, 800)
+            play()
+            Log.d(TAG, "🔊 Audio language set to: $lang")
+        } catch (e: Exception) {
+            Log.e(TAG, "setAudioLanguage failed for $lang", e)
+        }
     }
 
     private fun normalizeAudioLanguage(raw: String): String {
         val v = raw.trim().lowercase()
         return if (v == "en" || v.startsWith("en-") || v == "eng") "en" else "sw"
+    }
+
+    private fun preferredAudioLanguageAliases(preferred: String): List<String> {
+        return when (preferred) {
+            "en" -> listOf("en", "eng", "en-US", "en-GB")
+            "sw" -> listOf("sw", "swa", "sw-TZ", "sw-KE")
+            else -> listOf(preferred)
+        }
     }
 
     private fun matchesAudioLanguage(trackLang: String?, preferred: String): Boolean {
@@ -755,22 +900,61 @@ class ExoPlayerEngine(
         }
     }
 
+    private fun isPreferredAudioAlreadySelected(language: String): Boolean {
+        val player = exoPlayer ?: return false
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO || !group.isSelected) continue
+            for (i in 0 until group.length) {
+                if (!group.isTrackSelected(i)) continue
+                val format = group.getTrackFormat(i)
+                if (matchesAudioLanguage(format.language, language) ||
+                    matchesAudioLanguage(format.label?.toString(), language)
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private fun applyAudioTrackOverride(language: String) {
         val player = exoPlayer ?: return
-        for (group in player.currentTracks.groups) {
-            if (group.type != C.TRACK_TYPE_AUDIO) continue
-            for (i in 0 until group.length) {
-                val format = group.getTrackFormat(i)
-                if (!matchesAudioLanguage(format.language, language) &&
-                    !matchesAudioLanguage(format.label?.toString(), language)
-                ) continue
-                player.trackSelectionParameters = player.trackSelectionParameters
-                    .buildUpon()
-                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                    .addOverride(TrackSelectionOverride(group.mediaTrackGroup, i))
-                    .build()
+        if (isPreferredAudioAlreadySelected(language)) {
+            lastAudioOverrideKey = language
+            return
+        }
+        try {
+            // Prefer supported tracks that match language; fall back to any matching.
+            data class AudioHit(val group: Tracks.Group, val index: Int, val supported: Boolean)
+            val hits = mutableListOf<AudioHit>()
+            for (group in player.currentTracks.groups) {
+                if (group.type != C.TRACK_TYPE_AUDIO) continue
+                for (i in 0 until group.length) {
+                    val format = group.getTrackFormat(i)
+                    if (!matchesAudioLanguage(format.language, language) &&
+                        !matchesAudioLanguage(format.label?.toString(), language)
+                    ) continue
+                    hits.add(AudioHit(group, i, group.isTrackSupported(i)))
+                }
+            }
+            val hit = hits.firstOrNull { it.supported } ?: hits.firstOrNull()
+            if (hit == null) {
+                Log.w(TAG, "🔊 No audio track matched language=$language " +
+                    "(groups=${player.currentTracks.groups.count { it.type == C.TRACK_TYPE_AUDIO }})")
                 return
             }
+            val key = "$language:${hit.group.mediaTrackGroup.id}:${hit.index}"
+            if (key == lastAudioOverrideKey) return
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .setPreferredAudioLanguages(*preferredAudioLanguageAliases(language).toTypedArray())
+                .addOverride(TrackSelectionOverride(hit.group.mediaTrackGroup, listOf(hit.index)))
+                .build()
+            lastAudioOverrideKey = key
+            Log.d(TAG, "🔊 Audio override → $language index=${hit.index} supported=${hit.supported}")
+        } catch (e: Exception) {
+            Log.w(TAG, "applyAudioTrackOverride failed: ${e.message}")
         }
     }
 
@@ -846,8 +1030,7 @@ class ExoPlayerEngine(
 
         override fun onTracksChanged(tracks: Tracks) {
             Log.d(TAG, "🎚️ Tracks changed: ${tracks.groups.size} group(s)")
-            
-            // Log available tracks for debugging
+
             tracks.groups.forEachIndexed { index, group ->
                 val trackType = when (group.type) {
                     C.TRACK_TYPE_VIDEO -> "Video"
@@ -856,10 +1039,24 @@ class ExoPlayerEngine(
                     else -> "Other"
                 }
                 Log.v(TAG, "  Group $index: type=$trackType, tracks=${group.length}, selected=${group.isSelected}")
+                if (group.type == C.TRACK_TYPE_VIDEO || group.type == C.TRACK_TYPE_AUDIO) {
+                    for (i in 0 until group.length) {
+                        val f = group.getTrackFormat(i)
+                        Log.v(
+                            TAG,
+                            "    [$i] id=${f.id} lang=${f.language} label=${f.label} " +
+                                "h=${f.height} br=${f.bitrate} sel=${group.isTrackSelected(i)} " +
+                                "sup=${group.isTrackSupported(i)}",
+                        )
+                    }
+                }
             }
-            
+
             onTracksChangedCallback(tracks)
-            applyAudioTrackOverride(preferredAudioLanguage)
+            // Live manifests refresh often — only re-pin audio/video when needed.
+            if (!isPreferredAudioAlreadySelected(preferredAudioLanguage)) {
+                applyAudioTrackOverride(preferredAudioLanguage)
+            }
             applyVideoTrackOverride(selectedQuality)
         }
 
