@@ -1074,6 +1074,50 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                             ],
                           ),
                         ),
+                        if (_phoneOk) ...[
+                          const SizedBox(height: 10),
+                          Builder(
+                            builder: (_) {
+                              final wallet = TanzaniaPhone.walletLabel(_phoneCtrl.text);
+                              final supported = TanzaniaPhone.supportsPushUssd(_phoneCtrl.text);
+                              if (wallet == null) {
+                                return Text(
+                                  TanzaniaPhone.networksHint(),
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    height: 1.35,
+                                    color: _payMuted.withValues(alpha: 0.9),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                );
+                              }
+                              return Text(
+                                supported
+                                    ? 'Ombi litatumwa kwa $wallet. ${TanzaniaPhone.networksHint()}'
+                                    : 'Nambari hii ($wallet) huenda isipokee Push USSD. ${TanzaniaPhone.networksHint()}',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  height: 1.35,
+                                  color: supported
+                                      ? _accentCta.withValues(alpha: 0.95)
+                                      : const Color(0xFFFFB74D),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              );
+                            },
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            TanzaniaPhone.networksHint(),
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              height: 1.35,
+                              color: _payMuted.withValues(alpha: 0.85),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     ),

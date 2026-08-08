@@ -4,6 +4,7 @@ import { HttpError } from '../middleware/errorHandler';
 import { logger } from '../lib/logger';
 import {
   isMobileMoneyStkSendFailure,
+  isPaymentCreateRetryable,
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
@@ -257,27 +258,24 @@ type SonicCreateStep = {
   channel?: string;
 };
 
-function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
-  const local0 = toLocal0Digits(localPhone);
-  const network = detectTzMobileNetwork(local0);
-  const channels = sonicChannelHintsForNetwork(local0);
-  const primaryChannel = channels[0];
-  return {
-    endpoint: 'payment/create_order',
-    buyer_phone: formatPhoneToIntl255(local0),
-    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    label: primaryChannel ? `intl/${network}/${primaryChannel}` : `intl/${network}`,
-    channel: primaryChannel,
-  };
-}
-
+/**
+ * SonicPesa create strategy for all TZ push wallets
+ * (Halopesa 061–063, Tigo/Yas, Airtel, Vodacom 074–079):
+ *
+ * 1) Official path — international MSISDN, auto wallet detect (no channel override).
+ * 2) National `0…` format if the gateway rejects the MSISDN shape.
+ * 3) One forced primary channel (MPESA / HALOPESATZ / …) only when auto-detect
+ *    cannot resolve the wallet — then unifiedPayments falls through to Aurax.
+ *
+ * Never spam create_order_simple or every channel alias: that burns per-MSISDN
+ * rate limits (especially Airtel) and leaves users on "Subiri dakika 2–5".
+ */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
-  const phones = phoneCandidatesForSonicPesaApi(local0);
+  const intl = formatPhoneToIntl255(local0);
   const channels = sonicChannelHintsForNetwork(local0);
   const primaryChannel = channels[0];
-  const secondChannel = channels[1];
   const steps: SonicCreateStep[] = [];
   const seen = new Set<string>();
 
@@ -289,46 +287,50 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     }
   };
 
-  for (const phone of phones) {
-    if (primaryChannel) {
-      addStep({
-        endpoint: 'payment/create_order',
-        buyer_phone: phone,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `intl/${network}/${primaryChannel}`,
-        channel: primaryChannel,
-      });
-    }
+  // 1) Canonical Sonic docs path — wallet from MSISDN.
+  addStep({
+    endpoint: 'payment/create_order',
+    buyer_phone: intl,
+    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    label: `intl/${network}/auto`,
+  });
+
+  // 2) Local national format (helps some Halopesa / edge MSISDN parsers).
+  if (local0 && local0 !== intl) {
     addStep({
       endpoint: 'payment/create_order',
-      buyer_phone: phone,
+      buyer_phone: local0,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `intl/${network}/auto`,
+      label: `local/${network}/auto`,
     });
-    if (secondChannel) {
-      addStep({
-        endpoint: 'payment/create_order',
-        buyer_phone: phone,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `intl/${network}/${secondChannel}`,
-        channel: secondChannel,
-      });
-    }
-    if (primaryChannel) {
-      addStep({
-        endpoint: 'payment/create_order_simple',
-        buyer_phone: phone,
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `simple/${network}/${primaryChannel}`,
-        channel: primaryChannel,
-      });
-    }
+  }
+
+  // 3) Single primary channel hint if auto-detect cannot route the wallet.
+  if (primaryChannel) {
+    addStep({
+      endpoint: 'payment/create_order',
+      buyer_phone: intl,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: `intl/${network}/${primaryChannel}`,
+      channel: primaryChannel,
+    });
   }
 
   if (steps.length === 0) {
     steps.push(buildSonicPrimaryCreateStep(local0));
   }
   return steps;
+}
+
+function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
+  const local0 = toLocal0Digits(localPhone);
+  const network = detectTzMobileNetwork(local0);
+  return {
+    endpoint: 'payment/create_order',
+    buyer_phone: formatPhoneToIntl255(local0),
+    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    label: `intl/${network}/auto`,
+  };
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -358,10 +360,9 @@ async function postSonicCreateOrder(
     currency: 'TZS',
   };
   if (step.channel) {
+    // Only set Sonic's documented channel field — do not also stamp provider/network/operator
+    // with the same string (some gateways reject unknown operator enums and block Halopesa/Airtel).
     payload.channel = step.channel;
-    payload.provider = step.channel;
-    payload.network = step.channel;
-    payload.operator = step.channel;
   }
   // Attach identity so webhooks can recover premium even if local intent insert raced.
   if (publicId || planId) {
@@ -519,6 +520,18 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
+      // STK not delivered — more Sonic hits burn Airtel/Halopesa quotas. Aurax fallback next.
+      if (isSonicStkSendFailure(errorMessage, errorCode)) {
+        break;
+      }
+      // Invalid MSISDN / unknown channel — try next format or primary channel hint.
+      if (i < steps.length - 1 && isPaymentCreateRetryable(errorMessage, errorCode)) {
+        continue;
+      }
+      // Soft/unknown gateway error: allow one more alternate step, then stop.
+      if (i < steps.length - 1 && i === 0) {
+        continue;
+      }
       break;
     } catch (e) {
       last = {
@@ -527,6 +540,10 @@ export async function tryCreateSonicOrder(args: {
       };
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn({ network, step: step.label, err: msg }, 'sonic_create_step_exception');
+      // Transport blip — try next step once; otherwise fall through to Aurax.
+      if (i < steps.length - 1) {
+        continue;
+      }
       break;
     }
   }

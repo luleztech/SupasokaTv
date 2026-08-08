@@ -72,18 +72,30 @@ export function isInvalidPhonePaymentError(message: string, code: string): boole
   );
 }
 
+/** Wrong/unknown wallet channel — safe to retry with auto-detect or another channel hint. */
+export function isWalletRoutingPaymentError(message: string, code: string): boolean {
+  const combined = `${message} ${code}`.toLowerCase();
+  return (
+    /unknown (channel|network|operator|provider|wallet)/i.test(combined) ||
+    /invalid (channel|network|operator|provider|wallet)/i.test(combined) ||
+    /unsupported (channel|network|operator|provider|wallet)/i.test(combined) ||
+    /could not (detect|determine|resolve).*(channel|network|operator|wallet)/i.test(combined) ||
+    /unable to (detect|determine|resolve).*(channel|network|operator|wallet)/i.test(combined) ||
+    /wallet.*(not supported|unsupported|unknown)/i.test(combined)
+  );
+}
+
 /**
- * Safe to try another phone format. STK delivery failures are NOT recoverable via
+ * Safe to try another phone format or channel. STK delivery failures are NOT recoverable via
  * extra gateway hits — those burn Sonic's per-MSISDN quota and surface as Subiri 2–5.
  */
 export function isRecoverablePaymentCreateError(message: string, code: string): boolean {
   if (isPaymentRateLimitError(message, code)) return false;
   if (isMobileMoneyStkSendFailure(message, code)) return false;
-  return isInvalidPhonePaymentError(message, code);
+  return isInvalidPhonePaymentError(message, code) || isWalletRoutingPaymentError(message, code);
 }
 
-/** Only retry create when another phone format might help (not STK / rate-limit). */
+/** Only retry create when another phone format / channel might help (not STK / rate-limit). */
 export function isPaymentCreateRetryable(message: string, code: string): boolean {
-  if (isPaymentRateLimitError(message, code)) return false;
-  return isInvalidPhonePaymentError(message, code);
+  return isRecoverablePaymentCreateError(message, code);
 }

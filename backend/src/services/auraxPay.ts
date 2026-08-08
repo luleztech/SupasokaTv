@@ -44,13 +44,16 @@ export function auraxChannelCandidates(local0: string): string[] {
   const network = detectTzMobileNetwork(p);
   switch (network) {
     case 'airtel':
+      // Prefer AIRTEL_MONEY — bare AIRTEL is rejected by some Aurax tenants.
       return ['AIRTEL_MONEY', 'AIRTEL'];
     case 'halotel':
+      // Halopesa 061 / 062 / 063 — HALOPESA is the Aurax enum; HALOTEL is legacy alias.
       return ['HALOPESA', 'HALOTEL'];
     case 'tigo_yas':
       return ['TIGO_PESA', 'TIGOPESA', 'TIGO'];
     case 'vodacom':
     case 'mo_mobile':
+      // Vodacom M-Pesa including 075 and 079.
       return ['MPESA', 'VODACOM', 'VODACOMMPESA'];
     default:
       return [resolveAuraxChannelFromPhone(local0)];
@@ -142,18 +145,30 @@ export async function tryCreateAuraxOrder(args: {
     env.auraxPayWebhookUrl.trim() ||
     `${env.publicBaseUrl.replace(/\/$/, '')}/api/v1/public/aurax/webhook`;
 
-  const combinations: { channel: string; phone: string }[] = [];
-  for (const ch of channels) {
+  // Prefer E.164 (+255…) first — Aurax docs require it for Halopesa / Airtel / Tigo / M-Pesa.
+  // Cap attempts: primary channel × phones, then one alt channel — avoid 3×3 cartesian spam.
+  const preferredPhone = formatPhoneForAuraxPayApi(args.localPhone);
+  const tryList: { channel: string; phone: string }[] = [];
+  const seen = new Set<string>();
+  const pushCombo = (channel: string, phone: string) => {
+    const key = `${channel}|${phone}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    tryList.push({ channel, phone });
+  };
+  if (channels[0]) {
+    pushCombo(channels[0], preferredPhone);
     for (const ph of phones) {
-      combinations.push({ channel: ch, phone: ph });
+      if (ph !== preferredPhone) pushCombo(channels[0], ph);
     }
   }
-  if (combinations.length === 0) {
-    combinations.push({
-      channel: resolveAuraxChannelFromPhone(args.localPhone),
-      phone: formatPhoneForAuraxPayApi(args.localPhone),
-    });
+  if (channels[1]) {
+    pushCombo(channels[1], preferredPhone);
   }
+  if (tryList.length === 0) {
+    pushCombo(resolveAuraxChannelFromPhone(args.localPhone), preferredPhone);
+  }
+  const limitedTryList = tryList.slice(0, 4);
 
   let lastFailResult: {
     ok: false;
@@ -169,7 +184,8 @@ export async function tryCreateAuraxOrder(args: {
     errorMessage: 'Hatukuweza kuanzisha malipo. Jaribu tena.',
   };
 
-  for (const combo of combinations) {
+  for (let i = 0; i < limitedTryList.length; i++) {
+    const combo = limitedTryList[i]!;
     const payload = {
       amount,
       currency: 'TZS',
@@ -233,7 +249,7 @@ export async function tryCreateAuraxOrder(args: {
         raw: data,
       };
     } catch (e) {
-      if (combinations.indexOf(combo) === combinations.length - 1) {
+      if (i === limitedTryList.length - 1) {
         throw e;
       }
       logger.warn({ err: e, channel: combo.channel, phone: combo.phone }, 'aurax_create_error_retry');

@@ -29,7 +29,7 @@ import {
 import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
-import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
+import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet, walletLabelForLocalPhone } from '../lib/tzPhone';
 import {
   isMobileMoneyStkSendFailure,
   isPaymentRateLimitError,
@@ -230,19 +230,24 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   if (!sonic.ok || !sonic.orderId) {
     const rawMsg = sonic.message || '';
     const rawCode = sonic.errorCode ?? '';
-    // If Sonic cannot deliver, route M-Pesa and HaloPesa through the configured
-    // alternate gateway. Both routes use the normalized local MSISDN and Aurax
-    // selects MPESA or HALOPESA from the prefix.
+    // Sonic could not deliver Push USSD — try Aurax for every supported TZ wallet
+    // (Halopesa 061–063, Tigo/Yas, Airtel, Vodacom 074–079). Skip only true rate-limits.
     const canAuraxFallback =
       isAuraxConfigured() &&
       !isPaymentRateLimitError(rawMsg, rawCode) &&
-      (isMobileMoneyStkSendFailure(rawMsg, rawCode) ||
-        canUseAuraxStkFallback(localPhone));
+      canUseAuraxStkFallback(localPhone);
 
     if (canAuraxFallback) {
       const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       logger.warn(
-        { phone: localPhone, network: detectTzMobileNetwork(localPhone), rawMsg, rawCode },
+        {
+          phone: localPhone,
+          network: detectTzMobileNetwork(localPhone),
+          wallet: walletLabelForLocalPhone(localPhone),
+          rawMsg,
+          rawCode,
+          stkFailure: isMobileMoneyStkSendFailure(rawMsg, rawCode),
+        },
         'payment_sonic_stk_failed_trying_aurax',
       );
       const aurax = await tryCreateAuraxOrder({
