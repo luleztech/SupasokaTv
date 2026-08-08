@@ -29,7 +29,7 @@ import {
 import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
-import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet, walletLabelForLocalPhone } from '../lib/tzPhone';
+import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet, walletLabelForLocalPhone, isHalotelLocalPhone, isTigoYasLocalPhone, isAirtelLocalPhone } from '../lib/tzPhone';
 import {
   isMobileMoneyStkSendFailure,
   isPaymentRateLimitError,
@@ -184,6 +184,77 @@ function canUseAuraxStkFallback(localPhone: string): boolean {
   return isSupportedSonicPushWallet(localPhone);
 }
 
+/**
+ * Halopesa + Mixx/Yas + Airtel often never receive Sonic Push USSD.
+ * When Aurax is configured, route them there first (same as EaMax) so the PIN
+ * prompt actually reaches 061–063 / 065/067/070/071/077 / 066/068/069/078.
+ */
+function shouldPreferAuraxForPhone(localPhone: string): boolean {
+  return (
+    isAuraxConfigured() &&
+    (isHalotelLocalPhone(localPhone) ||
+      isTigoYasLocalPhone(localPhone) ||
+      isAirtelLocalPhone(localPhone))
+  );
+}
+
+async function startAuraxPaymentIntent(args: {
+  localPhone: string;
+  amountTzs: number;
+  buyerName: string;
+  buyerEmail: string;
+  publicId: string;
+  planId: string;
+  fallbackFrom?: string;
+}): Promise<{
+  orderId: string;
+  message: string;
+  provider: PaymentProviderId;
+  status: string;
+} | null> {
+  if (!isAuraxConfigured()) return null;
+  const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const aurax = await tryCreateAuraxOrder({
+    localPhone: args.localPhone,
+    amountTzs: args.amountTzs,
+    buyerName: args.buyerName,
+    buyerEmail: args.buyerEmail,
+    publicId: args.publicId,
+    planId: args.planId,
+    clientOrderId,
+  });
+  if (!aurax.ok || !aurax.orderId) {
+    logger.warn(
+      {
+        phone: args.localPhone,
+        network: detectTzMobileNetwork(args.localPhone),
+        auraxMsg: aurax.errorMessage ?? aurax.message,
+      },
+      'payment_aurax_create_failed',
+    );
+    return null;
+  }
+  await upsertPendingIntent({
+    orderId: aurax.orderId,
+    publicId: args.publicId,
+    planId: args.planId,
+    amountTzs: args.amountTzs,
+    buyerPhone: args.localPhone,
+    provider: PAYMENT_PROVIDERS.AURAX,
+    providerPayload: {
+      ...aurax.raw,
+      ...(args.fallbackFrom ? { fallbackFrom: args.fallbackFrom } : { preferredRoute: 'aurax' }),
+      clientOrderId,
+    },
+  });
+  return {
+    orderId: aurax.orderId,
+    message: aurax.message,
+    provider: PAYMENT_PROVIDERS.AURAX,
+    status: 'pending',
+  };
+}
+
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   orderId: string;
   message: string;
@@ -208,7 +279,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 
   await getSelectedPaymentProvider();
 
-  if (!isProviderConfigured()) {
+  if (!isProviderConfigured() && !isAuraxConfigured()) {
     throw new HttpError(
       503,
       'SonicPesa haijasanidi kwenye seva. Wasiliana na admin.',
@@ -218,6 +289,39 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 
   const buyerName = (input.buyerName ?? input.publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${input.publicId}@supasoka.app`).trim();
+
+  // Halotel / Tigo-Yas / Airtel → Aurax first so Push USSD reaches the handset.
+  if (shouldPreferAuraxForPhone(localPhone)) {
+    logger.info(
+      {
+        phone: localPhone,
+        network: detectTzMobileNetwork(localPhone),
+        wallet: walletLabelForLocalPhone(localPhone),
+      },
+      'payment_prefer_aurax_for_wallet',
+    );
+    const auraxFirst = await startAuraxPaymentIntent({
+      localPhone,
+      amountTzs,
+      buyerName,
+      buyerEmail,
+      publicId: input.publicId,
+      planId: input.planId,
+    });
+    if (auraxFirst) return auraxFirst;
+    logger.warn(
+      { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
+      'payment_aurax_preferred_failed_trying_sonic',
+    );
+  }
+
+  if (!isProviderConfigured()) {
+    throw new HttpError(
+      503,
+      'Hatukuweza kutuma ombi la malipo. Wasiliana na admin.',
+      'PAYMENT_NOT_CONFIGURED',
+    );
+  }
 
   const sonic = await tryCreateSonicOrder({
     buyerEmail,
@@ -230,15 +334,12 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   if (!sonic.ok || !sonic.orderId) {
     const rawMsg = sonic.message || '';
     const rawCode = sonic.errorCode ?? '';
-    // Sonic could not deliver Push USSD — try Aurax for every supported TZ wallet
-    // (Halopesa 061–063, Tigo/Yas, Airtel, Vodacom 074–079). Skip only true rate-limits.
     const canAuraxFallback =
       isAuraxConfigured() &&
       !isPaymentRateLimitError(rawMsg, rawCode) &&
       canUseAuraxStkFallback(localPhone);
 
     if (canAuraxFallback) {
-      const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       logger.warn(
         {
           phone: localPhone,
@@ -250,36 +351,16 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
         },
         'payment_sonic_stk_failed_trying_aurax',
       );
-      const aurax = await tryCreateAuraxOrder({
+      const aurax = await startAuraxPaymentIntent({
         localPhone,
         amountTzs,
         buyerName,
         buyerEmail,
         publicId: input.publicId,
         planId: input.planId,
-        clientOrderId,
+        fallbackFrom: 'sonicpesa',
       });
-      if (aurax.ok && aurax.orderId) {
-        await upsertPendingIntent({
-          orderId: aurax.orderId,
-          publicId: input.publicId,
-          planId: input.planId,
-          amountTzs,
-          buyerPhone: localPhone,
-          provider: PAYMENT_PROVIDERS.AURAX,
-          providerPayload: { ...aurax.raw, fallbackFrom: 'sonicpesa', clientOrderId },
-        });
-        return {
-          orderId: aurax.orderId,
-          message: aurax.message,
-          provider: PAYMENT_PROVIDERS.AURAX,
-          status: 'pending',
-        };
-      }
-      logger.warn(
-        { phone: localPhone, auraxMsg: aurax.errorMessage ?? aurax.message },
-        'payment_aurax_fallback_failed',
-      );
+      if (aurax) return aurax;
     }
 
     const userMsg =

@@ -259,21 +259,16 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa create strategy for all TZ push wallets
- * (Halopesa 061–063, Tigo/Yas, Airtel, Vodacom 074–079):
- *
- * 1) Official path — international MSISDN, auto wallet detect (no channel override).
- * 2) National `0…` format if the gateway rejects the MSISDN shape.
- * 3) One forced primary channel (MPESA / HALOPESATZ / …) only when auto-detect
- *    cannot resolve the wallet — then unifiedPayments falls through to Aurax.
- *
- * Never spam create_order_simple or every channel alias: that burns per-MSISDN
- * rate limits (especially Airtel) and leaves users on "Subiri dakika 2–5".
+ * SonicPesa create strategy:
+ * - Halopesa / Tigo-Yas / Airtel: local `0…` first, then `255…` (EaMax).
+ * - Vodacom: `255…` first.
+ * No channel override on the first attempt — Sonic auto-detects from MSISDN.
+ * One primary channel hint only after auto fails with a routing error.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
-  const intl = formatPhoneToIntl255(local0);
+  const phones = phoneCandidatesForSonicPesaApi(local0);
   const channels = sonicChannelHintsForNetwork(local0);
   const primaryChannel = channels[0];
   const steps: SonicCreateStep[] = [];
@@ -287,31 +282,23 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     }
   };
 
-  // 1) Canonical Sonic docs path — wallet from MSISDN.
-  addStep({
-    endpoint: 'payment/create_order',
-    buyer_phone: intl,
-    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    label: `intl/${network}/auto`,
-  });
-
-  // 2) Local national format (helps some Halopesa / edge MSISDN parsers).
-  if (local0 && local0 !== intl) {
+  // Auto-detect wallet from MSISDN (preferred phone formats first).
+  for (const phone of phones) {
     addStep({
       endpoint: 'payment/create_order',
-      buyer_phone: local0,
+      buyer_phone: phone,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `local/${network}/auto`,
+      label: `${phone.startsWith('255') ? 'intl' : 'local'}/${network}/auto`,
     });
   }
 
-  // 3) Single primary channel hint if auto-detect cannot route the wallet.
-  if (primaryChannel) {
+  // One forced primary channel with the preferred phone format.
+  if (primaryChannel && phones[0]) {
     addStep({
       endpoint: 'payment/create_order',
-      buyer_phone: intl,
+      buyer_phone: phones[0],
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `intl/${network}/${primaryChannel}`,
+      label: `preferred/${network}/${primaryChannel}`,
       channel: primaryChannel,
     });
   }

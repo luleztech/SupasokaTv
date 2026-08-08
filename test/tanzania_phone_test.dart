@@ -44,18 +44,26 @@ void main() {
       }
     });
 
-    test('normalizes Tigo/Yas 065/067/071/077', () {
+    test('normalizes Tigo/Yas 065/067/070/071/077', () {
       for (final raw in [
         '0652345678',
         '0672345678',
+        '0702345678',
         '0712345678',
         '0772345678',
         '255712345678',
+        '255702345678',
       ]) {
         expect(TanzaniaPhone.normalize(raw), isNotNull);
         expect(TanzaniaPhone.supportsPushUssd(raw), isTrue);
         expect(TanzaniaPhone.walletLabel(raw), 'TigoPesa / Mixx');
       }
+    });
+
+    test('Halopesa 062 is supported', () {
+      expect(TanzaniaPhone.normalize('0622345678'), '0622345678');
+      expect(TanzaniaPhone.walletLabel('0622345678'), 'Halopesa');
+      expect(TanzaniaPhone.supportsPushUssd('0622345678'), isTrue);
     });
   });
 }

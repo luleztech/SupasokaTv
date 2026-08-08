@@ -44,33 +44,32 @@ export function auraxChannelCandidates(local0: string): string[] {
   const network = detectTzMobileNetwork(p);
   switch (network) {
     case 'airtel':
-      // Prefer AIRTEL_MONEY — bare AIRTEL is rejected by some Aurax tenants.
-      return ['AIRTEL_MONEY', 'AIRTEL'];
+      return ['AIRTEL_MONEY'];
     case 'halotel':
-      // Halopesa 061 / 062 / 063 — HALOPESA is the Aurax enum; HALOTEL is legacy alias.
-      return ['HALOPESA', 'HALOTEL'];
+      // Halopesa 061 / 062 / 063
+      return ['HALOPESA'];
     case 'tigo_yas':
-      return ['TIGO_PESA', 'TIGOPESA', 'TIGO'];
+      // Mixx by Yas / Tigo including 070 and 071
+      return ['TIGO_PESA'];
     case 'vodacom':
     case 'mo_mobile':
-      // Vodacom M-Pesa including 075 and 079.
-      return ['MPESA', 'VODACOM', 'VODACOMMPESA'];
+      return ['MPESA'];
     default:
       return [resolveAuraxChannelFromPhone(local0)];
   }
 }
 
-/** Aurax requires E.164 `+255XXXXXXXXX`. */
+/** Aurax requires E.164 `+255XXXXXXXXX` only (rejects bare 255… and local 0…). */
 export function formatPhoneForAuraxPayApi(local0: string): string {
   const intl = formatPhoneToIntl255(toLocal0Digits(local0));
-  return intl.startsWith('+') ? intl : `+${intl}`;
+  const digits = intl.replace(/\D/g, '');
+  const national = digits.startsWith('255') ? digits.slice(3, 12) : digits.slice(0, 9);
+  return national ? `+255${national}` : `+${intl.replace(/^\+/, '')}`;
 }
 
 export function auraxPhoneCandidates(local0: string): string[] {
-  const p = toLocal0Digits(local0);
-  const intl = formatPhoneToIntl255(p);
-  const plusIntl = intl.startsWith('+') ? intl : `+${intl}`;
-  return [...new Set([plusIntl, intl, p])].filter((s) => s.length > 0);
+  const e164 = formatPhoneForAuraxPayApi(local0);
+  return e164.startsWith('+255') && e164.length >= 13 ? [e164] : [];
 }
 
 function auraxHeaders(): Record<string, string> {
@@ -140,13 +139,11 @@ export async function tryCreateAuraxOrder(args: {
   ensureAuraxConfigured();
   const amount = Math.max(AURAX_MIN_AMOUNT, Math.trunc(Number(args.amountTzs) || 0));
   const channels = auraxChannelCandidates(args.localPhone);
-  const phones = auraxPhoneCandidates(args.localPhone);
   const callbackUrl =
     env.auraxPayWebhookUrl.trim() ||
     `${env.publicBaseUrl.replace(/\/$/, '')}/api/v1/public/aurax/webhook`;
 
-  // Prefer E.164 (+255…) first — Aurax docs require it for Halopesa / Airtel / Tigo / M-Pesa.
-  // Cap attempts: primary channel × phones, then one alt channel — avoid 3×3 cartesian spam.
+  // Aurax: single E.164 +255… phone + correct channel (HALOPESA / TIGO_PESA / …).
   const preferredPhone = formatPhoneForAuraxPayApi(args.localPhone);
   const tryList: { channel: string; phone: string }[] = [];
   const seen = new Set<string>();
@@ -156,19 +153,15 @@ export async function tryCreateAuraxOrder(args: {
     seen.add(key);
     tryList.push({ channel, phone });
   };
-  if (channels[0]) {
-    pushCombo(channels[0], preferredPhone);
-    for (const ph of phones) {
-      if (ph !== preferredPhone) pushCombo(channels[0], ph);
-    }
-  }
-  if (channels[1]) {
-    pushCombo(channels[1], preferredPhone);
+  const phones = auraxPhoneCandidates(args.localPhone);
+  const phone = phones[0] || preferredPhone;
+  for (const ch of channels) {
+    pushCombo(ch, phone);
   }
   if (tryList.length === 0) {
     pushCombo(resolveAuraxChannelFromPhone(args.localPhone), preferredPhone);
   }
-  const limitedTryList = tryList.slice(0, 4);
+  const limitedTryList = tryList.slice(0, 2);
 
   let lastFailResult: {
     ok: false;

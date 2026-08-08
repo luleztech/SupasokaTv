@@ -144,17 +144,24 @@ export function formatPhoneToIntl255(local0: string): string {
 }
 
 /**
- * SonicPesa buyer_phone per official API docs — international 255XXXXXXXXX first.
+ * SonicPesa buyer_phone per official API docs — international 255XXXXXXXXX first
+ * for Vodacom. Halopesa / Tigo-Yas / Airtel often reject 255… on Sonic — local 0… first.
  * @see https://api.sonicpesa.com/api/v1/payment/create_order
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-  // SonicPesa docs: 255XXXXXXXXX first; national 0… as fallback.
-  const ordered = [intl255, local0fmt];
-
-  return [...new Set(ordered.filter((p) => p.length > 0))];
+  // Halopesa / Mixx-Yas / Airtel: local national format first (matches EaMax).
+  if (
+    isHalotelLocalPhone(local0fmt) ||
+    isTigoYasLocalPhone(local0fmt) ||
+    isAirtelLocalPhone(local0fmt)
+  ) {
+    return [...new Set([local0fmt, intl255].filter((p) => p.length > 0))];
+  }
+  // Vodacom M-Pesa: international first (Sonic docs).
+  return [...new Set([intl255, local0fmt].filter((p) => p.length > 0))];
 }
 
 /** Preferred SonicPesa `channel` values per operator (from gateway webhooks/docs). */
@@ -172,11 +179,13 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
         'MPESATZ',
       ];
     case 'tigo_yas':
-      return ['TIGOPESATZ', 'TIGOPESA', 'TIGO PESA', 'MIXX BY YAS', 'MIXX', 'YAS', 'MIC'];
+      // Mixx by Yas / TigoPesa — include MIXX aliases used after the Yas rebrand.
+      return ['TIGOPESA', 'TIGOPESATZ', 'MIXX', 'YAS', 'TIGO PESA', 'MIXX BY YAS', 'MIC'];
     case 'airtel':
       return ['AIRTELMONEY', 'AIRTEL MONEY', 'AIRTEL', 'AIRTELMONEYTZ'];
     case 'halotel':
-      return ['HALOPESATZ', 'HALOPESA', 'HALO PESA', 'HALOTEL', 'HALOPESA TZ'];
+      // HaloPesa — prefer HALOPESA (not HALOPESATZ) which Sonic/webhooks commonly accept.
+      return ['HALOPESA', 'HALOPESATZ', 'HALO PESA', 'HALOTEL', 'HALOPESA TZ'];
     case 'cootel':
       return ['COOTEL', 'COO TEL'];
     case 'smile':
@@ -191,6 +200,17 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
 export function isHalotelLocalPhone(local0: string): boolean {
   const p = toLocal0Digits(local0);
   return p.startsWith('061') || p.startsWith('062') || p.startsWith('063');
+}
+
+/** Mixx by Yas / TigoPesa: 065, 067, 070, 071, 077. */
+export function isTigoYasLocalPhone(local0: string): boolean {
+  const p = toLocal0Digits(local0);
+  return ['065', '067', '070', '071', '077'].some((pre) => p.startsWith(pre));
+}
+
+export function isAirtelLocalPhone(local0: string): boolean {
+  const p = toLocal0Digits(local0);
+  return ['066', '068', '069', '078'].some((pre) => p.startsWith(pre));
 }
 
 /** Human-readable wallet label for UI / error copy (Swahili). */
