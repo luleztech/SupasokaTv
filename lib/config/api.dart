@@ -61,22 +61,27 @@ class _PaymentsApi {
       } else if (j['message'] != null) {
         msg = j['message'].toString();
       }
-      // Prefer backend Swahili. Only invent Subiri 2–5 for true per-number rate limits.
+      // Prefer backend Swahili. Only invent Subiri 2–5 for true per-number quotas —
+      // never for Railway/CDN "Too Many Requests" (that falsely blocks first-time 070 users).
       final lower = msg.toLowerCase();
-      final isWalletRateLimit = lower.contains('too many') ||
-          lower.contains('many attempt') ||
-          lower.contains('majaribio mengi') ||
-          lower.contains('rate limit') ||
-          lower.contains('limit reached');
-      if (isWalletRateLimit ||
-          (res.statusCode == 429 &&
+      final isPerNumberQuota = lower.contains('majaribio mengi') ||
+          lower.contains('umefanya majaribio') ||
+          ((lower.contains('nambari') ||
+                  lower.contains('number') ||
+                  lower.contains('phone') ||
+                  lower.contains('msisdn') ||
+                  lower.contains('simu')) &&
               (lower.contains('attempt') ||
-                  lower.contains('limit') ||
-                  lower.contains('mara') ||
-                  lower.contains('majaribio')))) {
+                  lower.contains('majaribio') ||
+                  lower.contains('too many') ||
+                  lower.contains('rate limit') ||
+                  lower.contains('limit reached')));
+      if (isPerNumberQuota) {
         msg =
             'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
-      } else if (res.statusCode == 429) {
+      } else if (res.statusCode == 429 ||
+          lower.contains('too many requests') ||
+          lower == 'rate limited') {
         msg = 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
       }
       throw Exception(msg);

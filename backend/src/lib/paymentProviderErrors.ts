@@ -1,37 +1,76 @@
-/** True only for explicit per-number / STK attempt rate limits — not generic gateway codes. */
+/**
+ * True only for explicit per-MSISDN / wallet attempt quotas.
+ * Never treat Railway/CDN "Too Many Requests", bare 429, 9009, or "try again later"
+ * as "umefanya majaribio mengi kwa nambari hii" — that falsely blocks first-time 070/Yas users.
+ */
 export function isPaymentRateLimitError(message: string, code: string): boolean {
-  const msg = String(message || '').toLowerCase();
+  const msg = String(message || '').toLowerCase().trim();
   const codeStr = String(code ?? '').trim();
   const combined = `${msg} ${codeStr}`.toLowerCase();
 
-  // Explicit rate-limit language from Sonic / wallets (Swahili or English).
+  // Our own / known Swahili per-number copy.
   if (
-    combined.includes('too many') ||
-    combined.includes('many attempt') ||
-    combined.includes('rate limit') ||
-    combined.includes('limit reached') ||
     combined.includes('majaribio mengi') ||
-    /attempts?\s+(exceeded|limit)/i.test(combined) ||
-    /exceeded\s+(the\s+)?(rate|request|attempt|limit)/i.test(combined)
+    combined.includes('umefanya majaribio') ||
+    /subiri dakika\s*2|subiri dakika\s*5|dakika 2–5|dakika 2-5/i.test(combined)
   ) {
     return true;
   }
 
-  // HTTP 429 alone is ambiguous (CDN/edge). Only treat as wallet rate-limit with attempt language.
+  // Generic edge/CDN throttling — NOT a phone-number quota.
   if (
-    (codeStr === '429' || /\b429\b/.test(combined)) &&
-    /request|attempt|limit|mara|majaribio|later/i.test(msg)
+    /^too many requests$/i.test(msg) ||
+    /^rate limited$/i.test(msg) ||
+    /railway|edge rate|api rate limit|global rate/i.test(combined)
+  ) {
+    return false;
+  }
+
+  const mentionsNumber =
+    /nambari|number|phone|msisdn|simu|buyer[_\s]?phone|this (number|phone|msisdn)/i.test(
+      combined,
+    );
+  const mentionsAttempts =
+    /majaribio|attempt|tries|jaribio|too many (payment )?attempt|many attempt/i.test(
+      combined,
+    );
+
+  // Must tie the quota to the phone / MSISDN.
+  if (mentionsNumber && mentionsAttempts) return true;
+  if (
+    mentionsNumber &&
+    /(rate\s*limit|limit reached|exceeded.*(?:attempt|limit)|attempt.*exceeded)/i.test(
+      combined,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /(number|phone|msisdn|nambari).{0,40}(too many|rate\s*limit|limit reached|exceeded)/i.test(
+      combined,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /(too many|rate\s*limit|limit reached|exceeded).{0,40}(number|phone|msisdn|nambari)/i.test(
+      combined,
+    )
   ) {
     return true;
   }
 
-  // Do NOT treat bare 9009/90009, "exceeded", or "try again later" as rate limit —
-  // those are common on generic STK/push failures across all TZ networks.
+  // Bare HTTP 429 / "too many" / "rate limit" without phone context = not per-number.
   return false;
 }
 
 export function paymentRateLimitUserMessage(): string {
   return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
+}
+
+/** Soft busy message for CDN/API throttling (not the user's phone). */
+export function paymentBusyUserMessage(): string {
+  return 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
 }
 
 const STK_FAILURE_CODES = new Set([

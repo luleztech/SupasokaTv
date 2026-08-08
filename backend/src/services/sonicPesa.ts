@@ -11,8 +11,10 @@ import {
 import {
   detectTzMobileNetwork,
   formatPhoneToIntl255,
+  isAirtelLocalPhone,
   isHalotelLocalPhone,
   isSupportedSonicPushWallet,
+  isTigoYasLocalPhone,
   isVodacomMpesaLocalPhone,
   phoneCandidatesForSonicPesaApi,
   sonicChannelHintsForNetwork,
@@ -292,8 +294,11 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     });
   }
 
-  // One forced primary channel with the preferred phone format.
-  if (primaryChannel && phones[0]) {
+  // One forced primary channel — skip for Halopesa/Yas/Airtel when used as Aurax backup
+  // so we do not burn per-MSISDN quotas (false "Subiri dakika 2–5" on 070 etc.).
+  const preferLightSonic =
+    isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
+  if (!preferLightSonic && primaryChannel && phones[0]) {
     addStep({
       endpoint: 'payment/create_order',
       buyer_phone: phones[0],
@@ -301,6 +306,11 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
       label: `preferred/${network}/${primaryChannel}`,
       channel: primaryChannel,
     });
+  }
+
+  // Halopesa / Mixx-Yas / Airtel: at most one Sonic attempt (preferred format only).
+  if (preferLightSonic && steps.length > 1) {
+    return steps.slice(0, 1);
   }
 
   if (steps.length === 0) {

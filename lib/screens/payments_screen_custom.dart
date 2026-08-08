@@ -560,14 +560,26 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         lower.contains('timed out')) {
       return 'Hakuna muunganisho thabiti. Washa data ya simu au Wi-Fi, kisha ujaribu tena.';
     }
-    // Only remap true per-number rate limits — not generic "try again later".
-    if (lower.contains('too many') ||
-        lower.contains('many attempt') ||
-        lower.contains('majaribio mengi') ||
-        lower.contains('rate limit') ||
-        lower.contains('limit reached') ||
-        lower.contains('subiri dakika 2')) {
+    // Only remap true per-number quotas — not CDN "too many requests" / generic busy.
+    final isPerNumberQuota = lower.contains('majaribio mengi') ||
+        lower.contains('umefanya majaribio') ||
+        ((lower.contains('nambari') ||
+                lower.contains('number') ||
+                lower.contains('phone') ||
+                lower.contains('msisdn') ||
+                lower.contains('simu')) &&
+            (lower.contains('attempt') ||
+                lower.contains('majaribio') ||
+                lower.contains('too many') ||
+                lower.contains('rate limit') ||
+                lower.contains('limit reached')));
+    if (isPerNumberQuota) {
       return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
+    }
+    if (lower.contains('too many requests') ||
+        lower == 'rate limited' ||
+        lower.contains('huduma ina shughuli')) {
+      return 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
     }
     if (lower.contains('401') || lower.contains('403')) {
       return 'Ombi halikuidhinishwa. Fungua tena programu kisha ujaribu.';
