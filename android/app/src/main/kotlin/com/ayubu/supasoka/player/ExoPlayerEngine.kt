@@ -107,11 +107,12 @@ class ExoPlayerEngine(
     companion object {
         private const val TAG = "ExoPlayerEngine"
         
-        // Buffer configuration — enough headroom to avoid live rebuffer scratch loops.
-        private const val MIN_BUFFER_MS = 15_000
-        private const val MAX_BUFFER_MS = 50_000
-        private const val BUFFER_FOR_PLAYBACK_MS = 3_000
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 6_000
+        // Buffer configuration — prioritize continuity over fast-start to avoid scratch.
+        private const val MIN_BUFFER_MS = 25_000
+        private const val MAX_BUFFER_MS = 60_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 4_500
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 8_000
+        private const val BACK_BUFFER_MS = 10_000
 
         // Timeout configuration
         private const val CONNECT_TIMEOUT_MS = 12_000
@@ -169,6 +170,8 @@ class ExoPlayerEngine(
                     BUFFER_FOR_PLAYBACK_MS,
                     BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
                 )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .setBackBuffer(BACK_BUFFER_MS, true)
                 .build()
 
             // Configure preferred audio before build (avoid ExoPlayer.trackSelector nullable shadow).
@@ -1110,10 +1113,11 @@ class ExoPlayerEngine(
             }
 
             onTracksChangedCallback(tracks)
-            // Live manifests refresh often — only re-pin audio/video when needed.
+            // Live manifests refresh often — never re-pin tracks once playback is stable.
             if (!isPreferredAudioAlreadySelected(preferredAudioLanguage)) {
                 applyAudioTrackOverride(preferredAudioLanguage)
             }
+            // AUTO = ABR owns video selection. Fixed quality only if currently over the cap.
             if (selectedQuality != StreamQuality.AUTO && !isVideoQualitySatisfied(selectedQuality)) {
                 applyVideoTrackOverride(selectedQuality)
             }

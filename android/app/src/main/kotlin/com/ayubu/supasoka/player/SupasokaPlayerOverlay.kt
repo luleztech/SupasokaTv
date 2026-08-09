@@ -11,6 +11,7 @@ import com.ayubu.supasoka.domain.model.PlaybackState
 
 /**
  * Loading and buffering indicators only — does not modify native Media3 controller widgets.
+ * Short rebuffers are ignored so the UI does not flicker and disturb watching.
  */
 @OptIn(UnstableApi::class)
 class SupasokaPlayerOverlay(
@@ -22,6 +23,13 @@ class SupasokaPlayerOverlay(
     private var webViewMode = false
     private var playbackState = PlaybackState.IDLE
     private var firstFrameShown = false
+
+    private val showBufferingRunnable = Runnable {
+        if (playbackState == PlaybackState.BUFFERING && firstFrameShown) {
+            loadingOverlay.visibility = View.GONE
+            bufferingBar.visibility = View.VISIBLE
+        }
+    }
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
@@ -65,6 +73,7 @@ class SupasokaPlayerOverlay(
     /** Force-clear loading/buffering so reCAPTCHA stays tappable. */
     fun clearForHumanCheck() {
         firstFrameShown = false
+        mainHandler.removeCallbacks(showBufferingRunnable)
         loadingOverlay.visibility = View.GONE
         bufferingBar.visibility = View.GONE
     }
@@ -72,7 +81,7 @@ class SupasokaPlayerOverlay(
     fun detach() {
         attachedPlayer?.removeListener(playerListener)
         attachedPlayer = null
-        mainHandler.removeCallbacksAndMessages(null)
+        mainHandler.removeCallbacks(showBufferingRunnable)
     }
 
     fun onEngineStateChanged(state: PlaybackState) {
@@ -80,42 +89,43 @@ class SupasokaPlayerOverlay(
         when (state) {
             PlaybackState.PLAYING -> {
                 markFirstFrameReady()
-                bufferingBar.visibility = View.GONE
             }
             PlaybackState.BUFFERING -> {
-                if (webViewMode) {
-                    if (firstFrameShown) {
-                        // Rebuffering after first play — show only thin bar, keep video visible.
-                        loadingOverlay.visibility = View.GONE
-                        bufferingBar.visibility = View.VISIBLE
-                    } else {
-                        // Initial WebView load — keep full overlay, show spinning bar.
-                        bufferingBar.visibility = View.VISIBLE
-                    }
+                if (firstFrameShown) {
+                    // Debounce: ignore brief rebuffers so the bar does not flash.
+                    scheduleBufferingIndicator()
+                } else if (webViewMode) {
+                    bufferingBar.visibility = View.VISIBLE
                 } else {
                     showBufferingIndicator()
                 }
             }
             PlaybackState.READY -> {
+                mainHandler.removeCallbacks(showBufferingRunnable)
                 bufferingBar.visibility = View.GONE
                 if (!webViewMode && attachedPlayer != null) {
                     syncFromPlayer(attachedPlayer)
                 }
             }
-            PlaybackState.PAUSED -> bufferingBar.visibility = View.GONE
+            PlaybackState.PAUSED -> {
+                mainHandler.removeCallbacks(showBufferingRunnable)
+                bufferingBar.visibility = View.GONE
+            }
             else -> { }
         }
     }
 
-    /** Gateway → Exo handoff: keep video visible, only show the thin top bar while rebuffering. */
+    /** Gateway → Exo handoff: keep video visible without flashing the bar. */
     fun markStreamHandoff() {
         firstFrameShown = true
+        mainHandler.removeCallbacks(showBufferingRunnable)
         loadingOverlay.visibility = View.GONE
-        bufferingBar.visibility = View.VISIBLE
+        bufferingBar.visibility = View.GONE
     }
 
     fun resetForNewStream() {
         firstFrameShown = false
+        mainHandler.removeCallbacks(showBufferingRunnable)
         loadingOverlay.visibility = View.VISIBLE
         bufferingBar.visibility = View.GONE
     }
@@ -126,16 +136,20 @@ class SupasokaPlayerOverlay(
 
     private fun markFirstFrameReady() {
         firstFrameShown = true
+        mainHandler.removeCallbacks(showBufferingRunnable)
         loadingOverlay.visibility = View.GONE
         bufferingBar.visibility = View.GONE
     }
 
+    private fun scheduleBufferingIndicator() {
+        mainHandler.removeCallbacks(showBufferingRunnable)
+        mainHandler.postDelayed(showBufferingRunnable, BUFFERING_UI_DELAY_MS)
+    }
+
     private fun showBufferingIndicator() {
         if (firstFrameShown || playbackState == PlaybackState.PLAYING || attachedPlayer?.isPlaying == true) {
-            loadingOverlay.visibility = View.GONE
-            bufferingBar.visibility = View.VISIBLE
+            scheduleBufferingIndicator()
         } else if (webViewMode) {
-            // WebView initial load — spinner stays until PLAYING; no full overlay on rebuffer.
             bufferingBar.visibility = View.VISIBLE
         } else {
             bufferingBar.visibility = View.GONE
@@ -158,11 +172,14 @@ class SupasokaPlayerOverlay(
         }
 
         if (player.playbackState == Player.STATE_BUFFERING && firstFrameShown) {
-            bufferingBar.visibility = View.VISIBLE
-        } else if (player.playbackState == Player.STATE_READY && playing) {
-            bufferingBar.visibility = View.GONE
-        } else if (player.playbackState == Player.STATE_READY && !playing) {
+            scheduleBufferingIndicator()
+        } else {
+            mainHandler.removeCallbacks(showBufferingRunnable)
             bufferingBar.visibility = View.GONE
         }
+    }
+
+    companion object {
+        private const val BUFFERING_UI_DELAY_MS = 900L
     }
 }

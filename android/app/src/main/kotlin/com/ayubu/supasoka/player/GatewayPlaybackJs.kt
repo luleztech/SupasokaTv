@@ -569,8 +569,8 @@ object GatewayPlaybackJs {
                   return t && (!t.type || t.type === 'variant') && t.height > 0;
                 }).sort(function(a, b) { return (a.height || 0) - (b.height || 0); });
                 if (tracks.length && typeof pl.selectVariantTrack === 'function') {
-                  try { pl.selectVariantTrack(tracks[0], /* clearBuffer */ true); }
-                  catch (eSel) { try { pl.selectVariantTrack(tracks[0], false); } catch (e2) {} }
+                  try { pl.selectVariantTrack(tracks[0], /* clearBuffer */ false); }
+                  catch (eSel) { try { pl.selectVariantTrack(tracks[0], true); } catch (e2) {} }
                 }
               }
             } catch (e3) {}
@@ -1449,9 +1449,9 @@ object GatewayPlaybackJs {
                         }
                       }
                       if (best && typeof pl.selectVariantTrack === 'function') {
-                        // clearBuffer on language switch avoids overlapping audio.
-                        try { pl.selectVariantTrack(best, true); }
-                        catch (eVar) { pl.selectVariantTrack(best, false); }
+                        // Prefer seamless switch; clearBuffer only as fallback.
+                        try { pl.selectVariantTrack(best, false); }
+                        catch (eVar) { pl.selectVariantTrack(best, true); }
                         applied = true;
                       }
                     }

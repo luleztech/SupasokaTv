@@ -504,19 +504,27 @@ class WebViewEngine(
     private fun scheduleForceAutoplay(gen: Int, attempt: Int) {
         if (gen != pageLoadGeneration) return
         if (humanCheckActive || userPaused) return
-        if (attempt > 12) return
+        if (attempt > 6) return
         forceAutoplayGeneration = gen
         postDelayed({
             if (gen != pageLoadGeneration || humanCheckActive || userPaused) return@postDelayed
+            if (playbackStarted && attempt > 0) {
+                // Already reported playing — stop nudging to avoid mid-play scratch.
+                return@postDelayed
+            }
             injectRecaptchaUnlockHelper()
             injectFitPlaybackToScreen()
             webView?.evaluateJavascript(GatewayPlaybackJs.forceAutoplayScript()) { raw ->
                 val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
-                if (status != "playing" && attempt < 12 && !userPaused) {
+                if (status == "playing") {
+                    playbackStarted = true
+                    return@evaluateJavascript
+                }
+                if (attempt < 6 && !userPaused) {
                     scheduleForceAutoplay(gen, attempt + 1)
                 }
             }
-        }, if (attempt == 0) 300L else 700L)
+        }, if (attempt == 0) 400L else 900L)
     }
 
     fun play() {
@@ -625,11 +633,8 @@ class WebViewEngine(
         Log.d(QUALITY_TAG, "setQuality $quality mode=$mode fromUser=$fromUser")
         try {
             ensurePlaybackApisInjected()
-            applyQualityJs(mode, fromUser, scheduleRetries = true)
-            // Keep playback going after quality change unless user paused.
-            if (!userPaused) {
-                postDelayed({ if (!userPaused) play() }, 400)
-            }
+            applyQualityJs(mode, fromUser, scheduleRetries = fromUser)
+            // Never re-call play() after quality inject — causes audio/video scratch.
         } catch (e: Exception) {
             Log.e(QUALITY_TAG, "setQuality failed: ${e.message}")
         }
@@ -655,9 +660,9 @@ class WebViewEngine(
         if (!scheduleRetries) return
         // Keep retries light — re-selecting every few hundred ms causes scratch/pause loops.
         val delays = if (fromUser) {
-            listOf(400L, 1200L, 2500L, 4500L)
+            listOf(800L, 2_500L)
         } else {
-            listOf(800L, 2000L, 4500L)
+            listOf(1_500L)
         }
         delays.forEach { delayMs ->
             postDelayed({
@@ -687,13 +692,12 @@ class WebViewEngine(
         try {
             ensurePlaybackApisInjected()
             applyAudioLanguageJs(lang, scheduleRetries = true)
-            if (!userPaused) postDelayed({ if (!userPaused) play() }, 500)
+            // Do not force play() — language switch should not restart the decoder.
             postDelayed({
-                if (!audioLanguageConfirmed) {
+                if (!audioLanguageConfirmed && !userPaused) {
                     applyAudioLanguageJs(lang, scheduleRetries = false)
-                    if (!userPaused) play()
                 }
-            }, 2000)
+            }, 2_000)
         } catch (e: Exception) {
             Log.e(TAG, "setAudioLanguage JS failed: ${e.message}")
         }

@@ -262,7 +262,10 @@ class PlayerManager(
         activeEngine = ActiveEngine.WEBVIEW
         if (!userPaused) {
             webViewEngine?.play()
-            mainHandler.postDelayed({ if (!userPaused) webViewEngine?.play() }, 800)
+            // One delayed nudge while the page boots — no further mid-play nudges.
+            mainHandler.postDelayed({
+                if (!userPaused && webViewEngine?.isPlaying() != true) webViewEngine?.play()
+            }, 1_000)
         }
     }
 
@@ -322,8 +325,7 @@ class PlayerManager(
                 ActiveEngine.NONE -> Log.w(TAG, "setQuality ignored — no active engine")
             }
             Log.d(TAG, "Quality → $quality (fromUser=$fromUser, engine=$activeEngine)")
-            // Keep playing after quality change unless the user explicitly paused.
-            if (!userPaused) play()
+            // Do not call play() here — re-entering play mid-stream causes audible scratch.
         } catch (e: Exception) {
             Log.e(TAG, "setQuality error: ${e.message}", e)
         }
@@ -337,7 +339,8 @@ class PlayerManager(
                 ActiveEngine.NONE -> Log.w(TAG, "setAudioLanguage ignored — no active engine")
             }
             Log.d(TAG, "Audio language → $language (engine=$activeEngine)")
-            if (!userPaused) play()
+            // Language APIs keep playWhenReady; only nudge if explicitly paused is false and not playing.
+            if (!userPaused && !isPlaying()) play()
         } catch (e: Exception) {
             Log.e(TAG, "setAudioLanguage error: ${e.message}", e)
         }

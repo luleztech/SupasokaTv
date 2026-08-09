@@ -65,6 +65,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     private var rotateHintDismissedThisSession = false
     private var hasBeenLandscapeThisSession = false
     private var playbackReady = false
+    /** After first successful start, never force play again (avoids mid-play scratch). */
+    private var startupAutoplayDone = false
     private lateinit var playerViewRef: PlayerView
     private lateinit var playerTopTools: LinearLayout
 
@@ -85,12 +87,14 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
 
     private val exoPlayListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            updatePlayPauseIcon(isPlaying)
+            val p = playerManager.getExoPlayer() ?: return
+            // During rebuffer isPlaying=false — keep the play icon based on intent.
+            updatePlayPauseIcon(p.playWhenReady && !playerManager.isUserPaused())
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             val p = playerManager.getExoPlayer() ?: return
-            updatePlayPauseIcon(p.isPlaying)
+            updatePlayPauseIcon(p.playWhenReady && !playerManager.isUserPaused())
         }
     }
 
@@ -205,20 +209,19 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                             PlaybackState.READY,
                             PlaybackState.PLAYING -> {
                                 attachWebViewIfNeeded(webContainer, playerView)
-                                // Only nudge autoplay once while starting — not on every rebuffer.
-                                if (state == PlaybackState.READY || state == PlaybackState.PLAYING) {
-                                    if (!playerManager.isUserPaused()) ensureAutoplay()
-                                }
                                 if (state == PlaybackState.PLAYING) {
+                                    startupAutoplayDone = true
                                     updatePlayPauseIcon(true)
                                     if (!humanCheckActive) scheduleHideControls()
                                 }
                             }
                             PlaybackState.PAUSED -> updatePlayPauseIcon(false)
                             PlaybackState.ENDED -> {
-                                // Live WebView end can be transient — retry once before quitting.
-                                if (!playerManager.isUserPaused()) {
+                                // Live WebView end can be transient — one gentle resume, no spam.
+                                if (!playerManager.isUserPaused() && !startupAutoplayDone) {
                                     ensureAutoplay()
+                                } else if (!playerManager.isUserPaused()) {
+                                    playerManager.play()
                                     mainHandler.postDelayed({
                                         if (!isFinishing && !playerManager.isPlaying()) {
                                             showChannelUnavailableAndFinish()
@@ -241,19 +244,19 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     }
                     when (state) {
                         PlaybackState.PLAYING -> {
+                            startupAutoplayDone = true
                             updatePlayPauseIcon(true)
                             scheduleHideControls()
                         }
                         PlaybackState.PAUSED -> updatePlayPauseIcon(false)
-                        PlaybackState.READY -> {
-                            if (!playerManager.isUserPaused()) ensureAutoplay()
-                        }
-                        PlaybackState.BUFFERING -> {
-                            // Let Exo refill — do not force playWhenReady on every rebuffer.
-                            updatePlayPauseIcon(playerManager.isPlaying())
+                        PlaybackState.READY, PlaybackState.BUFFERING -> {
+                            // Never force play mid-stream — Exo already has playWhenReady.
+                            updatePlayPauseIcon(
+                                playerManager.getExoPlayer()?.playWhenReady == true &&
+                                    playerManager.isPlaying(),
+                            )
                         }
                         PlaybackState.ENDED -> {
-                            // ExoEngine recovers live ENDED internally; only quit if still ended.
                             if (!playerManager.isPlaying() && !playerManager.isUserPaused()) {
                                 showChannelUnavailableAndFinish()
                             }
@@ -283,10 +286,13 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         )
         playerManager.initialize(playbackSession)
         playbackReady = true
+        startupAutoplayDone = false
         syncPlaybackSurface()
         ensureAutoplay()
-        // One short retry while gateway extract / first buffer settles.
-        mainHandler.postDelayed({ if (!isFinishing) ensureAutoplay() }, 1_200L)
+        // Single startup retry only — never after playback has begun.
+        mainHandler.postDelayed({
+            if (!isFinishing && !startupAutoplayDone) ensureAutoplay()
+        }, 1_500L)
         showControls()
         scheduleHideControls()
     }
@@ -450,36 +456,42 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             playerView.player = null
             exoBoundToView = false
             attachWebViewIfNeeded(webContainer, playerView)
-            playerManager.setQuality(selectedOkoaQuality, fromUser = false)
-            if (!playerManager.isUserPaused()) ensureAutoplay()
+            // AUTO is the engine default — skip re-apply (avoids quality thrash / scratch).
+            if (selectedOkoaQuality != StreamQuality.AUTO) {
+                playerManager.setQuality(selectedOkoaQuality, fromUser = false)
+            }
+            if (!startupAutoplayDone) ensureAutoplay()
         } else if (playerManager.isExoPlayback()) {
             playerOverlay.markStreamHandoff()
             exoBoundToView = false
             webContainer.visibility = View.GONE
             webContainer.removeAllViews()
             playerView.visibility = View.VISIBLE
-            playerManager.setQuality(selectedOkoaQuality, fromUser = false)
+            if (selectedOkoaQuality != StreamQuality.AUTO) {
+                playerManager.setQuality(selectedOkoaQuality, fromUser = false)
+            }
             bindExoToPlayerViewIfNeeded(playerView, strictNull = true)
             playerManager.getExoPlayer()?.let {
                 playerOverlay.attachExoPlayer(it)
                 it.removeListener(exoPlayListener)
                 it.addListener(exoPlayListener)
             }
-            if (!playerManager.isUserPaused()) ensureAutoplay()
+            if (!startupAutoplayDone) ensureAutoplay()
         }
     }
 
-    /** Start playback once after open — never override an explicit user pause. */
+    /** One-shot channel start only — never call after playback is running. */
     private fun ensureAutoplay() {
         if (!::playerManager.isInitialized || isFinishing || humanCheckActive) return
         if (playerManager.isUserPaused()) return
+        if (startupAutoplayDone) return
         try {
             playerManager.play()
             playerManager.getExoPlayer()?.let { p ->
                 if (!playerManager.isUserPaused()) {
                     p.playWhenReady = true
                     p.volume = 1f
-                    p.play()
+                    if (!p.isPlaying) p.play()
                 }
                 updatePlayPauseIcon(p.isPlaying || p.playWhenReady)
             }
@@ -509,7 +521,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                         playerManager.setAudioLanguage(preferredAudioLanguage)
                         refreshLanguageChip()
                         if (!playerManager.isUserPaused()) {
-                            ensureAutoplay()
+                            // Language switch only — do not run full startup autoplay.
+                            playerManager.play()
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "language switch failed", e)
@@ -546,7 +559,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                         selectedOkoaQuality = q
                         playerManager.setQuality(q, fromUser = true)
                         refreshQualityChip()
-                        if (!playerManager.isUserPaused()) ensureAutoplay()
+                        // Keep going without restarting the pipeline.
                         Log.d(TAG, "User picked quality: $q")
                     } catch (e: Exception) {
                         Log.e(TAG, "quality switch failed", e)
@@ -666,14 +679,14 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         try {
             playerView.player = p
             p.volume = 1f
-            if (!playerManager.isUserPaused()) {
+            if (!playerManager.isUserPaused() && !startupAutoplayDone) {
                 p.playWhenReady = true
-                p.play()
+                if (!p.isPlaying) p.play()
             }
             p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
             p.removeListener(exoPlayListener)
             p.addListener(exoPlayListener)
-            updatePlayPauseIcon(p.isPlaying || p.playWhenReady)
+            updatePlayPauseIcon(p.playWhenReady && !playerManager.isUserPaused())
             exoBoundToView = true
         } catch (e: Exception) {
             Log.e(TAG, "bindExoToPlayerViewIfNeeded", e)
