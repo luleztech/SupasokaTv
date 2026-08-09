@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../admin_messenger.dart';
+import '../models/app_config.dart';
 import '../store/admin_store.dart';
 import '../widgets/admin_page_header.dart';
 import '../widgets/stagger_entrance.dart';
@@ -23,7 +25,7 @@ class SettingsScreen extends StatelessWidget {
             child: StaggerEntrance(
               index: 0,
               child: AdminPageHeader(
-                title: 'Settings',
+                title: 'Mpangilio',
                 icon: Icons.settings_rounded,
               ),
             ),
@@ -61,7 +63,7 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
           sliver: SliverToBoxAdapter(
             child: StaggerEntrance(
               index: 4,
@@ -93,7 +95,166 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
         ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+          sliver: SliverToBoxAdapter(
+            child: StaggerEntrance(
+              index: 5,
+              slide: 12,
+              child: const _DangerZoneCard(),
+            ),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _DangerZoneCard extends StatelessWidget {
+  const _DangerZoneCard();
+
+  Future<void> _confirmRevokeAllPremium(
+    BuildContext context,
+    AdminStore store,
+    int premiumCount,
+  ) async {
+    const confirmPhrase = 'FUTA YOTE';
+    final controller = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final match = controller.text.trim() == confirmPhrase;
+          return AlertDialog(
+            title: const Text('Futa premium ya WOTE?'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Hii itamnyang\'anya premium kila mtumiaji mwenye akaunti hai ($premiumCount kwa sasa) — '
+                  'HATA wale waliolipa kihalali. Hatua hii HAIWEZI kutenduliwa.',
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Andika "$confirmPhrase" kuthibitisha:',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: confirmPhrase,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+                onPressed: match ? () => Navigator.pop(ctx, true) : null,
+                child: const Text('Futa premium ya wote'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    if (ok != true) return;
+    try {
+      final revoked = await store.revokeAllPremium();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Premium imefutwa kwa watumiaji $revoked.')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Imeshindikana: ${adminFormatError(e)}')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AdminStore>();
+    final cs = Theme.of(context).colorScheme;
+    final premiumCount = store.config.users
+        .where((u) => u.id.startsWith('User-') && UserDto.isPremiumNow(u.premiumUntilMs))
+        .length;
+    final canRevoke = store.hasAdminSession && premiumCount > 0;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        color: const Color(0xFF1a1214),
+        border: Border.all(color: cs.error.withValues(alpha: 0.45), width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  color: cs.error.withValues(alpha: 0.18),
+                ),
+                child: Icon(Icons.warning_amber_rounded, color: cs.error, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Danger zone',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: cs.error,
+                          ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Vitendo hatari — hakikisha unajua unachofanya. Hakuna undo.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.65),
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: canRevoke
+                ? () => _confirmRevokeAllPremium(context, store, premiumCount)
+                : null,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: cs.error,
+              disabledForegroundColor: cs.error.withValues(alpha: 0.35),
+              side: BorderSide(color: cs.error.withValues(alpha: canRevoke ? 0.9 : 0.3)),
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            ),
+            icon: const Icon(Icons.person_off_rounded),
+            label: Text(
+              premiumCount > 0
+                  ? 'Futa premium ya WOTE ($premiumCount)'
+                  : 'Hakuna watumiaji wa premium',
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

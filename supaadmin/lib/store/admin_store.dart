@@ -351,18 +351,41 @@ class AdminStore extends ChangeNotifier {
     return lower.contains('rate limited') || lower.contains('too many requests');
   }
 
+  /// Railway (and similar edges) throttle by IP. Retrying a 429 deepens the
+  /// cool-down, so login must fail fast and ask the operator to wait.
+  static int _retryAfterSeconds(http.Response res) {
+    final header = res.headers['retry-after'] ?? res.headers['Retry-After'];
+    if (header != null) {
+      final asInt = int.tryParse(header.trim());
+      if (asInt != null && asInt > 0) return asInt.clamp(15, 180);
+      final when = DateTime.tryParse(header.trim());
+      if (when != null) {
+        final secs = when.difference(DateTime.now()).inSeconds;
+        if (secs > 0) return secs.clamp(15, 180);
+      }
+    }
+    return 60;
+  }
+
+  /// Prefix used by [LoginScreen] to start a local cooldown (do not retry).
+  static const rateLimitedLoginPrefix = 'RATE_LIMITED:';
+
   Future<String?> login(String password) async {
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/auth/admin-login');
-    const maxAttempts = 4;
+    // Network blips only — never retry HTTP 429 (edge budget).
+    const maxNetworkAttempts = 2;
     Object? lastError;
 
-    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    for (var attempt = 0; attempt < maxNetworkAttempts; attempt++) {
       try {
         final res = await http
             .post(
               uri,
-              headers: {'Content-Type': 'application/json'},
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              },
               body: jsonEncode({'password': password}),
             )
             .timeout(const Duration(seconds: 15));
@@ -382,20 +405,16 @@ class AdminStore extends ChangeNotifier {
         }
 
         if (_isRateLimitedResponse(res.statusCode, res.body)) {
-          if (attempt < maxAttempts - 1) {
-            // Railway edge cools down per IP — wait before retrying.
-            await Future<void>.delayed(Duration(seconds: 2 << attempt));
-            continue;
-          }
-          return 'Rate limited by the server. Wait about a minute without retrying, then try again.';
+          final wait = _retryAfterSeconds(res);
+          return '$rateLimitedLoginPrefix$wait';
         }
 
         final snippet = res.body.length > 120 ? '${res.body.substring(0, 120)}…' : res.body;
         return 'Login failed: ${res.statusCode} $snippet';
       } catch (e) {
         lastError = e;
-        if (attempt < maxAttempts - 1) {
-          await Future<void>.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+        if (attempt < maxNetworkAttempts - 1) {
+          await Future<void>.delayed(Duration(milliseconds: 700 * (attempt + 1)));
           continue;
         }
       }
@@ -747,7 +766,7 @@ class AdminStore extends ChangeNotifier {
   Future<void> _pushConfigToServer() async {
     if (!hasAdminSession) {
       _lastSyncError =
-          'Hakuna JWT — ingia tena kwenye Settings';
+          'Hakuna JWT — ingia tena kwenye Mpangilio';
       notifyListeners();
       _snack(_lastSyncError!);
       return;

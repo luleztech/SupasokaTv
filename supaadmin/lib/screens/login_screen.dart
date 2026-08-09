@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -15,15 +17,50 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   bool _loading = false;
   String? _error;
+  int _cooldownSeconds = 0;
+  Timer? _cooldownTimer;
 
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     _passwordController.dispose();
     super.dispose();
   }
 
+  bool get _blocked => _loading || _cooldownSeconds > 0;
+
+  void _startCooldown(int seconds) {
+    _cooldownTimer?.cancel();
+    setState(() {
+      _cooldownSeconds = seconds;
+      _error =
+          'Server is temporarily rate-limited (shared edge IP). '
+          'Wait $_cooldownSeconds s — do not keep retrying, that makes it worse.';
+    });
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_cooldownSeconds <= 1) {
+        t.cancel();
+        setState(() {
+          _cooldownSeconds = 0;
+          _error = 'You can try logging in again now.';
+        });
+        return;
+      }
+      setState(() {
+        _cooldownSeconds -= 1;
+        _error =
+            'Server is temporarily rate-limited (shared edge IP). '
+            'Wait $_cooldownSeconds s — do not keep retrying, that makes it worse.';
+      });
+    });
+  }
+
   Future<void> _login() async {
-    if (_loading) return;
+    if (_blocked) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -32,6 +69,15 @@ class _LoginScreenState extends State<LoginScreen> {
     final error = await store.login(_passwordController.text);
     if (!mounted) return;
     if (error != null) {
+      if (error.startsWith(AdminStore.rateLimitedLoginPrefix)) {
+        final wait = int.tryParse(
+              error.substring(AdminStore.rateLimitedLoginPrefix.length),
+            ) ??
+            60;
+        setState(() => _loading = false);
+        _startCooldown(wait);
+        return;
+      }
       setState(() {
         _error = error;
         _loading = false;
@@ -75,16 +121,22 @@ class _LoginScreenState extends State<LoginScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                TextField(
+                  spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                   controller: _passwordController,
                   obscureText: _obscurePassword,
+                  enabled: !_blocked,
                   decoration: InputDecoration(
                     labelText: 'Admin Password',
                     hintText: 'Enter password',
                     prefixIcon: const Icon(Icons.lock_rounded),
                     suffixIcon: IconButton(
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                      icon: Icon(_obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded),
+                      onPressed: _blocked
+                          ? null
+                          : () => setState(() => _obscurePassword = !_obscurePassword),
+                      icon: Icon(
+                        _obscurePassword ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                      ),
                     ),
                   ),
                   onSubmitted: (_) => _login(),
@@ -93,7 +145,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                   Text(
                     _error!,
-                    style: TextStyle(color: cs.error),
+                    style: TextStyle(
+                      color: _cooldownSeconds > 0 ? const Color(0xFFfbbf24) : cs.error,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -102,10 +156,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: _loading ? null : _login,
+                    onPressed: _blocked ? null : _login,
                     child: _loading
-                        ? const CircularProgressIndicator()
-                        : const Text('Login'),
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(
+                            _cooldownSeconds > 0
+                                ? 'Wait ${_cooldownSeconds}s'
+                                : 'Login',
+                          ),
                   ),
                 ),
               ],

@@ -34,7 +34,7 @@ class _AdminShellState extends State<AdminShell> {
     _Nav(Icons.group_outlined, Icons.group_rounded, 'Users'),
     _Nav(Icons.sports_soccer_outlined, Icons.sports_soccer_rounded, 'Live'),
     _Nav(Icons.notifications_outlined, Icons.notifications_rounded, 'Push'),
-    _Nav(Icons.settings_outlined, Icons.settings_rounded, 'Settings'),
+    _Nav(Icons.settings_outlined, Icons.settings_rounded, 'Mpangilio'),
   ];
 
   void _selectNav(int i) {
