@@ -87,10 +87,8 @@ object GatewayPlaybackJs {
             }
           } catch (e) {}
           try {
-            if (window.grecaptcha && typeof window.grecaptcha.execute === 'function') {
-              var p = window.grecaptcha.execute();
-              if (p && typeof p.then === 'function') p.then(function(){}).catch(function(){});
-            }
+            // Do not auto-execute — a fake token submitted to the host can 403 the session
+            // and force repeated captchas in the visible WebView.
           } catch (e) {}
           true;
         })();
@@ -100,6 +98,7 @@ object GatewayPlaybackJs {
      * Visible WebView unlock helper. Many PHP gateways call `grecaptcha.execute()`
      * even for `size=normal` checkboxes — that throws and never unlocks the player.
      * Patch execute to wait for a real [grecaptcha.getResponse] after the user ticks.
+     * Also fires data-callback / common submit handlers once a real token appears.
      * Never stubs or hides the widget.
      */
     fun checkboxRecaptchaUnlockScript(): String = """
@@ -121,29 +120,80 @@ object GatewayPlaybackJs {
             } catch (e) {}
             return token || '';
           }
+          function fireUnlock(token){
+            if (!token || token === 'supasoka') return false;
+            if (window.__supasokaCaptchaTokenFired === token) return true;
+            window.__supasokaCaptchaTokenFired = token;
+            try {
+              var el = document.querySelector('.g-recaptcha,[data-sitekey]');
+              var cbName = el && (el.getAttribute('data-callback') || el.getAttribute('data-callback-name'));
+              if (cbName && typeof window[cbName] === 'function') {
+                try { window[cbName](token); } catch (e0) {}
+              }
+            } catch (e1) {}
+            try {
+              ['onSubmit','onCaptchaSuccess','captchaCallback','recaptchaCallback','verifyCallback']
+                .forEach(function(n){
+                  try { if (typeof window[n] === 'function') window[n](token); } catch (e2) {}
+                });
+            } catch (e3) {}
+            try {
+              var input = document.querySelector('textarea#g-recaptcha-response,textarea[name="g-recaptcha-response"],input[name="g-recaptcha-response"]');
+              if (input) {
+                input.value = token;
+                try { input.dispatchEvent(new Event('change', { bubbles: true })); } catch (e4) {}
+              }
+            } catch (e5) {}
+            try {
+              var form = document.querySelector('form');
+              if (form && form.getAttribute('data-supasoka-auto-submit') !== '0') {
+                var btn = form.querySelector('button[type="submit"],input[type="submit"]');
+                if (btn) { try { btn.click(); } catch (e6) {} }
+              }
+            } catch (e7) {}
+            return true;
+          }
+          window.__supasokaFireCaptchaUnlock = fireUnlock;
+          function isInvisibleWidget(){
+            try {
+              var el = document.querySelector('.g-recaptcha[data-size="invisible"],[data-size="invisible"]');
+              return !!el;
+            } catch (e) { return false; }
+          }
           function patch(){
             try {
               if (!window.grecaptcha || typeof grecaptcha.execute !== 'function') return false;
               if (grecaptcha.__supasokaPatched) return true;
               var orig = grecaptcha.execute.bind(grecaptcha);
               grecaptcha.execute = function(siteKey, opts){
-                try {
-                  var el = document.querySelector('.g-recaptcha');
-                  var size = (el && el.getAttribute('data-size')) || '';
-                  if (size === 'invisible') return orig(siteKey, opts);
+                // Checkbox / image challenges must NOT call Google's execute() —
+                // it throws: "grecaptcha.execute only works with invisible reCAPTCHA".
+                if (!isInvisibleWidget()) {
                   var existing = readToken();
-                  if (existing) return Promise.resolve(existing);
+                  if (existing) {
+                    fireUnlock(existing);
+                    return Promise.resolve(existing);
+                  }
                   return new Promise(function(resolve, reject){
                     var n = 0;
                     var t = setInterval(function(){
                       n++;
                       var token = readToken();
-                      if (token) { clearInterval(t); resolve(token); }
-                      else if (n > 360) { clearInterval(t); reject(new Error('captcha_timeout')); }
+                      if (token) {
+                        clearInterval(t);
+                        fireUnlock(token);
+                        resolve(token);
+                      } else if (n > 360) {
+                        clearInterval(t);
+                        reject(new Error('captcha_timeout'));
+                      }
                     }, 500);
                   });
-                } catch (e) {
+                }
+                try {
                   return orig(siteKey, opts);
+                } catch (eOrig) {
+                  return Promise.reject(eOrig);
                 }
               };
               grecaptcha.__supasokaPatched = true;
@@ -151,15 +201,26 @@ object GatewayPlaybackJs {
             } catch (e) { return false; }
           }
           if (!patch()) {
-            var iv = setInterval(function(){ if (patch()) clearInterval(iv); }, 400);
+            var iv = setInterval(function(){ if (patch()) clearInterval(iv); }, 250);
             setTimeout(function(){ clearInterval(iv); }, 45000);
+          }
+          if (!window.__supasokaCaptchaTokenWatch) {
+            window.__supasokaCaptchaTokenWatch = setInterval(function(){
+              try {
+                var token = readToken();
+                if (token) fireUnlock(token);
+              } catch (e) {}
+            }, 700);
           }
           true;
         })();
     """.trimIndent()
 
-    /** Undo accidental captcha CSS hides so the checkbox is visible and tappable. */
-    fun revealCaptchaScript(): String = """
+    /**
+     * Keep the checkbox + image challenge fully visible and tappable.
+     * Never strip width/height from challenge iframes (that whites-out the tiles).
+     */
+    fun ensureCaptchaChallengeVisibleScript(): String = """
         (function(){
           try {
             var hide = document.getElementById('supasoka-hide-captcha')
@@ -170,32 +231,90 @@ object GatewayPlaybackJs {
                 window.__supasokaCaptchaObserver.disconnect();
                 window.__supasokaCaptchaObserver = null;
               }
-            } catch (e) {}
+            } catch (e0) {}
             window.__supasokaHideCaptchaNodes = function(){};
-            var nodes = document.querySelectorAll(
-              '.g-recaptcha,iframe[src*="recaptcha"],#recaptchadiv,.lsrecaptcha,' +
-              '[class*="g-recaptcha"],[id*="recaptcha"],.rc-anchor,[title*="reCAPTCHA"]'
+            if (!document.getElementById('supasoka-captcha-visible')) {
+              var s = document.createElement('style');
+              s.id = 'supasoka-captcha-visible';
+              s.textContent = [
+                'html,body{overflow:visible!important;height:auto!important;min-height:100%!important;}',
+                '.g-recaptcha,#recaptchadiv,.lsrecaptcha,.rc-anchor,[data-sitekey]{',
+                'opacity:1!important;visibility:visible!important;pointer-events:auto!important;',
+                'overflow:visible!important;clip:auto!important;clip-path:none!important;',
+                'transform:none!important;filter:none!important;}',
+                'iframe[src*="recaptcha"],iframe[src*="bframe"],iframe[title*="reCAPTCHA"],',
+                'iframe[src*="recaptcha.net"]{',
+                'opacity:1!important;visibility:visible!important;pointer-events:auto!important;',
+                'display:block!important;max-width:none!important;max-height:none!important;',
+                'filter:none!important;mix-blend-mode:normal!important;}',
+                'body > div[style*="z-index"]{overflow:visible!important;clip:auto!important;}'
+              ].join('');
+              (document.documentElement || document.head || document.body).appendChild(s);
+            }
+            try {
+              document.documentElement.style.setProperty('overflow','visible','important');
+              if (document.body) document.body.style.setProperty('overflow','visible','important');
+            } catch (e1) {}
+            var frames = document.querySelectorAll(
+              'iframe[src*="recaptcha"],iframe[src*="bframe"],iframe[title*="reCAPTCHA"]'
             );
-            for (var i = 0; i < nodes.length; i++) {
+            for (var i = 0; i < frames.length; i++) {
+              var f = frames[i];
               try {
-                nodes[i].style.removeProperty('display');
-                nodes[i].style.removeProperty('visibility');
-                nodes[i].style.removeProperty('pointer-events');
-                nodes[i].style.removeProperty('opacity');
-                nodes[i].style.removeProperty('height');
-                nodes[i].style.removeProperty('width');
-                nodes[i].style.removeProperty('overflow');
-                nodes[i].removeAttribute('aria-hidden');
-              } catch (e) {}
+                // Restore visibility only — do NOT touch width/height (breaks image tiles).
+                f.style.removeProperty('opacity');
+                f.style.removeProperty('visibility');
+                f.style.removeProperty('pointer-events');
+                f.style.removeProperty('display');
+                f.style.removeProperty('filter');
+                f.style.removeProperty('clip');
+                f.style.removeProperty('clip-path');
+                f.style.removeProperty('transform');
+                f.removeAttribute('aria-hidden');
+                var p = f.parentElement;
+                var depth = 0;
+                while (p && depth < 10) {
+                  try {
+                    p.style.setProperty('overflow','visible','important');
+                    p.style.setProperty('clip','auto','important');
+                    p.style.setProperty('clip-path','none','important');
+                    p.style.setProperty('opacity','1','important');
+                    p.style.setProperty('visibility','visible','important');
+                    p.style.setProperty('pointer-events','auto','important');
+                  } catch (e2) {}
+                  p = p.parentElement;
+                  depth++;
+                }
+              } catch (e3) {}
+            }
+            var widgets = document.querySelectorAll(
+              '.g-recaptcha,#recaptchadiv,.lsrecaptcha,.rc-anchor,[data-sitekey]'
+            );
+            for (var w = 0; w < widgets.length; w++) {
+              try {
+                widgets[w].style.removeProperty('display');
+                widgets[w].style.removeProperty('visibility');
+                widgets[w].style.removeProperty('pointer-events');
+                widgets[w].style.removeProperty('opacity');
+                widgets[w].style.removeProperty('clip');
+                widgets[w].style.removeProperty('clip-path');
+                widgets[w].style.removeProperty('transform');
+                widgets[w].removeAttribute('aria-hidden');
+              } catch (e4) {}
             }
           } catch (e) {}
           true;
         })();
     """.trimIndent()
 
+    /** Undo accidental captcha CSS hides so the checkbox is visible and tappable. */
+    fun revealCaptchaScript(): String = ensureCaptchaChallengeVisibleScript()
+
     /**
-     * Returns "playing" | "captcha" | "ok".
-     * "captcha" only when a visible challenge blocks playback.
+     * Returns "playing" | "captcha" | "token" | "waiting" | "ok".
+     * "captcha" when a challenge blocks playback.
+     * "token" when the user completed reCAPTCHA but media has not started yet.
+     * "waiting" when the page has neither video nor a settled captcha state yet.
      */
     fun pageCaptchaStateScript(): String = """
         (function(){
@@ -215,22 +334,41 @@ object GatewayPlaybackJs {
                 }
               }
             } catch (e) {}
-            if (token && v && v.readyState >= 2) return 'ok';
+            if (token && token !== 'supasoka') {
+              try { window.__supasokaFireCaptchaUnlock && window.__supasokaFireCaptchaUnlock(token); } catch (e0) {}
+              if (v && v.readyState >= 2) return 'playing';
+              return 'token';
+            }
             var text = ((document.body && (document.body.innerText || document.body.textContent)) || '').toLowerCase();
+            var html = '';
+            try { html = String(document.documentElement && document.documentElement.innerHTML || '').toLowerCase(); } catch (e1) {}
             var widget = document.querySelector(
               '.g-recaptcha,iframe[src*="recaptcha/anchor"],iframe[src*="recaptcha/bframe"],' +
-              'iframe[src*="recaptcha.net"],#recaptchadiv,.lsrecaptcha,.rc-anchor'
+              'iframe[src*="recaptcha"],iframe[src*="recaptcha.net"],iframe[title*="reCAPTCHA"],' +
+              '#recaptchadiv,.lsrecaptcha,.rc-anchor,[data-sitekey],.cf-turnstile,iframe[src*="turnstile"],iframe[src*="hcaptcha"]'
             );
             var textBlock = text.indexOf('not a robot') !== -1
               || text.indexOf('verify you are') !== -1
               || text.indexOf("i'm not a robot") !== -1
-              || text.indexOf('bot verification') !== -1;
-            if (widget || textBlock) {
-              if (v && v.readyState >= 2 && !v.paused) return 'ok';
+              || text.indexOf('bot verification') !== -1
+              || text.indexOf('complete the captcha') !== -1
+              || text.indexOf('human verification') !== -1;
+            var htmlHint = html.indexOf('g-recaptcha') !== -1
+              || html.indexOf('grecaptcha') !== -1
+              || html.indexOf('recaptcha/api') !== -1
+              || html.indexOf('data-sitekey') !== -1
+              || html.indexOf('cf-turnstile') !== -1
+              || html.indexOf('hcaptcha') !== -1;
+            var hasPlayer = !!(window.shaka || window.Hls || window.player ||
+              (window.__supasokaShakas && window.__supasokaShakas.length) ||
+              (window.__supasokaHls && window.__supasokaHls.length) || v);
+            if (widget || textBlock || (htmlHint && !hasPlayer) || (window.grecaptcha && !hasPlayer)) {
+              if (v && v.readyState >= 2 && !v.paused) return 'playing';
               return 'captcha';
             }
+            if (!hasPlayer) return 'waiting';
             return 'ok';
-          } catch (e) { return 'ok'; }
+          } catch (e) { return 'waiting'; }
         })();
     """.trimIndent()
 
@@ -530,13 +668,60 @@ object GatewayPlaybackJs {
         })();
     """.trimIndent()
 
+    /** Keep video fully visible on the device screen (no zoom/crop). */
+    fun fitPlaybackToScreenScript(): String = """
+        (function(){
+          try {
+            if (!document.getElementById('supasoka-fit-screen')) {
+              var s = document.createElement('style');
+              s.id = 'supasoka-fit-screen';
+              s.textContent = [
+                'html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;',
+                'overflow:hidden!important;background:#000!important;}',
+                'video,.shaka-video,.shaka-video-container video{',
+                'position:fixed!important;left:0!important;top:0!important;right:0!important;bottom:0!important;',
+                'width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;',
+                'object-fit:contain!important;background:#000!important;z-index:2147483000!important;}',
+                '.shaka-video-container,.video-js,.plyr,.player,.player-container,#player,#video,',
+                '.vjs-tech,div[class*="player"],div[class*="Player"]{',
+                'position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;',
+                'max-width:100vw!important;max-height:100vh!important;overflow:hidden!important;',
+                'background:#000!important;z-index:2147482990!important;}',
+                /* Hide non-video chrome that can push/scale content off-screen */
+                '.shaka-controls-container{z-index:2147483010!important;}'
+              ].join('');
+              (document.documentElement || document.head || document.body).appendChild(s);
+            }
+            var meta = document.querySelector('meta[name="viewport"]');
+            if (!meta) {
+              meta = document.createElement('meta');
+              meta.setAttribute('name','viewport');
+              (document.head || document.documentElement).appendChild(meta);
+            }
+            meta.setAttribute('content',
+              'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+            var vids = document.querySelectorAll('video');
+            for (var i = 0; i < vids.length; i++) {
+              try {
+                vids[i].style.setProperty('object-fit','contain','important');
+                vids[i].style.setProperty('width','100vw','important');
+                vids[i].style.setProperty('height','100vh','important');
+                vids[i].setAttribute('playsinline','');
+                vids[i].setAttribute('webkit-playsinline','');
+              } catch (e0) {}
+            }
+          } catch (e) {}
+          true;
+        })();
+    """.trimIndent()
+
     /** Keep forcing play on gateway pages until a video element is actually running. */
     fun forceAutoplayScript(): String = """
         (function(){
-          function muteExtras(doc){
+          function pickPrimary(doc){
             try{
               var vids=doc.querySelectorAll('video');
-              if(!vids||vids.length<=1)return;
+              if(!vids||!vids.length)return null;
               var primary=null,best=-1;
               for(var i=0;i<vids.length;i++){
                 var v=vids[i];
@@ -548,21 +733,19 @@ object GatewayPlaybackJs {
                 if(vids[j]===primary){try{vids[j].muted=false;}catch(e){}}
                 else{try{vids[j].muted=true;vids[j].pause();}catch(e){}}
               }
-            }catch(e){}
+              return primary;
+            }catch(e){return null;}
           }
           function playIn(doc){
-            muteExtras(doc);
-            try{
-              var v=doc.querySelector('video');
-              if(v){
-                try{ v.muted=false; v.playsInline=true; v.setAttribute('playsinline',''); }catch(e){}
-                if(v.paused && !v.ended){
-                  var p=v.play();
-                  if(p&&p.catch)p.catch(function(){});
-                }
-                return !!(v.readyState>=2 && !v.paused);
+            var v=pickPrimary(doc);
+            if(v){
+              try{ v.muted=false; v.playsInline=true; v.setAttribute('playsinline',''); }catch(e){}
+              if(v.paused && !v.ended){
+                var p=v.play();
+                if(p&&p.catch)p.catch(function(){});
               }
-            }catch(e){}
+              return !!(v.readyState>=2 && !v.paused);
+            }
             return false;
           }
           var ok = playIn(document);

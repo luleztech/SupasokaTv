@@ -32,23 +32,29 @@ class WebViewEngine(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var playbackStarted = false
+    private var userPaused = false
+    private var forceAutoplayGeneration = -1
     private var playbackApisInjected = false
     private var userPickedQuality = false
     private var qualityConfirmed = false
     private var qualityRetryGeneration = 0
-    private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
+    private var selectedQuality: StreamQuality = StreamQuality.AUTO
     private var preferredAudioLanguage = "sw"
     private var lastLoadedAudioLanguage = ""
     private var audioLanguageConfirmed = false
     private var pageLoadGeneration = 0
     private var pageFinishRunnable: Runnable? = null
     private var captchaPollRunnable: Runnable? = null
+    private var classifyPollRunnable: Runnable? = null
     private var humanCheckActive = false
+    private var captchaTokenSeen = false
+    private var captchaReloadAttempted = false
     private val pendingRunnables = mutableListOf<Runnable>()
 
     companion object {
         private const val TAG = "EaMaxAudio"
         private const val QUALITY_TAG = "EaMaxQuality"
+        private const val CLASSIFY_MAX_ATTEMPTS = 16
     }
 
     private fun shouldUseWebView(url: String): Boolean =
@@ -71,13 +77,19 @@ class WebViewEngine(
     fun initialize(streamSession: StreamSession) {
         currentSession = streamSession
         playbackStarted = false
+        userPaused = false
+        forceAutoplayGeneration = -1
         playbackApisInjected = false
         userPickedQuality = false
         qualityConfirmed = false
         qualityRetryGeneration++
+        captchaTokenSeen = false
+        captchaReloadAttempted = false
         preferredAudioLanguage = normalizeAudioLanguage(streamSession.preferredAudioLanguage)
         lastLoadedAudioLanguage = preferredAudioLanguage
         cancelPendingRunnables()
+        stopClassifyPoll()
+        stopCaptchaPoll()
 
         val url = streamSession.mpdUrl
         val headers = buildLoadHeaders(streamSession, preferredAudioLanguage)
@@ -104,11 +116,21 @@ class WebViewEngine(
                     javaScriptCanOpenWindowsAutomatically = true
                     loadWithOverviewMode = true
                     useWideViewPort = true
+                    builtInZoomControls = false
+                    displayZoomControls = false
+                    setSupportZoom(false)
+                    textZoom = 100
                     userAgentString = PlaybackBrowserHeaders.CHROME_MOBILE_UA
                 }
+                setInitialScale(100)
 
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                // Keep gateway + Google reCAPTCHA cookies across channel opens.
+                try {
+                    CookieManager.getInstance().flush()
+                } catch (_: Exception) {
+                }
 
                 // Player hooks only — never stub/hide reCAPTCHA in the visible WebView.
                 installDocumentStartHooks(this)
@@ -122,8 +144,11 @@ class WebViewEngine(
                         pageLoadGeneration++
                         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
                         pageFinishRunnable = null
+                        stopClassifyPoll()
                         stopCaptchaPoll()
-                        if (humanCheckActive) {
+                        // Keep human-check UI if a reload was triggered after token
+                        // (common PHP gateways reload once verification succeeds).
+                        if (humanCheckActive && !captchaTokenSeen) {
                             humanCheckActive = false
                             onHumanCheck(false)
                         }
@@ -142,14 +167,18 @@ class WebViewEngine(
                         super.onPageFinished(view, finishedUrl)
                         if (!isExternalWebPage) return
                         injectRecaptchaUnlockHelper()
+                        webView?.evaluateJavascript(
+                            GatewayPlaybackJs.ensureCaptchaChallengeVisibleScript(),
+                            null,
+                        )
                         val gen = pageLoadGeneration
                         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
                         val r = Runnable {
                             if (gen != pageLoadGeneration) return@Runnable
-                            classifyPageThenReady(gen)
+                            classifyPageThenReady(gen, attempt = 0)
                         }
                         pageFinishRunnable = r
-                        mainHandler.postDelayed(r, 450)
+                        mainHandler.postDelayed(r, 350)
                     }
 
                     override fun onReceivedError(
@@ -241,19 +270,62 @@ class WebViewEngine(
         webView?.evaluateJavascript(GatewayPlaybackJs.playerCaptureHookScript(), null)
     }
 
-    private fun classifyPageThenReady(gen: Int) {
+    private fun classifyPageThenReady(gen: Int, attempt: Int) {
         if (gen != pageLoadGeneration) return
         injectRecaptchaUnlockHelper()
+        webView?.evaluateJavascript(GatewayPlaybackJs.ensureCaptchaChallengeVisibleScript(), null)
         webView?.evaluateJavascript(GatewayPlaybackJs.pageCaptchaStateScript()) { raw ->
             if (gen != pageLoadGeneration) return@evaluateJavascript
             val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
-            if (status == "captcha") {
-                enterCaptchaMode(gen)
-            } else {
-                exitCaptchaModeIfNeeded()
-                handlePageReady()
+            Log.d(TAG, "pageCaptchaState attempt=$attempt → $status")
+            when (status) {
+                "playing" -> {
+                    stopClassifyPoll()
+                    persistGatewayCookies()
+                    exitCaptchaModeIfNeeded()
+                    handlePageReady()
+                }
+                "captcha", "token" -> {
+                    stopClassifyPoll()
+                    if (status == "token") captchaTokenSeen = true
+                    enterCaptchaMode(gen)
+                    if (status == "token") maybeReloadAfterCaptchaToken(gen)
+                }
+                "waiting" -> {
+                    if (attempt < CLASSIFY_MAX_ATTEMPTS) {
+                        scheduleClassifyRetry(gen, attempt + 1)
+                    } else {
+                        Log.i(TAG, "No player after wait — entering human-check fallback")
+                        stopClassifyPoll()
+                        enterCaptchaMode(gen)
+                    }
+                }
+                else -> {
+                    if (attempt < 4) {
+                        scheduleClassifyRetry(gen, attempt + 1)
+                    } else {
+                        stopClassifyPoll()
+                        exitCaptchaModeIfNeeded()
+                        handlePageReady()
+                    }
+                }
             }
         }
+    }
+
+    private fun scheduleClassifyRetry(gen: Int, attempt: Int) {
+        stopClassifyPoll()
+        val r = Runnable {
+            if (gen != pageLoadGeneration) return@Runnable
+            classifyPageThenReady(gen, attempt)
+        }
+        classifyPollRunnable = r
+        mainHandler.postDelayed(r, 500)
+    }
+
+    private fun stopClassifyPoll() {
+        classifyPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        classifyPollRunnable = null
     }
 
     private fun enterCaptchaMode(gen: Int) {
@@ -263,7 +335,12 @@ class WebViewEngine(
             humanCheckActive = true
             onHumanCheck(true)
         }
-        webView?.evaluateJavascript(GatewayPlaybackJs.revealCaptchaScript(), null)
+        // Soft layer avoids white/half tiles on some Huawei WebViews during challenge.
+        try {
+            webView?.setLayerType(View.LAYER_TYPE_NONE, null)
+        } catch (_: Exception) {
+        }
+        webView?.evaluateJavascript(GatewayPlaybackJs.ensureCaptchaChallengeVisibleScript(), null)
         injectRecaptchaUnlockHelper()
         injectPlayerCaptureHook()
         injectWidevineL3Fallback()
@@ -279,27 +356,86 @@ class WebViewEngine(
                 if (gen != pageLoadGeneration) return
                 attempts++
                 injectRecaptchaUnlockHelper()
-                webView?.evaluateJavascript(GatewayPlaybackJs.revealCaptchaScript(), null)
+                // Gentle visibility only — never strip challenge iframe width/height.
+                if (attempts == 1 || attempts % 4 == 0) {
+                    webView?.evaluateJavascript(
+                        GatewayPlaybackJs.ensureCaptchaChallengeVisibleScript(),
+                        null,
+                    )
+                }
                 webView?.evaluateJavascript(GatewayPlaybackJs.pageCaptchaStateScript()) { raw ->
                     if (gen != pageLoadGeneration) return@evaluateJavascript
                     val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
-                    if (status == "playing" || status == "ok") {
-                        Log.i(TAG, "Human check cleared ($status) — starting playback")
-                        exitCaptchaModeIfNeeded()
-                        handlePageReady()
-                        return@evaluateJavascript
-                    }
-                    if (attempts < 180) {
-                        captchaPollRunnable = this
-                        mainHandler.postDelayed(this, 500)
-                    } else {
-                        Log.w(TAG, "Human check still pending after timeout — keep UI clear")
+                    when (status) {
+                        "playing" -> {
+                            Log.i(TAG, "Human check cleared ($status) — starting playback")
+                            persistGatewayCookies()
+                            exitCaptchaModeIfNeeded()
+                            handlePageReady()
+                        }
+                        "token" -> {
+                            captchaTokenSeen = true
+                            Log.i(TAG, "reCAPTCHA token received — waiting for player unlock")
+                            maybeReloadAfterCaptchaToken(gen)
+                            if (attempts < 240) {
+                                captchaPollRunnable = this
+                                mainHandler.postDelayed(this, 400)
+                            }
+                        }
+                        "captcha", "waiting" -> {
+                            if (attempts < 240) {
+                                captchaPollRunnable = this
+                                mainHandler.postDelayed(this, 400)
+                            } else {
+                                Log.w(TAG, "Human check still pending after timeout — keep UI clear")
+                            }
+                        }
+                        else -> {
+                            if (attempts < 240) {
+                                captchaPollRunnable = this
+                                mainHandler.postDelayed(this, 400)
+                            } else {
+                                Log.w(TAG, "Human check still pending after timeout — keep UI clear")
+                            }
+                        }
                     }
                 }
             }
         }
         captchaPollRunnable = poll
-        mainHandler.postDelayed(poll, 400)
+        mainHandler.postDelayed(poll, 300)
+    }
+
+    /**
+     * Some gateways only unlock after a full reload once the checkbox token exists.
+     * Reload once so the channel opens after the user completes reCAPTCHA.
+     */
+    private fun maybeReloadAfterCaptchaToken(gen: Int) {
+        if (gen != pageLoadGeneration || captchaReloadAttempted) return
+        captchaReloadAttempted = true
+        persistGatewayCookies()
+        val session = currentSession ?: return
+        val wv = webView ?: return
+        Log.i(TAG, "Reloading gateway once after reCAPTCHA token")
+        mainHandler.postDelayed({
+            if (gen != pageLoadGeneration) return@postDelayed
+            val headers = buildLoadHeaders(session, preferredAudioLanguage)
+            headers["User-Agent"]?.let { wv.settings.userAgentString = it }
+            wv.loadUrl(session.mpdUrl, headers)
+        }, 700)
+    }
+
+    private fun persistGatewayCookies() {
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+        }
+        val host = runCatching {
+            android.net.Uri.parse(currentSession?.mpdUrl.orEmpty()).host
+        }.getOrNull().orEmpty()
+        if (host.isNotBlank()) {
+            GatewayCaptchaSession.markSolved(context, host)
+        }
     }
 
     private fun exitCaptchaModeIfNeeded() {
@@ -318,9 +454,16 @@ class WebViewEngine(
 
     private fun handlePageReady() {
         Log.d(TAG, "page ready — autoplay audio=$preferredAudioLanguage")
+        captchaTokenSeen = false
+        persistGatewayCookies()
+        try {
+            webView?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        } catch (_: Exception) {
+        }
         injectRecaptchaUnlockHelper()
         injectPlayerCaptureHook()
         injectWidevineL3Fallback()
+        injectFitPlaybackToScreen()
         ensurePlaybackApisInjected()
         nudgeVideoPlay()
         applyQualityAfterPageLoad()
@@ -328,7 +471,12 @@ class WebViewEngine(
         applyAudioLanguageJs(preferredAudioLanguage, scheduleRetries = true)
         onPlaybackStateChanged(PlaybackState.PLAYING)
         playbackStarted = true
+        userPaused = false
         scheduleForceAutoplay(pageLoadGeneration, 0)
+    }
+
+    private fun injectFitPlaybackToScreen() {
+        webView?.evaluateJavascript(GatewayPlaybackJs.fitPlaybackToScreenScript(), null)
     }
 
     private fun injectWidevineL3Fallback() {
@@ -348,46 +496,76 @@ class WebViewEngine(
         )
         postDelayed({
             injectWidevineL3Fallback()
-            play()
+            if (!userPaused) play()
         }, 500)
     }
 
     /** Keep forcing play until the video is actually running (no user gesture needed). */
     private fun scheduleForceAutoplay(gen: Int, attempt: Int) {
         if (gen != pageLoadGeneration) return
-        if (humanCheckActive) return
-        if (attempt > 30) return
+        if (humanCheckActive || userPaused) return
+        if (attempt > 12) return
+        forceAutoplayGeneration = gen
         postDelayed({
-            if (gen != pageLoadGeneration || humanCheckActive) return@postDelayed
+            if (gen != pageLoadGeneration || humanCheckActive || userPaused) return@postDelayed
             injectRecaptchaUnlockHelper()
+            injectFitPlaybackToScreen()
             webView?.evaluateJavascript(GatewayPlaybackJs.forceAutoplayScript()) { raw ->
                 val status = raw?.trim()?.trim('"')?.lowercase().orEmpty()
-                if (status != "playing" && attempt < 30) {
+                if (status != "playing" && attempt < 12 && !userPaused) {
                     scheduleForceAutoplay(gen, attempt + 1)
                 }
             }
         }, if (attempt == 0) 300L else 700L)
     }
 
-    fun play() = nudgeVideoPlay()
-
-    fun pause() {
-        webView?.evaluateJavascript(
-            "(function(){try{var v=document.querySelector('video');if(v)v.pause();}catch(e){}})();",
-            null,
-        )
+    fun play() {
+        userPaused = false
+        playbackStarted = true
+        nudgeVideoPlay()
     }
 
-    fun isPlaying(): Boolean = playbackStarted
-
-    private fun nudgeVideoPlay() {
+    fun pause() {
+        userPaused = true
+        playbackStarted = false
+        forceAutoplayGeneration = -1
         webView?.evaluateJavascript(
             """
             (function(){
-              function muteExtras(doc){
+              function pauseIn(doc){
                 try{
                   var vids=doc.querySelectorAll('video');
-                  if(!vids||vids.length<=1)return;
+                  for(var i=0;i<vids.length;i++){try{vids[i].pause();}catch(e){}}
+                }catch(e){}
+                try{
+                  var iframes=doc.querySelectorAll('iframe');
+                  for(var i=0;i<iframes.length;i++){
+                    try{
+                      var d=iframes[i].contentDocument||iframes[i].contentWindow.document;
+                      if(d)pauseIn(d);
+                    }catch(e){}
+                  }
+                }catch(e){}
+              }
+              pauseIn(document);
+            })();
+            """.trimIndent(),
+            null,
+        )
+        onPlaybackStateChanged(PlaybackState.PAUSED)
+    }
+
+    fun isPlaying(): Boolean = playbackStarted && !userPaused
+
+    private fun nudgeVideoPlay() {
+        if (userPaused) return
+        webView?.evaluateJavascript(
+            """
+            (function(){
+              function pickPrimary(doc){
+                try{
+                  var vids=doc.querySelectorAll('video');
+                  if(!vids||!vids.length)return null;
                   var primary=null,best=-1;
                   for(var i=0;i<vids.length;i++){
                     var v=vids[i];
@@ -399,18 +577,21 @@ class WebViewEngine(
                     if(vids[j]===primary){try{vids[j].muted=false;}catch(e){}}
                     else{try{vids[j].muted=true;vids[j].pause();}catch(e){}}
                   }
-                }catch(e){}
+                  return primary;
+                }catch(e){return null;}
               }
               function playIn(doc){
-                muteExtras(doc);
-                try{
-                  var v=doc.querySelector('video');
-                  if(v && v.paused && !v.ended && v.readyState>=2){
-                    var p=v.play();
-                    if(p&&p.catch)p.catch(function(){});
+                var v=pickPrimary(doc);
+                if(v){
+                  try{
+                    v.muted=false; v.playsInline=true; v.setAttribute('playsinline','');
+                    if(v.paused && !v.ended){
+                      var p=v.play();
+                      if(p&&p.catch)p.catch(function(){});
+                    }
                     return true;
-                  }
-                }catch(e){}
+                  }catch(e){}
+                }
                 var iframes=doc.querySelectorAll('iframe');
                 for(var i=0;i<iframes.length;i++){
                   try{
@@ -445,8 +626,10 @@ class WebViewEngine(
         try {
             ensurePlaybackApisInjected()
             applyQualityJs(mode, fromUser, scheduleRetries = true)
-            // Keep playback going after quality change.
-            postDelayed({ play() }, 400)
+            // Keep playback going after quality change unless user paused.
+            if (!userPaused) {
+                postDelayed({ if (!userPaused) play() }, 400)
+            }
         } catch (e: Exception) {
             Log.e(QUALITY_TAG, "setQuality failed: ${e.message}")
         }
@@ -504,11 +687,11 @@ class WebViewEngine(
         try {
             ensurePlaybackApisInjected()
             applyAudioLanguageJs(lang, scheduleRetries = true)
-            postDelayed({ play() }, 500)
+            if (!userPaused) postDelayed({ if (!userPaused) play() }, 500)
             postDelayed({
                 if (!audioLanguageConfirmed) {
                     applyAudioLanguageJs(lang, scheduleRetries = false)
-                    play()
+                    if (!userPaused) play()
                 }
             }, 2000)
         } catch (e: Exception) {
@@ -519,21 +702,26 @@ class WebViewEngine(
     fun release() {
         cancelPendingRunnables()
         stopCaptchaPoll()
+        stopClassifyPoll()
         pageFinishRunnable?.let { mainHandler.removeCallbacks(it) }
         pageFinishRunnable = null
         if (humanCheckActive) {
             humanCheckActive = false
             onHumanCheck(false)
         }
+        // Persist cookies so reCAPTCHA only needs solving once per session/device.
+        persistGatewayCookies()
         webView?.apply {
             stopLoading()
+            // Do NOT clearCache / removeAllCookies — that forces captcha every open.
             clearHistory()
-            clearCache(true)
             removeJavascriptInterface("ShakaPlayerBridge")
             destroy()
         }
         webView = null
         playbackApisInjected = false
+        captchaTokenSeen = false
+        captchaReloadAttempted = false
     }
 
     fun getWebView(): WebView? = webView

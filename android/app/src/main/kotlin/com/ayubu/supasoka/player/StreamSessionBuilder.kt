@@ -130,6 +130,9 @@ object StreamSessionBuilder {
         return parseSingleClearKey(str)?.let { listOf(it) } ?: emptyList()
     }
 
+    /** Public ClearKey parser for gateway-extracted key payloads. */
+    fun parseClearKeys(raw: String): List<ClearKey> = parseClearKeysFromHex(raw)
+
     private fun parseJsonClearKeys(json: String): List<ClearKey>? {
         return try {
             val out = mutableListOf<ClearKey>()

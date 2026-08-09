@@ -493,7 +493,7 @@ object GatewayWebViewExtractor {
         val manifest = ManifestUrlExtractor.extract(html, gatewayUrl) ?: return null
         return GatewayPlaybackResolver.Resolved(
             streamUrl = manifest.url,
-            isHls = manifest.isHls,
+            isHls = manifest.kind == ManifestUrlExtractor.StreamKind.HLS,
             headers = LinkedHashMap(reqHeaders),
             licenseUrl = session.licenseUrl,
             authToken = session.token,

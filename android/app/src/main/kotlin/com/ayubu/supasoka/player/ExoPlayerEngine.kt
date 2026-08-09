@@ -97,18 +97,21 @@ class ExoPlayerEngine(
     private val trackSelector = DefaultTrackSelector(context)
     private var currentSession: StreamSession? = null
     private var preferredAudioLanguage = "sw"
-    private var selectedQuality: StreamQuality = StreamQuality.QUALITY_360P
+    private var selectedQuality: StreamQuality = StreamQuality.AUTO
     /** Avoid re-overriding the same audio track on every live playlist refresh. */
     private var lastAudioOverrideKey: String? = null
+    /** Avoid re-pinning video on every live playlist refresh (causes scratch). */
+    private var lastVideoOverrideKey: String? = null
+    private var behindLiveRecoveryAttempts = 0
 
     companion object {
         private const val TAG = "ExoPlayerEngine"
         
-        // Buffer configuration — smart/fast start (leotena-style goals)
-        private const val MIN_BUFFER_MS = 8_000
-        private const val MAX_BUFFER_MS = 30_000
-        private const val BUFFER_FOR_PLAYBACK_MS = 1_200
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2_500
+        // Buffer configuration — enough headroom to avoid live rebuffer scratch loops.
+        private const val MIN_BUFFER_MS = 15_000
+        private const val MAX_BUFFER_MS = 50_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 3_000
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 6_000
 
         // Timeout configuration
         private const val CONNECT_TIMEOUT_MS = 12_000
@@ -119,6 +122,8 @@ class ExoPlayerEngine(
         currentSession = streamSession
         preferredAudioLanguage = normalizeAudioLanguage(streamSession.preferredAudioLanguage)
         lastAudioOverrideKey = null
+        lastVideoOverrideKey = null
+        behindLiveRecoveryAttempts = 0
         
         Log.d(TAG, "=".repeat(70))
         Log.d(TAG, "INITIALIZING UNIVERSAL STREAM PLAYER v4.0")
@@ -186,7 +191,7 @@ class ExoPlayerEngine(
                     Log.d(TAG, "✅ Player prepared with playWhenReady=true loadControl=${MIN_BUFFER_MS}-${MAX_BUFFER_MS}ms")
                 }
 
-            setQuality(StreamQuality.QUALITY_360P)
+            // Start on AUTO — forced 360p reselection at prepare causes audible scratch.
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ Initialization failed", e)
@@ -345,13 +350,13 @@ class ExoPlayerEngine(
             .setUri(streamSession.mpdUrl)
             .setMimeType(mimeType) // ✅ ADD THIS
 
-        // Live offset window reduces chase-the-edge stutter / rebuffer loops.
+        // Soft live offsets work on short DVR windows; oversized offsets cause stuck buffering.
         if (format == StreamFormat.HLS || format == StreamFormat.DASH) {
             mediaItemBuilder.setLiveConfiguration(
                 MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(35_000)
-                    .setMinOffsetMs(20_000)
-                    .setMaxOffsetMs(70_000)
+                    .setTargetOffsetMs(12_000)
+                    .setMinOffsetMs(3_000)
+                    .setMaxOffsetMs(35_000)
                     .setMinPlaybackSpeed(0.97f)
                     .setMaxPlaybackSpeed(1.03f)
                     .build(),
@@ -667,6 +672,7 @@ class ExoPlayerEngine(
 
     fun setQuality(quality: StreamQuality) {
         selectedQuality = quality
+        lastVideoOverrideKey = null
         val player = exoPlayer ?: return
         try {
             if (quality == StreamQuality.AUTO) {
@@ -678,7 +684,6 @@ class ExoPlayerEngine(
                     .setForceHighestSupportedBitrate(false)
                     .build()
                 Log.d(TAG, "🎨 Quality set to AUTO")
-                play()
                 return
             }
 
@@ -687,14 +692,12 @@ class ExoPlayerEngine(
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 if (exoPlayer === player && selectedQuality == quality) {
                     try {
-                        applyFixedQuality(quality, force = true)
-                        play()
+                        applyFixedQuality(quality, force = false)
                     } catch (e: Exception) {
                         Log.w(TAG, "setQuality retry: ${e.message}")
                     }
                 }
             }, 700)
-            play()
             Log.d(TAG, "🎨 Quality set to: $quality")
         } catch (e: Exception) {
             Log.e(TAG, "setQuality failed for $quality", e)
@@ -706,7 +709,6 @@ class ExoPlayerEngine(
                     .setMaxVideoBitrate(bitrateCapForQuality(quality))
                     .setForceHighestSupportedBitrate(false)
                     .build()
-                play()
             } catch (e2: Exception) {
                 Log.e(TAG, "setQuality fallback failed", e2)
             }
@@ -817,6 +819,12 @@ class ExoPlayerEngine(
         }
 
         if (!force && chosen.group.isTrackSelected(chosen.index)) {
+            lastVideoOverrideKey = videoOverrideKey(quality, chosen.height, chosen.bitrate)
+            return
+        }
+
+        val nextKey = videoOverrideKey(quality, chosen.height, chosen.bitrate)
+        if (!force && lastVideoOverrideKey == nextKey && isVideoQualitySatisfied(quality)) {
             return
         }
 
@@ -828,6 +836,7 @@ class ExoPlayerEngine(
             .setForceHighestSupportedBitrate(false)
             .addOverride(TrackSelectionOverride(chosen.group.mediaTrackGroup, listOf(chosen.index)))
             .build()
+        lastVideoOverrideKey = nextKey
         Log.d(
             TAG,
             "🎨 Video track override: index=${chosen.index} height=${chosen.height} " +
@@ -835,7 +844,31 @@ class ExoPlayerEngine(
         )
     }
 
+    private fun videoOverrideKey(quality: StreamQuality, height: Int, bitrate: Int): String =
+        "${quality.name}:$height:$bitrate"
+
+    /** True when selected video already respects the user's quality cap. */
+    private fun isVideoQualitySatisfied(quality: StreamQuality): Boolean {
+        if (quality == StreamQuality.AUTO) return true
+        val player = exoPlayer ?: return false
+        val maxBitrate = bitrateCapForQuality(quality)
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_VIDEO || !group.isSelected) continue
+            for (i in 0 until group.length) {
+                if (!group.isTrackSelected(i)) continue
+                val f = group.getTrackFormat(i)
+                if (f.height > 0 && f.height <= quality.height) return true
+                if (f.height <= 0 && f.bitrate > 0 && f.bitrate <= maxBitrate) return true
+                if (f.height <= 0 && f.bitrate <= 0) return true
+                return false
+            }
+        }
+        return false
+    }
+
     private fun applyVideoTrackOverride(quality: StreamQuality) {
+        if (quality == StreamQuality.AUTO) return
+        if (isVideoQualitySatisfied(quality)) return
         try {
             applyFixedQuality(quality, force = false)
         } catch (e: Exception) {
@@ -863,13 +896,11 @@ class ExoPlayerEngine(
                         if (!isPreferredAudioAlreadySelected(lang)) {
                             applyAudioTrackOverride(lang)
                         }
-                        play()
                     } catch (e: Exception) {
                         Log.w(TAG, "setAudioLanguage retry: ${e.message}")
                     }
                 }
             }, 800)
-            play()
             Log.d(TAG, "🔊 Audio language set to: $lang")
         } catch (e: Exception) {
             Log.e(TAG, "setAudioLanguage failed for $lang", e)
@@ -981,30 +1012,34 @@ class ExoPlayerEngine(
 
     fun refreshSession(newSession: StreamSession) {
         Log.d(TAG, "🔄 Refreshing session...")
-        val currentPosition = getCurrentPosition()
-        val wasPlaying = isPlaying()
+        val wasPlaying = exoPlayer?.playWhenReady == true
+        val isLive = exoPlayer?.isCurrentMediaItemLive == true
         
         release()
         initialize(newSession)
         
-        exoPlayer?.seekTo(currentPosition)
-        // Ensure it starts playing automatically after refresh
-        exoPlayer?.playWhenReady = true
+        // Absolute seek on live often lands behind the window — stay at live edge.
+        if (!isLive) {
+            // Position was lost on release; keep default start for VOD remount.
+        }
+        exoPlayer?.playWhenReady = wasPlaying
         if (wasPlaying) {
             play()
         }
         
-        Log.d(TAG, "✅ Session refreshed (position: ${currentPosition}ms)")
+        Log.d(TAG, "✅ Session refreshed (live=$isLive playWhenReady=$wasPlaying)")
     }
 
     // ========== PLAYER EVENT LISTENER ==========
 
     private inner class PlayerEventListener : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
+            val player = exoPlayer
             val domainState = when (state) {
                 Player.STATE_READY -> {
                     Log.d(TAG, "📺 Player state: READY")
-                    PlaybackState.READY
+                    behindLiveRecoveryAttempts = 0
+                    if (player?.isPlaying == true) PlaybackState.PLAYING else PlaybackState.READY
                 }
                 Player.STATE_BUFFERING -> {
                     Log.d(TAG, "⏳ Player state: BUFFERING")
@@ -1012,7 +1047,20 @@ class ExoPlayerEngine(
                 }
                 Player.STATE_ENDED -> {
                     Log.d(TAG, "🏁 Player state: ENDED")
-                    PlaybackState.ENDED
+                    // Live gaps sometimes report ENDED — recover to live edge instead of quitting.
+                    if (player?.isCurrentMediaItemLive == true && player.playWhenReady) {
+                        try {
+                            player.seekToDefaultPosition()
+                            player.prepare()
+                            player.play()
+                            PlaybackState.BUFFERING
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Live ENDED recovery failed: ${e.message}")
+                            PlaybackState.ENDED
+                        }
+                    } else {
+                        PlaybackState.ENDED
+                    }
                 }
                 else -> {
                     Log.d(TAG, "💤 Player state: IDLE")
@@ -1023,8 +1071,17 @@ class ExoPlayerEngine(
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            val state = if (isPlaying) PlaybackState.PLAYING else PlaybackState.PAUSED
-            Log.d(TAG, if (isPlaying) "▶️ Playing" else "⏸️ Paused")
+            val player = exoPlayer
+            val state = when {
+                isPlaying -> PlaybackState.PLAYING
+                // Rebuffer with playWhenReady still true is NOT a user pause.
+                player?.playWhenReady == true &&
+                    player.playbackState == Player.STATE_BUFFERING -> PlaybackState.BUFFERING
+                player?.playWhenReady == true &&
+                    player.playbackState == Player.STATE_READY -> PlaybackState.READY
+                else -> PlaybackState.PAUSED
+            }
+            Log.d(TAG, if (isPlaying) "▶️ Playing" else "⏸️ Not playing → $state")
             onPlaybackStateChanged(state)
         }
 
@@ -1057,7 +1114,9 @@ class ExoPlayerEngine(
             if (!isPreferredAudioAlreadySelected(preferredAudioLanguage)) {
                 applyAudioTrackOverride(preferredAudioLanguage)
             }
-            applyVideoTrackOverride(selectedQuality)
+            if (selectedQuality != StreamQuality.AUTO && !isVideoQualitySatisfied(selectedQuality)) {
+                applyVideoTrackOverride(selectedQuality)
+            }
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -1065,6 +1124,22 @@ class ExoPlayerEngine(
             Log.e(TAG, "  Message: ${error.message}")
             Log.e(TAG, "  Cause: ${error.cause?.message}")
             Log.e(TAG, "  Stacktrace: ${error.stackTraceToString()}")
+
+            if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                val player = exoPlayer
+                if (player != null && behindLiveRecoveryAttempts < 3) {
+                    behindLiveRecoveryAttempts++
+                    Log.w(TAG, "Behind live window — seeking to live edge (attempt $behindLiveRecoveryAttempts)")
+                    try {
+                        player.seekToDefaultPosition()
+                        player.prepare()
+                        player.playWhenReady = true
+                        return
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Behind-live recovery failed", e)
+                    }
+                }
+            }
             
             val errorMessage = when (error.errorCode) {
                 androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> 
@@ -1085,6 +1160,8 @@ class ExoPlayerEngine(
                     "Invalid stream manifest. Stream may be corrupted."
                 androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ->
                     "Invalid video container. Format may be corrupted."
+                androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ->
+                    "Stream fell behind live edge. Please retry."
                 else -> "Playback error: ${error.message ?: "Unknown error"}"
             }
             
