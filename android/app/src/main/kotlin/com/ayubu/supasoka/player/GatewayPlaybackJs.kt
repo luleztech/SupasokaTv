@@ -1084,10 +1084,16 @@ object GatewayPlaybackJs {
                     var already =
                       !!best.active ||
                       (pl.__eaMaxOkoaPinnedId != null && pl.__eaMaxOkoaPinnedId === best.id);
-                    if (already) {
+                    if (already && !userLocked) {
+                      applied = true;
+                    } else if (already && userLocked && !!best.active) {
                       applied = true;
                     } else {
-                      pl.selectVariantTrack(best, userLocked);
+                      // Seamless switch first (no buffer clear); fall back if needed.
+                      try { pl.selectVariantTrack(best, false); }
+                      catch (eSel) {
+                        try { pl.selectVariantTrack(best, !!userLocked); } catch (e2) {}
+                      }
                       pl.__eaMaxOkoaPinnedId = best.id;
                       applied = true;
                     }
@@ -1171,41 +1177,32 @@ object GatewayPlaybackJs {
                 return applied;
               }
               window.__eaMaxOkoaApplyStartup360 = function() {
+                // Startup is AUTO now — keep this as a no-op for older callers.
                 if (window.__eaMaxUserQualityLocked || window.__eaMaxOkoaUserInitiated) return true;
-                if (window.__eaMaxOkoaLastApplied === '360') return true;
-                if (window.__eaMaxStartup360Active) return false;
-                window.__eaMaxStartup360Active = true;
-                var tries = 0;
-                function attempt() {
-                  if (window.__eaMaxOkoaUserInitiated) {
-                    window.__eaMaxStartup360Active = false;
-                    return;
-                  }
-                  if (applyOkoaQuality('360')) {
-                    window.__eaMaxOkoaLastApplied = '360';
-                    window.__eaMaxStartup360Active = false;
-                    return;
-                  }
-                  if (++tries < 8) {
-                    setTimeout(attempt, 700);
-                  } else {
-                    window.__eaMaxStartup360Active = false;
-                  }
-                }
-                attempt();
-                return true;
+                return applyOkoaQuality(window.__eaMaxOkoaLastMode || 'auto');
               };
               window.__eaMaxOkoaSetQuality = function(mode, userInitiated) {
                 userInitiated = !!userInitiated;
+                var modeStr = String(mode || 'auto');
+                var maxH = parseTarget(modeStr);
                 if (!userInitiated) {
                   if (window.__eaMaxUserQualityLocked) return true;
-                  window.__eaMaxOkoaLastMode = String(mode);
-                  return window.__eaMaxOkoaApplyStartup360();
+                  window.__eaMaxOkoaLastMode = modeStr;
+                  if (applyOkoaQuality(modeStr)) {
+                    window.__eaMaxOkoaLastApplied = modeStr;
+                    return true;
+                  }
+                  return false;
                 }
-                window.__eaMaxUserQualityLocked = true;
+                // AUTO unlocks ABR; fixed heights lock the chosen cap.
+                window.__eaMaxUserQualityLocked = maxH > 0;
                 window.__eaMaxOkoaUserInitiated = true;
-                var modeStr = String(mode);
                 window.__eaMaxOkoaLastMode = modeStr;
+                try {
+                  collectShakaPlayers().forEach(function(pl) {
+                    try { pl.__eaMaxOkoaPinnedId = null; pl.__eaMaxOkoaMaxH = maxH; } catch (ePin) {}
+                  });
+                } catch (eClr) {}
                 if (window.__eaMaxOkoaRetryId) {
                   try { clearInterval(window.__eaMaxOkoaRetryId); } catch (e) {}
                   window.__eaMaxOkoaRetryId = null;
@@ -1221,11 +1218,11 @@ object GatewayPlaybackJs {
                     window.__eaMaxOkoaLastApplied = window.__eaMaxOkoaLastMode;
                     clearInterval(window.__eaMaxOkoaRetryId);
                     window.__eaMaxOkoaRetryId = null;
-                  } else if (++tries >= 8) {
+                  } else if (++tries >= 10) {
                     clearInterval(window.__eaMaxOkoaRetryId);
                     window.__eaMaxOkoaRetryId = null;
                   }
-                }, 700);
+                }, 600);
                 return true;
               };
               true;

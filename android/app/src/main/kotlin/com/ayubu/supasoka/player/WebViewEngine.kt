@@ -633,8 +633,7 @@ class WebViewEngine(
         Log.d(QUALITY_TAG, "setQuality $quality mode=$mode fromUser=$fromUser")
         try {
             ensurePlaybackApisInjected()
-            applyQualityJs(mode, fromUser, scheduleRetries = fromUser)
-            // Never re-call play() after quality inject — causes audio/video scratch.
+            applyQualityJs(mode, fromUser, scheduleRetries = true)
         } catch (e: Exception) {
             Log.e(QUALITY_TAG, "setQuality failed: ${e.message}")
         }
@@ -658,11 +657,11 @@ class WebViewEngine(
         val gen = qualityRetryGeneration
         injectQuality(mode, fromUser)
         if (!scheduleRetries) return
-        // Keep retries light — re-selecting every few hundred ms causes scratch/pause loops.
+        // User picks need a few retries until Shaka/hls tracks appear; keep light.
         val delays = if (fromUser) {
-            listOf(800L, 2_500L)
+            listOf(400L, 1_200L, 2_800L)
         } else {
-            listOf(1_500L)
+            listOf(1_200L)
         }
         delays.forEach { delayMs ->
             postDelayed({

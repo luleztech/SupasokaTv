@@ -14,7 +14,7 @@ package com.ayubu.supasoka.domain.model
  * - ABR re-enabled when Auto selected
  */
 enum class StreamQuality(val height: Int, val label: String) {
-    AUTO(0, "Auto (ABR)"),
+    AUTO(0, "Auto"),
     QUALITY_240P(240, "240p"),
     QUALITY_360P(360, "360p"),
     QUALITY_480P(480, "480p"),

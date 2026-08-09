@@ -72,6 +72,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
 
     private lateinit var playerChrome: View
     private lateinit var chromeTapCatcher: View
+    private lateinit var chromeToggleArea: View
     private lateinit var humanCheckBack: ImageButton
     private lateinit var playPauseBtn: ImageButton
     private lateinit var languageChip: TextView
@@ -300,6 +301,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     private fun bindChromeUi() {
         playerChrome = findViewById(R.id.player_chrome)
         chromeTapCatcher = findViewById(R.id.chrome_tap_catcher)
+        chromeToggleArea = findViewById(R.id.chrome_toggle_area)
         humanCheckBack = findViewById(R.id.btn_human_check_back)
         playPauseBtn = findViewById(R.id.btn_player_play_pause)
         languageChip = findViewById(R.id.btn_player_language)
@@ -332,12 +334,16 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             finish()
         }
 
-        playerChrome.setOnClickListener {
+        // Empty chrome areas toggle visibility; chips/buttons keep their own taps.
+        chromeToggleArea.setOnClickListener {
             if (!humanCheckActive) toggleControls()
         }
         chromeTapCatcher.setOnClickListener {
             if (!humanCheckActive) showControls()
         }
+        // Prevent parent chrome from stealing child button taps.
+        playerChrome.isClickable = false
+        bringChromeLayerToFront()
     }
 
     private fun setHumanCheckMode(needed: Boolean) {
@@ -356,6 +362,23 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             Log.i(TAG, "Leaving human-check mode — restoring player chrome")
             humanCheckBack.visibility = View.GONE
             showControls()
+            bringChromeLayerToFront()
+        }
+    }
+
+    /** Keep chrome / tap-catcher above WebView so controls stay tappable. */
+    private fun bringChromeLayerToFront() {
+        if (humanCheckActive) return
+        if (::playerChrome.isInitialized && controlsVisible) {
+            playerChrome.bringToFront()
+            playerChrome.elevation = 36f
+        }
+        if (::chromeTapCatcher.isInitialized && !controlsVisible) {
+            chromeTapCatcher.bringToFront()
+            chromeTapCatcher.elevation = 36f
+        }
+        if (::humanCheckBack.isInitialized && humanCheckBack.visibility == View.VISIBLE) {
+            humanCheckBack.bringToFront()
         }
     }
 
@@ -410,6 +433,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         controlsVisible = true
         playerChrome.visibility = View.VISIBLE
         chromeTapCatcher.visibility = View.GONE
+        bringChromeLayerToFront()
         scheduleHideControls()
     }
 
@@ -421,6 +445,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         controlsVisible = false
         playerChrome.visibility = View.GONE
         chromeTapCatcher.visibility = View.VISIBLE
+        bringChromeLayerToFront()
     }
 
     private fun toggleControls() {
@@ -512,6 +537,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         val codes = arrayOf("sw", "en")
         val checked = if (preferredAudioLanguage == "en") 1 else 0
         try {
+            mainHandler.removeCallbacks(hideControlsRunnable)
             AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
                 .setTitle(R.string.pick_language)
                 .setSingleChoiceItems(labels, checked) { d, which ->
@@ -521,7 +547,6 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                         playerManager.setAudioLanguage(preferredAudioLanguage)
                         refreshLanguageChip()
                         if (!playerManager.isUserPaused()) {
-                            // Language switch only — do not run full startup autoplay.
                             playerManager.play()
                         }
                     } catch (e: Exception) {
@@ -530,6 +555,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     d.dismiss()
                 }
                 .setNegativeButton(android.R.string.cancel, null)
+                .setOnDismissListener { if (!humanCheckActive) scheduleHideControls() }
                 .show()
         } catch (e: Exception) {
             Log.e(TAG, "showAudioLanguageDialog", e)
@@ -548,6 +574,10 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
         )
         val initial = qualities.indexOf(selectedOkoaQuality).let { if (it >= 0) it else 0 }
         try {
+            // Keep chrome visible while picking quality.
+            mainHandler.removeCallbacks(hideControlsRunnable)
+            showControls()
+            mainHandler.removeCallbacks(hideControlsRunnable)
             AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
                 .setTitle(R.string.pick_quality)
                 .setSingleChoiceItems(
@@ -557,9 +587,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     try {
                         val q = qualities[which]
                         selectedOkoaQuality = q
-                        playerManager.setQuality(q, fromUser = true)
                         refreshQualityChip()
-                        // Keep going without restarting the pipeline.
+                        playerManager.setQuality(q, fromUser = true)
                         Log.d(TAG, "User picked quality: $q")
                     } catch (e: Exception) {
                         Log.e(TAG, "quality switch failed", e)
@@ -567,6 +596,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                     d.dismiss()
                 }
                 .setNegativeButton(android.R.string.cancel, null)
+                .setOnDismissListener { if (!humanCheckActive) scheduleHideControls() }
                 .show()
         } catch (e: Exception) {
             Log.e(TAG, "showQualityDialog", e)
@@ -665,6 +695,8 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             )
         }
         Log.d(TAG, "WebView added to player container")
+        // WebView attach can reorder z-index — put chrome back on top for taps.
+        if (!humanCheckActive) bringChromeLayerToFront()
     }
 
     private fun bindExoToPlayerViewIfNeeded(playerView: PlayerView, strictNull: Boolean) {

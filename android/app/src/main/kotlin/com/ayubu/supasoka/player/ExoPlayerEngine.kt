@@ -691,16 +691,21 @@ class ExoPlayerEngine(
             }
 
             applyFixedQuality(quality, force = true)
-            // If tracks were not ready yet, constraints-only was applied — retry shortly.
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                if (exoPlayer === player && selectedQuality == quality) {
-                    try {
-                        applyFixedQuality(quality, force = false)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "setQuality retry: ${e.message}")
+            // Tracks may still be loading on live — retry a couple times without thrashing.
+            val delays = listOf(350L, 1_200L, 2_800L)
+            delays.forEach { delayMs ->
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (exoPlayer === player && selectedQuality == quality) {
+                        try {
+                            if (!isVideoQualitySatisfied(quality)) {
+                                applyFixedQuality(quality, force = true)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "setQuality retry: ${e.message}")
+                        }
                     }
-                }
-            }, 700)
+                }, delayMs)
+            }
             Log.d(TAG, "🎨 Quality set to: $quality")
         } catch (e: Exception) {
             Log.e(TAG, "setQuality failed for $quality", e)
@@ -850,21 +855,49 @@ class ExoPlayerEngine(
     private fun videoOverrideKey(quality: StreamQuality, height: Int, bitrate: Int): String =
         "${quality.name}:$height:$bitrate"
 
-    /** True when selected video already respects the user's quality cap. */
+    /** True when selected video is already the best available rendition under [quality]'s cap. */
     private fun isVideoQualitySatisfied(quality: StreamQuality): Boolean {
         if (quality == StreamQuality.AUTO) return true
         val player = exoPlayer ?: return false
         val maxBitrate = bitrateCapForQuality(quality)
+        var selectedHeight = -1
+        var selectedBitrate = -1
+        var bestHeight = -1
+        var bestBitrate = -1
         for (group in player.currentTracks.groups) {
-            if (group.type != C.TRACK_TYPE_VIDEO || !group.isSelected) continue
+            if (group.type != C.TRACK_TYPE_VIDEO) continue
             for (i in 0 until group.length) {
-                if (!group.isTrackSelected(i)) continue
                 val f = group.getTrackFormat(i)
-                if (f.height > 0 && f.height <= quality.height) return true
-                if (f.height <= 0 && f.bitrate > 0 && f.bitrate <= maxBitrate) return true
-                if (f.height <= 0 && f.bitrate <= 0) return true
-                return false
+                val h = f.height
+                val br = if (f.bitrate > 0) f.bitrate else 0
+                val underCap = when {
+                    h > 0 -> h <= quality.height
+                    br > 0 -> br <= maxBitrate
+                    else -> false
+                }
+                if (underCap) {
+                    if (h > bestHeight || (h == bestHeight && br >= bestBitrate)) {
+                        bestHeight = h
+                        bestBitrate = br
+                    } else if (bestHeight <= 0 && br > bestBitrate) {
+                        bestBitrate = br
+                    }
+                }
+                if (group.isTrackSelected(i)) {
+                    selectedHeight = h
+                    selectedBitrate = br
+                }
             }
+        }
+        if (selectedHeight < 0 && selectedBitrate < 0) return false
+        if (bestHeight <= 0 && bestBitrate <= 0) {
+            return selectedHeight in 1..quality.height
+        }
+        if (bestHeight > 0 && selectedHeight > 0) {
+            return selectedHeight >= bestHeight - 16 && selectedHeight <= quality.height + 16
+        }
+        if (bestBitrate > 0 && selectedBitrate > 0) {
+            return selectedBitrate >= (bestBitrate * 0.85).toInt() && selectedBitrate <= maxBitrate
         }
         return false
     }
