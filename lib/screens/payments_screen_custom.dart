@@ -701,12 +701,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       final phone = prefs.getString('pendingPaymentPhone')?.trim();
       final pendingOrderFromPrefs = prefs.getString('pendingPaymentOrderId')?.trim();
       final orderId = pendingOrderFromPrefs ?? '';
-      final publicId = await UserIdentity.getOrCreatePublicId();
 
       if (phone != null && phone.isNotEmpty) {
         await UserIdentity.savePhoneNumber(phone);
       }
-      await UserIdentity.registerWithBackend(phone: phone);
+      final reg = await UserIdentity.registerWithBackend(phone: phone);
+      final publicId = reg.publicId;
 
       int? serverUntilMs = serverPremiumUntilMs;
       if (serverUntilMs == null && orderId.isNotEmpty && planId != null && planId.isNotEmpty) {
@@ -880,7 +880,21 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       }
 
       setState(() => _submitStatus = 'Inathibitisha nambari ya simu…');
-      await UserIdentity.registerWithBackend(phone: clean);
+      final reg = await UserIdentity.registerWithBackend(phone: clean);
+      _userId = reg.publicId;
+      if (reg.premiumUntilMs != null &&
+          reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
+        await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
+        await SubscriptionStore.refreshNotifierFromPrefs();
+        if (mounted) {
+          _showStatus(
+            'Tayari una premium',
+            'Akaunti yako ya awali imepatikana. Unaweza kutazama bila kulipa tena.',
+            _PayDialogTone.success,
+          );
+        }
+        return;
+      }
 
       setState(() => _submitStatus = 'Inatumia ombi la malipo…');
       final result = await paymentsApi.startPayment(

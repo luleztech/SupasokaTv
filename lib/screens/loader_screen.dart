@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
 import 'package:supasoka/theme/brand_palette.dart';
@@ -127,7 +128,14 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   Future<void> _registerUserIdentityAfterHome() async {
     try {
       final savedPhone = await UserIdentity.getSavedPhoneNumber();
-      await UserIdentity.registerWithBackend(phone: savedPhone);
+      final reg = await UserIdentity.registerWithBackend(phone: savedPhone);
+      if (reg.premiumUntilMs != null &&
+          reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
+        await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
+        await SubscriptionStore.refreshNotifierFromPrefs();
+      } else if (reg.recovered) {
+        await SubscriptionStore.syncPremiumFromBackend(force: true);
+      }
     } catch (e, st) {
       if (kDebugMode) {
         debugPrint('Deferred user registration failed: $e\n$st');

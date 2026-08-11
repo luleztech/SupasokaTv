@@ -277,6 +277,28 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     throw new HttpError(400, 'Amount must be at least 1 TZS', 'BAD_AMOUNT');
   }
 
+  // Keep payments on the existing subscribed User id when phone matches.
+  const { findCanonicalUserByPhone, isPremiumUntilActive, registerPublicUser } = await import(
+    './userDirectory.js'
+  );
+  let publicId = String(input.publicId ?? '').trim();
+  const canonical = await findCanonicalUserByPhone(localPhone);
+  if (canonical && isPremiumUntilActive(canonical.premiumUntilMs) && canonical.id) {
+    if (canonical.id !== publicId) {
+      logger.info(
+        { from: publicId, to: canonical.id, phone: localPhone },
+        'payment_start_recovered_active_user_id',
+      );
+    }
+    publicId = canonical.id;
+  }
+  await registerPublicUser({
+    publicId,
+    profileUsername: publicId,
+    phone: localPhone,
+  });
+  input = { ...input, publicId };
+
   await getSelectedPaymentProvider();
 
   if (!isProviderConfigured() && !isAuraxConfigured()) {
@@ -287,8 +309,8 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     );
   }
 
-  const buyerName = (input.buyerName ?? input.publicId).trim() || 'Mteja';
-  const buyerEmail = (input.buyerEmail ?? `${input.publicId}@supasoka.app`).trim();
+  const buyerName = (input.buyerName ?? publicId).trim() || 'Mteja';
+  const buyerEmail = (input.buyerEmail ?? `${publicId}@supasoka.app`).trim();
 
   // Halotel / Tigo-Yas / Airtel → Aurax first so Push USSD reaches the handset.
   if (shouldPreferAuraxForPhone(localPhone)) {
@@ -305,7 +327,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
       amountTzs,
       buyerName,
       buyerEmail,
-      publicId: input.publicId,
+      publicId,
       planId: input.planId,
     });
     if (auraxFirst) return auraxFirst;
@@ -328,7 +350,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     buyerName,
     localPhone,
     amountTzs,
-    publicId: input.publicId,
+    publicId,
     planId: input.planId,
   });
   if (!sonic.ok || !sonic.orderId) {
@@ -356,7 +378,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
         amountTzs,
         buyerName,
         buyerEmail,
-        publicId: input.publicId,
+        publicId,
         planId: input.planId,
         fallbackFrom: 'sonicpesa',
       });
@@ -371,7 +393,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 
   await upsertPendingIntent({
     orderId: sonic.orderId,
-    publicId: input.publicId,
+    publicId,
     planId: input.planId,
     amountTzs,
     buyerPhone: localPhone,
@@ -383,7 +405,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   try {
     await ensurePremiumActivatedForPaidOrder(
       sonic.orderId,
-      { publicId: input.publicId, planId: input.planId, phone: localPhone },
+      { publicId, planId: input.planId, phone: localPhone },
       { trustPaid: false },
     );
   } catch (e) {
@@ -806,7 +828,8 @@ export async function confirmPremiumForOrder(args: {
   planId: string;
   phone?: string;
 }): Promise<{ premiumUntilMs: number }> {
-  const { orderId, publicId, planId } = args;
+  const { orderId, planId } = args;
+  let publicId = String(args.publicId ?? '').trim();
   if (!orderId || !publicId || !planId) {
     throw new HttpError(400, 'Missing orderId/publicId/planId', 'MISSING_FIELDS');
   }
@@ -814,8 +837,32 @@ export async function confirmPremiumForOrder(args: {
   let tracked = await getIntent(orderId);
   const phoneNorm = normalizePhoneToLocal0(args.phone || tracked?.buyer_phone || '');
   const phone = phoneNorm.local ?? String(args.phone ?? tracked?.buyer_phone ?? '').trim();
+
+  // Prefer the paid order's original public id (and any still-active phone match)
+  // so an app update that minted a new local User-xxxxx cannot block unlock.
   if (tracked?.public_id && tracked.public_id !== publicId) {
-    throw new HttpError(409, 'Order belongs to another user', 'PUBLIC_ID_MISMATCH');
+    const intentPhone = normalizePhoneToLocal0(tracked.buyer_phone || phone);
+    const samePhone =
+      !!phone &&
+      !!intentPhone.local &&
+      intentPhone.local === (phoneNorm.local || phone);
+    if (samePhone || !phone) {
+      logger.info(
+        { orderId, from: publicId, to: tracked.public_id },
+        'payment_confirm_adopting_intent_public_id',
+      );
+      publicId = tracked.public_id;
+    } else {
+      const { findCanonicalUserByPhone, isPremiumUntilActive } = await import('./userDirectory.js');
+      const canonical = phone ? await findCanonicalUserByPhone(phone) : null;
+      if (canonical && isPremiumUntilActive(canonical.premiumUntilMs)) {
+        publicId = canonical.id;
+      } else if (tracked.public_id) {
+        publicId = tracked.public_id;
+      } else {
+        throw new HttpError(409, 'Order belongs to another user', 'PUBLIC_ID_MISMATCH');
+      }
+    }
   }
   if (tracked?.plan_id && tracked.plan_id !== planId) {
     throw new HttpError(409, 'Order does not match selected plan', 'PLAN_MISMATCH');

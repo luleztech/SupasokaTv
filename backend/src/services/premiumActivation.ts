@@ -183,18 +183,27 @@ export async function activatePremiumForUser(args: {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
   }
 
-  const publicId = String(args.publicId ?? '').trim();
+  const phone = (args.phone ?? '').trim();
+  const note = (args.note ?? '').trim();
+
+  let publicId = String(args.publicId ?? '').trim();
   if (!isValidPublicUserId(publicId)) {
     throw new HttpError(400, 'Invalid user id', 'BAD_PUBLIC_ID');
+  }
+
+  // Never move an active subscription onto a brand-new id when phone already maps to one.
+  if (phone) {
+    const { findCanonicalUserByPhone, isPremiumUntilActive } = await import('./userDirectory.js');
+    const canonical = await findCanonicalUserByPhone(phone);
+    if (canonical && isPremiumUntilActive(canonical.premiumUntilMs) && canonical.id) {
+      publicId = canonical.id;
+    }
   }
 
   const planId = String(args.planId ?? '').trim();
   if (!planId) {
     throw new HttpError(400, 'planId is required', 'BAD_PLAN');
   }
-
-  const phone = (args.phone ?? '').trim();
-  const note = (args.note ?? '').trim();
 
   // Ensure user exists; legacy_user_id will capture phone if present.
   await registerPublicUser({

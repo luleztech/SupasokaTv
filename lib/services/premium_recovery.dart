@@ -84,9 +84,15 @@ class PremiumRecovery {
 
   /// After payment or when playback says premium required — sync server + local state.
   static Future<bool> ensurePremiumUnlocked() async {
-    await UserIdentity.registerWithBackend(
+    final reg = await UserIdentity.registerWithBackend(
       phone: (await UserIdentity.getSavedPhoneNumber()) ?? '',
     );
+    if (reg.premiumUntilMs != null &&
+        reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
+      await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
+      await SubscriptionStore.refreshNotifierFromPrefs();
+      return true;
+    }
     final recovered = await recoverPendingPaymentIfAny();
     await SubscriptionStore.syncPremiumFromBackend(force: true);
     final active =

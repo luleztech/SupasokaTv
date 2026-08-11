@@ -11,17 +11,10 @@ const _prefsPublicId = 'supasoka_public_user_id';
 const _prefsPublicPhone = 'supasoka_public_user_phone';
 const _prefsInstallMs = 'supasoka_install_time_ms';
 
-/// Keys cleared on reinstall so identity and subscription never survive a fresh install.
-const _identityResetKeys = <String>[
-  _prefsPublicId,
-  _prefsPublicPhone,
+/// Local premium mirror only — never wipe the stable public id / phone on update.
+const _localPremiumCacheKeys = <String>[
   'supasoka_premium_until_ms',
   'supasoka_premium_plan_id',
-  'pendingPaymentOrderId',
-  'pendingPaymentPlanId',
-  'pendingPaymentPhone',
-  'pendingPaymentProvider',
-  'pendingPaymentCreatedAtMs',
 ];
 
 /// Suffix charset aligned with backend `^User-[A-Za-z2-9]{5}$` (no 0/O/1/l ambiguity).
@@ -32,12 +25,14 @@ String _randomSuffix5() {
   return List.generate(5, (_) => _suffixChars[r.nextInt(_suffixChars.length)]).join();
 }
 
-/// Stable viewer id: `User-xxxxx` (unique suffix). New id on every app reinstall.
+/// Stable viewer id: `User-xxxxx`. Persisted across app updates; recovered by phone
+/// when the backend still has an active subscription for that number.
 class UserIdentity {
   UserIdentity._();
 
-  /// Detect reinstall (or backup restore after reinstall) and wipe prior identity/subscription prefs.
-  /// Call once at cold start before reading premium from local storage.
+  /// On a true reinstall marker change, clear stale *local premium cache* only.
+  /// Never delete `User-xxxxx` or phone — that caused subscribed users to lose access
+  /// after updates / OEM data quirks. Server sync remains authoritative for expiry.
   static Future<bool> resetIdentityIfFreshInstall() async {
     final p = await SharedPreferences.getInstance();
     final info = await PackageInfo.fromPlatform();
@@ -46,12 +41,14 @@ class UserIdentity {
 
     final storedInstallMs = p.getInt(_prefsInstallMs);
     if (storedInstallMs != null && storedInstallMs != installMs) {
-      for (final key in _identityResetKeys) {
+      for (final key in _localPremiumCacheKeys) {
         await p.remove(key);
       }
       await p.setInt(_prefsInstallMs, installMs);
       if (kDebugMode) {
-        debugPrint('UserIdentity: fresh install detected — new user id will be issued');
+        debugPrint(
+          'UserIdentity: install marker changed — kept public id/phone; cleared local premium cache',
+        );
       }
       return true;
     }
@@ -74,6 +71,19 @@ class UserIdentity {
     return id;
   }
 
+  /// Persist a server-recovered id (active subscription found by phone).
+  static Future<void> adoptPublicId(String publicId) async {
+    final id = publicId.trim();
+    if (!_isValidPublicId(id)) return;
+    final p = await SharedPreferences.getInstance();
+    final current = p.getString(_prefsPublicId)?.trim();
+    if (current == id) return;
+    await p.setString(_prefsPublicId, id);
+    if (kDebugMode) {
+      debugPrint('UserIdentity: adopted recovered public id $id (was $current)');
+    }
+  }
+
   static bool _isValidPublicId(String id) {
     if (!id.startsWith('User-') || id.length != 10) return false;
     final suffix = id.substring(5);
@@ -92,22 +102,28 @@ class UserIdentity {
     return phone;
   }
 
-  /// Upserts this device on the server so admins see new installs under Users.
-  static Future<void> registerWithBackend({String? phone}) async {
+  /// Upserts this device on the server. When [phone] matches an active subscriber,
+  /// the server returns the old `publicId` and we adopt it locally.
+  static Future<({String publicId, bool recovered, int? premiumUntilMs})> registerWithBackend({
+    String? phone,
+  }) async {
     final base = apiConfigUrl.trim();
-    if (base.isEmpty) return;
+    final localId = await getOrCreatePublicId();
+    if (base.isEmpty) {
+      return (publicId: localId, recovered: false, premiumUntilMs: null);
+    }
 
-    final publicId = await getOrCreatePublicId();
     final origin = base.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/register-user').replace(
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
     final body = <String, dynamic>{
-      'publicId': publicId,
-      'profileUsername': publicId,
+      'publicId': localId,
+      'profileUsername': localId,
     };
-    if (phone != null && phone.trim().isNotEmpty) {
-      body['phone'] = phone.trim();
+    final phoneTrim = phone?.trim();
+    if (phoneTrim != null && phoneTrim.isNotEmpty) {
+      body['phone'] = phoneTrim;
     }
 
     try {
@@ -123,10 +139,33 @@ class UserIdentity {
           )
           .timeout(const Duration(seconds: 20));
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        if (phone != null && phone.trim().isNotEmpty) {
-          await savePhoneNumber(phone);
+        if (phoneTrim != null && phoneTrim.isNotEmpty) {
+          await savePhoneNumber(phoneTrim);
         }
-        return;
+        try {
+          final j = jsonDecode(res.body);
+          if (j is Map<String, dynamic>) {
+            final serverId = '${j['publicId'] ?? ''}'.trim();
+            final recovered = j['recovered'] == true;
+            final rawUntil = j['premiumUntilMs'];
+            final premiumUntilMs = rawUntil is int
+                ? rawUntil
+                : rawUntil is num
+                    ? rawUntil.toInt()
+                    : null;
+            if (_isValidPublicId(serverId)) {
+              await adoptPublicId(serverId);
+              return (
+                publicId: serverId,
+                recovered: recovered || serverId != localId,
+                premiumUntilMs: premiumUntilMs,
+              );
+            }
+          }
+        } catch (_) {
+          /* older servers may still return `{ ok: true }` only */
+        }
+        return (publicId: localId, recovered: false, premiumUntilMs: null);
       }
       if (kDebugMode) {
         debugPrint('UserIdentity.registerWithBackend: HTTP ${res.statusCode}');
@@ -136,5 +175,6 @@ class UserIdentity {
         debugPrint('UserIdentity.registerWithBackend failed (${e.runtimeType})');
       }
     }
+    return (publicId: localId, recovered: false, premiumUntilMs: null);
   }
 }

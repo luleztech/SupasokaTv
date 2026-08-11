@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_premium_until ON users (premium_until_ms)
   WHERE premium_until_ms IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_users_legacy_user_id ON users (legacy_user_id)
+  WHERE legacy_user_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS channels (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,

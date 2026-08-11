@@ -1,5 +1,6 @@
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
+import { normalizePhoneToLocal0, toLocal0Digits } from '../lib/tzPhone';
 
 const publicIdRe = /^User-[A-Za-z2-9]{5}$/;
 
@@ -7,8 +8,118 @@ export function isValidPublicUserId(id: string): boolean {
   return publicIdRe.test(id);
 }
 
+export type RegisterPublicUserResult = {
+  publicId: string;
+  recovered: boolean;
+  premiumUntilMs: number | null;
+  profileUsername: string;
+};
+
+/** Phone shapes we may have stored on `users.legacy_user_id` / `payment_intents.buyer_phone`. */
+export function phoneIdentityCandidates(rawPhone: string): string[] {
+  const trimmed = String(rawPhone ?? '').trim();
+  if (!trimmed) return [];
+
+  const out = new Set<string>();
+  out.add(trimmed);
+
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits) out.add(digits);
+
+  const norm = normalizePhoneToLocal0(trimmed);
+  const local = norm.local ?? (toLocal0Digits(trimmed).length === 10 ? toLocal0Digits(trimmed) : '');
+  if (local && /^0\d{9}$/.test(local)) {
+    out.add(local);
+    const intl = `255${local.slice(1)}`;
+    out.add(intl);
+    out.add(`+${intl}`);
+  }
+
+  return [...out].filter((s) => s.length > 0);
+}
+
+type CanonicalPhoneUser = {
+  id: string;
+  profileUsername: string;
+  premiumUntilMs: number | null;
+};
+
+/**
+ * Prefer the still-subscribed account for this phone so app updates / reinstalls
+ * do not orphan an active premium onto a brand-new `User-xxxxx`.
+ */
+export async function findCanonicalUserByPhone(rawPhone: string): Promise<CanonicalPhoneUser | null> {
+  const pool = getPool();
+  if (!pool) return null;
+
+  const candidates = phoneIdentityCandidates(rawPhone);
+  if (candidates.length === 0) return null;
+
+  const now = Date.now();
+  const byLegacy = await pool.query<{
+    id: string;
+    profile_username: string;
+    premium_until_ms: string | null;
+  }>(
+    `SELECT id, profile_username, premium_until_ms
+     FROM users
+     WHERE legacy_user_id = ANY($1::text[])
+     ORDER BY
+       CASE WHEN premium_until_ms IS NOT NULL AND premium_until_ms > $2 THEN 0 ELSE 1 END,
+       COALESCE(premium_until_ms, 0) DESC,
+       updated_at DESC
+     LIMIT 5`,
+    [candidates, now],
+  );
+
+  for (const row of byLegacy.rows) {
+    const premiumUntilMs = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
+    if (isPremiumUntilActive(premiumUntilMs)) {
+      return {
+        id: row.id,
+        profileUsername: row.profile_username,
+        premiumUntilMs,
+      };
+    }
+  }
+
+  try {
+    const { ensurePaymentIntentsTable } = await import('./paymentIntents.js');
+    await ensurePaymentIntentsTable();
+    const byIntent = await pool.query<{
+      public_id: string;
+      profile_username: string | null;
+      premium_until_ms: string | null;
+    }>(
+      `SELECT u.id AS public_id, u.profile_username, u.premium_until_ms
+       FROM payment_intents pi
+       INNER JOIN users u ON u.id = pi.public_id
+       WHERE pi.buyer_phone = ANY($1::text[])
+         AND pi.public_id IS NOT NULL
+         AND pi.public_id <> ''
+         AND u.premium_until_ms IS NOT NULL
+         AND u.premium_until_ms > $2
+       ORDER BY u.premium_until_ms DESC, pi.updated_at DESC
+       LIMIT 1`,
+      [candidates, now],
+    );
+    const hit = byIntent.rows[0];
+    if (hit?.public_id) {
+      return {
+        id: hit.public_id,
+        profileUsername: hit.profile_username || hit.public_id,
+        premiumUntilMs: hit.premium_until_ms != null ? Number(hit.premium_until_ms) : null,
+      };
+    }
+  } catch {
+    /* payment_intents may be unavailable — legacy_user_id path is enough */
+  }
+
+  return null;
+}
+
 /** First open or returning viewer — upsert in `users` (no admin key). */
-export async function registerPublicUser(body: unknown): Promise<void> {
+export async function registerPublicUser(body: unknown): Promise<RegisterPublicUserResult> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
@@ -17,7 +128,7 @@ export async function registerPublicUser(body: unknown): Promise<void> {
     throw new HttpError(400, 'Invalid JSON body', 'BAD_REQUEST');
   }
   const b = body as Record<string, unknown>;
-  const publicId = String(b.publicId ?? '').trim();
+  let publicId = String(b.publicId ?? '').trim();
   if (!isValidPublicUserId(publicId)) {
     throw new HttpError(400, 'publicId must match User-XXXXX (5 chars A–Z, a–z, 2–9)', 'BAD_PUBLIC_ID');
   }
@@ -25,17 +136,51 @@ export async function registerPublicUser(body: unknown): Promise<void> {
   if (profileUsername.length === 0) profileUsername = publicId;
   if (profileUsername.length > 160) profileUsername = profileUsername.slice(0, 160);
 
-  let legacyUserId = String(b.legacyUserId ?? b.userNumber ?? b.phone ?? b.buyerPhone ?? '').trim();
+  const rawPhone = String(b.legacyUserId ?? b.userNumber ?? b.phone ?? b.buyerPhone ?? '').trim();
+  const phoneNorm = rawPhone ? normalizePhoneToLocal0(rawPhone) : { local: undefined as string | undefined };
+  const legacyUserId = phoneNorm.local || rawPhone;
+
+  let recovered = false;
+  let premiumUntilMs: number | null = null;
+
+  // Active subscription for this phone always wins — keep the old User id + premium.
+  if (legacyUserId) {
+    const canonical = await findCanonicalUserByPhone(legacyUserId);
+    if (canonical && isPremiumUntilActive(canonical.premiumUntilMs)) {
+      if (canonical.id !== publicId) {
+        recovered = true;
+      }
+      publicId = canonical.id;
+      profileUsername = canonical.profileUsername || publicId;
+      premiumUntilMs = canonical.premiumUntilMs;
+    }
+  }
 
   await pool.query(
     `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
      VALUES ($1, $2, NULLIF($3, ''), NULL, '', now())
      ON CONFLICT (id) DO UPDATE SET
-       profile_username = EXCLUDED.profile_username,
-       legacy_user_id = COALESCE(EXCLUDED.legacy_user_id, users.legacy_user_id),
+       profile_username = CASE
+         WHEN EXCLUDED.profile_username IS NOT NULL AND TRIM(EXCLUDED.profile_username) <> ''
+           THEN EXCLUDED.profile_username
+         ELSE users.profile_username
+       END,
+       legacy_user_id = COALESCE(NULLIF(EXCLUDED.legacy_user_id, ''), users.legacy_user_id),
        updated_at = now()`,
     [publicId, profileUsername, legacyUserId],
   );
+
+  if (premiumUntilMs == null) {
+    const row = await getUserPremiumRecord(publicId);
+    premiumUntilMs = isPremiumUntilActive(row.premiumUntilMs) ? row.premiumUntilMs : null;
+  }
+
+  return {
+    publicId,
+    recovered,
+    premiumUntilMs,
+    profileUsername,
+  };
 }
 
 export type UserRow = {

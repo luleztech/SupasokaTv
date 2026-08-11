@@ -56,11 +56,20 @@ Future<void> _initializeDeferredServices() async {
   }
   try {
     await PremiumRecovery.recoverPendingPaymentIfAny();
-    await SubscriptionStore.syncPremiumFromBackend(force: true);
+    final savedPhone = await UserIdentity.getSavedPhoneNumber();
+    final reg = await UserIdentity.registerWithBackend(phone: savedPhone);
+    if (reg.premiumUntilMs != null &&
+        reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
+      await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
+    } else {
+      await SubscriptionStore.syncPremiumFromBackend(force: true);
+    }
     final isPremium =
         SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
-    final publicId = await UserIdentity.getOrCreatePublicId();
+    final publicId = reg.publicId.isNotEmpty
+        ? reg.publicId
+        : await UserIdentity.getOrCreatePublicId();
     await PushNotificationService.syncDirectUserTopic(publicId);
   } catch (e, st) {
     if (kDebugMode) {

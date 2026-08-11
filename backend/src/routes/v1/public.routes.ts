@@ -183,11 +183,19 @@ publicRouter.get('/config-meta', async (req, res, next) => {
   }
 });
 
-/** Viewer app: register stable `User-xxxxx` id on first open (and heartbeat on return). */
+/** Viewer app: register stable `User-xxxxx` id on first open (and heartbeat on return).
+ *  If phone matches an account that still has active premium, returns that old publicId
+ *  so updates/reinstalls never orphan a paid subscription onto a brand-new id. */
 publicRouter.post('/register-user', async (req, res, next) => {
   try {
-    await registerPublicUser(req.body);
-    res.json({ ok: true });
+    const out = await registerPublicUser(req.body);
+    res.json({
+      ok: true,
+      publicId: out.publicId,
+      recovered: out.recovered,
+      premiumUntilMs: out.premiumUntilMs,
+      profileUsername: out.profileUsername,
+    });
   } catch (e) {
     next(e);
   }
