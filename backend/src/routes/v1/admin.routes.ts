@@ -369,6 +369,19 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
   }
 });
 
+adminRouter.delete('/notifications', requireAdmin, async (_req, res, next) => {
+  try {
+    const pool = getPool();
+    if (!pool) {
+      throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
+    }
+    const out = await pool.query(`DELETE FROM notifications`);
+    res.json({ ok: true, deleted: out.rowCount ?? 0 });
+  } catch (e) {
+    next(e);
+  }
+});
+
 adminRouter.delete('/notifications/:id', requireAdmin, async (req, res, next) => {
   try {
     const pool = getPool();

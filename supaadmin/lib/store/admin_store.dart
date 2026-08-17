@@ -1270,6 +1270,36 @@ class AdminStore extends ChangeNotifier {
     await p.setString(_prefsKey, _config.toJsonString());
   }
 
+  /// Clears the entire push history on the server (when signed in) and locally.
+  /// Returns how many entries were removed from the local log.
+  Future<int> clearAllNotifications() async {
+    final count = _config.notificationLog.length;
+    if (count == 0) return 0;
+    if (hasAdminSession) {
+      final base = resolvedApiBaseUrl;
+      final uri = Uri.parse('$base/api/v1/admin/notifications');
+      try {
+        final res = await http
+            .delete(
+              uri,
+              headers: _authHeaders(),
+            )
+            .timeout(const Duration(seconds: 25));
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw Exception('Clear failed (${res.statusCode})');
+        }
+      } catch (e) {
+        _snack('Clear notifications failed: ${adminFormatError(e)}');
+        return 0;
+      }
+    }
+    _config.notificationLog.clear();
+    notifyListeners();
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_prefsKey, _config.toJsonString());
+    return count;
+  }
+
   Future<void> upsertUser(UserDto u) async {
     final i = _config.users.indexWhere((x) => x.id == u.id);
     if (i >= 0) {

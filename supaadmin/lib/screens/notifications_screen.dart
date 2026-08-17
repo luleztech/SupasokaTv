@@ -22,6 +22,8 @@ class NotificationsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<AdminStore>();
     final log = store.config.notificationLog;
+    final cs = Theme.of(context).colorScheme;
+    final hasHistory = log.isNotEmpty;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 12, 12),
@@ -32,6 +34,9 @@ class NotificationsScreen extends StatelessWidget {
             index: 0,
             child: AdminPageHeader(
               title: 'Push notifications',
+              subtitle: hasHistory
+                  ? '${log.length} sent · swipe or clear history anytime'
+                  : 'Compose and send pushes to all, premium, or free users',
               icon: Icons.notifications_active_rounded,
               actions: [
                 OutlinedButton.icon(
@@ -48,17 +53,44 @@ class NotificationsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text('History', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
+          _HistoryToolbar(
+            count: log.length,
+            onClearAll: hasHistory ? () => _confirmClearAll(context, store, log.length) : null,
+          ),
+          const SizedBox(height: 10),
           Expanded(
             child: log.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.notifications_off_rounded, size: 48, color: Colors.white.withValues(alpha: 0.2)),
-                        const SizedBox(height: 12),
-                        Text('No notifications yet', style: TextStyle(color: Colors.white.withValues(alpha: 0.45))),
+                        Container(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.04),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                          ),
+                          child: Icon(
+                            Icons.notifications_off_rounded,
+                            size: 40,
+                            color: Colors.white.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          'No notifications yet',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.55),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Sent pushes will show up here',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
+                        ),
                       ],
                     ),
                   )
@@ -78,9 +110,9 @@ class NotificationsScreen extends StatelessWidget {
                             padding: const EdgeInsets.only(right: 20),
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(16),
-                              color: Theme.of(context).colorScheme.error.withValues(alpha: 0.25),
+                              color: cs.error.withValues(alpha: 0.25),
                             ),
-                            child: Icon(Icons.delete_outline_rounded, color: Theme.of(context).colorScheme.error),
+                            child: Icon(Icons.delete_outline_rounded, color: cs.error),
                           ),
                           onDismissed: (_) => store.deleteNotification(n.id),
                           child: Material(
@@ -109,11 +141,15 @@ class NotificationsScreen extends StatelessWidget {
                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
                                             borderRadius: BorderRadius.circular(8),
-                                            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.18),
+                                            color: cs.primary.withValues(alpha: 0.18),
                                           ),
                                           child: Text(
                                             n.target.toUpperCase(),
-                                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 0.6,
+                                            ),
                                           ),
                                         ),
                                         const Spacer(),
@@ -157,6 +193,48 @@ class NotificationsScreen extends StatelessWidget {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _confirmClearAll(BuildContext context, AdminStore store, int count) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          title: const Text('Clear all notifications?'),
+          content: Text(
+            'This removes all $count push${count == 1 ? '' : 'es'} from history. '
+            'Already-delivered messages on user devices are not affected.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: cs.error,
+                foregroundColor: cs.onError,
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.delete_sweep_rounded, size: 18),
+              label: const Text('Clear all'),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !context.mounted) return;
+
+    final removed = await store.clearAllNotifications();
+    if (!context.mounted || removed == 0) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          removed == 1 ? 'Cleared 1 notification' : 'Cleared $removed notifications',
+        ),
       ),
     );
   }
@@ -208,6 +286,79 @@ class NotificationsScreen extends StatelessWidget {
         SnackBar(content: Text('Push check failed: ${adminFormatError(e)}')),
       );
     }
+  }
+}
+
+class _HistoryToolbar extends StatelessWidget {
+  const _HistoryToolbar({
+    required this.count,
+    required this.onClearAll,
+  });
+
+  final int count;
+  final Future<void> Function()? onClearAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final enabled = onClearAll != null;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: Colors.white.withValues(alpha: 0.03),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.history_rounded, size: 20, color: Colors.white.withValues(alpha: 0.55)),
+          const SizedBox(width: 8),
+          Text(
+            'History',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              color: cs.primary.withValues(alpha: count > 0 ? 0.22 : 0.08),
+              border: Border.all(color: cs.primary.withValues(alpha: count > 0 ? 0.35 : 0.12)),
+            ),
+            child: Text(
+              '$count',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Colors.white.withValues(alpha: count > 0 ? 0.9 : 0.4),
+              ),
+            ),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: enabled ? () => onClearAll!() : null,
+            icon: Icon(
+              Icons.delete_sweep_rounded,
+              size: 18,
+              color: enabled ? cs.error : Colors.white.withValues(alpha: 0.25),
+            ),
+            label: Text(
+              'Clear all',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: enabled ? cs.error : Colors.white.withValues(alpha: 0.25),
+              ),
+            ),
+            style: TextButton.styleFrom(
+              foregroundColor: cs.error,
+              disabledForegroundColor: Colors.white.withValues(alpha: 0.25),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
