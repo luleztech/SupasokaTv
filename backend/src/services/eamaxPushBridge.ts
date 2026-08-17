@@ -7,6 +7,8 @@ export type EamaxMirrorInput = {
   /** all | premium | free — maps to FCM topics on the partner side */
   target?: string;
   externalId?: string;
+  /** broadcast | reminder — partners may drop reminders */
+  kind?: 'broadcast' | 'reminder';
 };
 
 export type EamaxMirrorResult = {
@@ -45,6 +47,13 @@ function partners(): PartnerConfig[] {
       secret: env.jamboplusBridgeSecret.trim(),
     });
   }
+  if (env.leotenaApiBaseUrl.trim() && env.leotenaBridgeSecret.trim()) {
+    list.push({
+      name: 'leotena',
+      baseUrl: env.leotenaApiBaseUrl.trim(),
+      secret: env.leotenaBridgeSecret.trim(),
+    });
+  }
   return list;
 }
 
@@ -58,6 +67,29 @@ async function mirrorToPartner(
     return { ok: false, error: 'title and body are required', partner: partner.name };
   }
 
+  // JamboPlus / Leotena only want intentional broadcasts. User/expired
+  // reminders use Supasoka public IDs and must never fan out to every device.
+  if ((partner.name === 'jamboplus' || partner.name === 'leotena') && input.scope === 'user') {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'user_scope_not_mirrored',
+      partner: partner.name,
+      scope: input.scope,
+      delivered: false,
+    };
+  }
+  if ((partner.name === 'jamboplus' || partner.name === 'leotena') && input.kind === 'reminder') {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'reminder_not_mirrored',
+      partner: partner.name,
+      scope: input.scope,
+      delivered: false,
+    };
+  }
+
   const base = partner.baseUrl.replace(/\/+$/, '');
   const url = `${base}${BRIDGE_PATH}`;
   const controller = new AbortController();
@@ -69,6 +101,7 @@ async function mirrorToPartner(
       message,
       scope: input.scope,
       target: (input.target || 'all').trim() || 'all',
+      kind: input.kind || (input.scope === 'user' ? 'reminder' : 'broadcast'),
     };
     if (input.scope === 'user' && input.externalId?.trim()) {
       body.externalId = input.externalId.trim();
@@ -122,7 +155,7 @@ async function mirrorToPartner(
 }
 
 /**
- * Forward SupaAdmin push to EaMax + JamboPlus (when configured).
+ * Forward SupaAdmin push to EaMax + JamboPlus + Leotena (when configured).
  * Failures are logged and returned, not thrown.
  */
 export async function mirrorPushToEamax(input: EamaxMirrorInput): Promise<EamaxMirrorResult> {
@@ -163,7 +196,7 @@ export function checkEamaxBridgeConfiguration(): { ok: boolean; message: string 
     return {
       ok: false,
       message:
-        'No push partners configured. Set EAMAX_API_BASE_URL + EAMAX_BRIDGE_SECRET and/or JAMBOPLUS_API_BASE_URL + JAMBOPLUS_BRIDGE_SECRET.',
+        'No push partners configured. Set EAMAX_API_BASE_URL + EAMAX_BRIDGE_SECRET, JAMBOPLUS_API_BASE_URL + JAMBOPLUS_BRIDGE_SECRET, and/or LEOTENA_API_BASE_URL + LEOTENA_BRIDGE_SECRET.',
     };
   }
   return {

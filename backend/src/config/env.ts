@@ -53,4 +53,8 @@ export const env = {
   jamboplusApiBaseUrl: process.env.JAMBOPLUS_API_BASE_URL ?? '',
   /** Shared secret; must match JamboPlus SUPA_JAMBOPLUS_BRIDGE_SECRET. */
   jamboplusBridgeSecret: process.env.JAMBOPLUS_BRIDGE_SECRET ?? '',
+  /** Leotena API base — mirrors SupaAdmin push to Leotena devices. */
+  leotenaApiBaseUrl: process.env.LEOTENA_API_BASE_URL ?? '',
+  /** Shared secret; must match Leotena SUPA_LEOTENA_BRIDGE_SECRET (or LEOTENA_BRIDGE_SECRET). */
+  leotenaBridgeSecret: process.env.LEOTENA_BRIDGE_SECRET || process.env.SUPA_LEOTENA_BRIDGE_SECRET || '',
 } as const;
