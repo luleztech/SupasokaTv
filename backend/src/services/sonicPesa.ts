@@ -21,6 +21,7 @@ import {
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
+import { markPaymentStartAttempt } from './paymentStartCooldown';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 /** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
@@ -28,6 +29,18 @@ const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
 const SONIC_USSD_BUSY_DELAY_MS = 3_000;
 
 const sonicDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function isTransientTransportError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('aborted') ||
+    lower.includes('econnreset') ||
+    lower.includes('fetch failed') ||
+    lower.includes('network')
+  );
+}
 
 const SONIC_PAID_STATUSES = new Set([
   'SUCCESS',
@@ -261,65 +274,37 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa create strategy (SonicPesa-only — no alternate gateway):
- * - Halopesa / Tigo-Yas / Airtel: local `0…` first, then `255…`.
- * - Vodacom: `255…` first, then local.
- * Then channel hints and create_order_simple as fallbacks.
+ * SonicPesa create strategy — **one checkout = at most two API calls**:
+ * 1) best MSISDN format for the wallet, 2) alternate format only if the first fails
+ * with invalid-phone / routing (never chain channel hints — that burns quota).
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
   const phones = phoneCandidatesForSonicPesaApi(local0);
-  const channels = sonicChannelHintsForNetwork(local0);
-  const steps: SonicCreateStep[] = [];
-  const seen = new Set<string>();
+  if (phones.length === 0) {
+    return [buildSonicPrimaryCreateStep(local0)];
+  }
 
-  const addStep = (step: SonicCreateStep) => {
-    const key = `${step.endpoint}|${step.buyer_phone}|${step.channel ?? ''}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      steps.push(step);
-    }
-  };
-
-  // Auto-detect wallet from MSISDN (preferred phone formats first).
-  for (const phone of phones) {
-    addStep({
+  const steps: SonicCreateStep[] = [
+    {
       endpoint: 'payment/create_order',
-      buyer_phone: phone,
+      buyer_phone: phones[0]!,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `${phone.startsWith('255') ? 'intl' : 'local'}/${network}/auto`,
+      label: `primary/${network}/${phones[0]!.startsWith('255') ? 'intl' : 'local'}`,
+    },
+  ];
+
+  const alt = phones.length > 1 ? phones[1]! : null;
+  if (alt && alt !== phones[0]) {
+    steps.push({
+      endpoint: 'payment/create_order',
+      buyer_phone: alt,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}`,
     });
   }
 
-  const isNonVodacomWallet =
-    isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
-
-  // Channel hints — try top aliases when auto-detect from MSISDN fails.
-  if (phones[0]) {
-    for (const channel of channels.slice(0, 3)) {
-      addStep({
-        endpoint: 'payment/create_order',
-        buyer_phone: phones[0],
-        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-        label: `channel/${network}/${channel}`,
-        channel,
-      });
-    }
-  }
-
-  if (isNonVodacomWallet && phones[0]) {
-    addStep({
-      endpoint: 'payment/create_order_simple',
-      buyer_phone: phones[0],
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `simple/${network}/${phones[0].startsWith('255') ? 'intl' : 'local'}`,
-    });
-  }
-
-  if (steps.length === 0) {
-    steps.push(buildSonicPrimaryCreateStep(local0));
-  }
   return steps;
 }
 
@@ -403,6 +388,9 @@ export function mapSonicInitiateUserError(
   const msg = String(rawMessage || '').trim();
   const hayajatumika = /hayajatumika|hayajaweza kutumika|hayajaweza kutuma/i.test(msg);
   const wallet = walletLabelForLocalPhone(localPhone);
+  if (/too many attempts?/i.test(msg) || isPaymentRateLimitError(msg, code)) {
+    return paymentRateLimitUserMessage();
+  }
   if (code === '103' || /ongoing ussd/i.test(msg)) {
     return 'Simu yako ina USSD nyingine zinazoendelea. Funga dirisha la malipo/USSD kwenye simu, subiri sekunde 30, kisha jaribu tena.';
   }
@@ -473,6 +461,8 @@ export async function tryCreateSonicOrder(args: {
     'sonic_create_begin',
   );
 
+  markPaymentStartAttempt(local0);
+
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     try {
@@ -526,16 +516,12 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      // STK not delivered — try next phone format / channel step.
+      // STK / upstream failure — do not chain more create_order (burns MSISDN quota).
       if (isSonicStkSendFailure(errorMessage, errorCode)) {
         break;
       }
-      // Invalid MSISDN / unknown channel — try next format or primary channel hint.
+      // Wrong MSISDN shape or wallet channel — try the single alternate format only.
       if (i < steps.length - 1 && isPaymentCreateRetryable(errorMessage, errorCode)) {
-        continue;
-      }
-      // Soft/unknown gateway error: allow one more alternate step, then stop.
-      if (i < steps.length - 1 && i === 0) {
         continue;
       }
       break;
@@ -546,8 +532,7 @@ export async function tryCreateSonicOrder(args: {
       };
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn({ network, step: step.label, err: msg }, 'sonic_create_step_exception');
-      // Transport blip — try next step.
-      if (i < steps.length - 1) {
+      if (i < steps.length - 1 && isTransientTransportError(msg)) {
         continue;
       }
       break;

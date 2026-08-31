@@ -4,13 +4,14 @@ import 'package:http/http.dart' as http;
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
-import 'package:supasoka/services/user_identity.dart';
+
 class _PaymentsApi {
   static const _startPaymentTimeout = Duration(seconds: 95);
 
   /// Only retry true transport/server blips. Do not re-hit Sonic on wallet/STK failures —
   /// especially Airtel — or the per-number rate limit shows "Subiri dakika 2–5".
-  static const _maxStartRounds = 2;
+  /// One POST per tap — backend owns Sonic retries; client must not double-hit checkout.
+  static const _maxStartRounds = 1;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
     if (round >= _maxStartRounds) return false;
@@ -66,23 +67,31 @@ class _PaymentsApi {
       final lower = msg.toLowerCase();
       final isPerNumberQuota = lower.contains('majaribio mengi') ||
           lower.contains('umefanya majaribio') ||
+          lower.contains('subiri sekunde') ||
           ((lower.contains('nambari') ||
                   lower.contains('number') ||
                   lower.contains('phone') ||
                   lower.contains('msisdn') ||
                   lower.contains('simu')) &&
               (lower.contains('attempt') ||
-                  lower.contains('majaribio') ||
-                  lower.contains('too many') ||
-                  lower.contains('rate limit') ||
-                  lower.contains('limit reached')));
-      if (isPerNumberQuota) {
+                lower.contains('majaribio') ||
+                lower.contains('rate limit') ||
+                lower.contains('limit reached')));
+      if (isPerNumberQuota &&
+          !(err is Map && (err['message']?.toString().trim().isNotEmpty ?? false))) {
         msg =
             'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
       } else if (res.statusCode == 429 ||
           lower.contains('too many requests') ||
-          lower == 'rate limited') {
-        msg = 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
+          lower == 'rate limited' ||
+          /too many attempts?/i.hasMatch(lower)) {
+        if (isPerNumberQuota || lower.contains('subiri sekunde') || lower.contains('majaribio')) {
+          msg = err is Map && err['message'] != null
+              ? err['message'].toString()
+              : 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
+        } else {
+          msg = 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
+        }
       }
       throw Exception(msg);
     }
@@ -110,10 +119,7 @@ class _PaymentsApi {
     void Function(int attempt, int maxAttempts)? onAttempt,
   }) async {
     final normalizedPhone = TanzaniaPhone.normalize(phone.trim()) ?? phone.trim();
-    // Registration is best-effort. Do not make payment initiation depend on a
-    // separate provider-settings request: the backend can safely select its
-    // SonicPesa or Aurax delivery route for the supplied number.
-    await UserIdentity.registerWithBackend(phone: normalizedPhone);
+    // Caller (_send) already registered the user — avoid duplicate API hits before checkout.
     final origin = apiConfigUrl.replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$origin/api/v1/public/payments/start');
     final versionHeaders = await appVersionHeaders();

@@ -17,6 +17,11 @@ export function isPaymentRateLimitError(message: string, code: string): boolean 
     return true;
   }
 
+  // Sonic per-MSISDN / merchant quota (often after chained create_order calls).
+  if (/too many attempts?/i.test(msg)) {
+    return true;
+  }
+
   // Generic edge/CDN throttling — NOT a phone-number quota.
   if (
     /^too many requests$/i.test(msg) ||

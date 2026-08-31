@@ -28,6 +28,7 @@ import {
 import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
+import { paymentStartCooldownMessage } from './paymentStartCooldown';
 import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
@@ -230,6 +231,11 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 
   const buyerName = (input.buyerName ?? publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${publicId}@supasoka.app`).trim();
+
+  const cooldownMsg = paymentStartCooldownMessage(localPhone);
+  if (cooldownMsg) {
+    throw new HttpError(429, cooldownMsg, 'PAYMENT_COOLDOWN');
+  }
 
   const sonic = await tryCreateSonicOrder({
     buyerEmail,

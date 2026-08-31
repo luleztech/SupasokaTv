@@ -586,9 +586,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         lower.contains('timed out')) {
       return 'Hakuna muunganisho thabiti. Washa data ya simu au Wi-Fi, kisha ujaribu tena.';
     }
-    // Only remap true per-number quotas — not CDN "too many requests" / generic busy.
+    // Per-number Sonic quota or our server cooldown — never blame generic "too many".
     final isPerNumberQuota = lower.contains('majaribio mengi') ||
         lower.contains('umefanya majaribio') ||
+        lower.contains('subiri sekunde') ||
+        lower.contains('lipia sasa" tena') ||
         ((lower.contains('nambari') ||
                 lower.contains('number') ||
                 lower.contains('phone') ||
@@ -596,11 +598,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                 lower.contains('simu')) &&
             (lower.contains('attempt') ||
                 lower.contains('majaribio') ||
-                lower.contains('too many') ||
                 lower.contains('rate limit') ||
                 lower.contains('limit reached')));
     if (isPerNumberQuota) {
+      if (raw.length > 20 && raw.length < 220) return raw;
       return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
+    }
+    if (/too many attempts?/i.hasMatch(lower)) {
+      return 'Ombi la malipo limetumwa hivi karibuni. Subiri dakika 2 bila kubonyeza "Lipia sasa" tena, kisha angalia simu yako kwa PIN.';
     }
     if (lower.contains('too many requests') ||
         lower == 'rate limited' ||
@@ -856,6 +861,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Future<void> _send() async {
+    if (_submitting || _paymentPollArmed || _paymentCompletionInProgress) return;
+
     final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
     if (bundles.isEmpty) {
       _showStatus(
