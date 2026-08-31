@@ -21,7 +21,6 @@ import {
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
-import { isAuraxConfigured } from './auraxPay';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 /** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
@@ -262,25 +261,16 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa create strategy:
- * - Halopesa / Tigo-Yas / Airtel: local `0…` first, then `255…` (EaMax).
- * - Vodacom: `255…` first.
- * No channel override on the first attempt — Sonic auto-detects from MSISDN.
- * One primary channel hint only after auto fails with a routing error.
- *
- * When Aurax is configured, non-Vodacom wallets use Aurax first and Sonic gets at most
- * one attempt (quota protection). When Aurax is **not** configured, Sonic is primary and
- * must try all phone formats + channel hint — otherwise STK never reaches 070/062/068 users.
+ * SonicPesa create strategy (SonicPesa-only — no alternate gateway):
+ * - Halopesa / Tigo-Yas / Airtel: local `0…` first, then `255…`.
+ * - Vodacom: `255…` first, then local.
+ * Then channel hints and create_order_simple as fallbacks.
  */
-function buildSonicCreateSteps(
-  localPhone: string,
-  opts?: { limitNonVodacomAttempts?: boolean },
-): SonicCreateStep[] {
+function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
   const phones = phoneCandidatesForSonicPesaApi(local0);
   const channels = sonicChannelHintsForNetwork(local0);
-  const primaryChannel = channels[0];
   const steps: SonicCreateStep[] = [];
   const seen = new Set<string>();
 
@@ -302,27 +292,23 @@ function buildSonicCreateSteps(
     });
   }
 
-  // One forced primary channel — only skip when Aurax is live and Sonic is a light backup.
   const isNonVodacomWallet =
     isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
-  const preferLightSonic = opts?.limitNonVodacomAttempts === true && isNonVodacomWallet;
-  if (!preferLightSonic && primaryChannel && phones[0]) {
-    addStep({
-      endpoint: 'payment/create_order',
-      buyer_phone: phones[0],
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `preferred/${network}/${primaryChannel}`,
-      channel: primaryChannel,
-    });
+
+  // Channel hints — try top aliases when auto-detect from MSISDN fails.
+  if (phones[0]) {
+    for (const channel of channels.slice(0, 3)) {
+      addStep({
+        endpoint: 'payment/create_order',
+        buyer_phone: phones[0],
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `channel/${network}/${channel}`,
+        channel,
+      });
+    }
   }
 
-  // Halopesa / Mixx-Yas / Airtel + Aurax live: at most one Sonic attempt (Aurax is primary).
-  if (preferLightSonic && steps.length > 1) {
-    return steps.slice(0, 1);
-  }
-
-  // Last resort when Sonic is the only gateway — simpler endpoint for stubborn wallets.
-  if (!preferLightSonic && isNonVodacomWallet && phones[0]) {
+  if (isNonVodacomWallet && phones[0]) {
     addStep({
       endpoint: 'payment/create_order_simple',
       buyer_phone: phones[0],
@@ -338,11 +324,8 @@ function buildSonicCreateSteps(
 }
 
 /** Test hook — mirrors production step builder without hitting SonicPesa API. */
-export function buildSonicCreateStepsForTest(
-  localPhone: string,
-  opts?: { limitNonVodacomAttempts?: boolean },
-): SonicCreateStep[] {
-  return buildSonicCreateSteps(localPhone, opts);
+export function buildSonicCreateStepsForTest(localPhone: string): SonicCreateStep[] {
+  return buildSonicCreateSteps(localPhone);
 }
 
 function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
@@ -479,9 +462,7 @@ export async function tryCreateSonicOrder(args: {
   const local0 = toLocal0Digits(args.localPhone);
   const network = detectTzMobileNetwork(local0);
   const amountTzs = Math.max(1, Math.trunc(Number(args.amountTzs) || 0));
-  const steps: SonicCreateStep[] = buildSonicCreateSteps(local0, {
-    limitNonVodacomAttempts: isAuraxConfigured(),
-  });
+  const steps: SonicCreateStep[] = buildSonicCreateSteps(local0);
   let last: { response: Response; data: Record<string, unknown> } = {
     response: new Response(null, { status: 500 }),
     data: { status: 'error', message: 'Failed to start SonicPesa payment' },
@@ -545,7 +526,7 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      // STK not delivered — more Sonic hits burn Airtel/Halopesa quotas. Aurax fallback next.
+      // STK not delivered — try next phone format / channel step.
       if (isSonicStkSendFailure(errorMessage, errorCode)) {
         break;
       }
@@ -565,7 +546,7 @@ export async function tryCreateSonicOrder(args: {
       };
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn({ network, step: step.label, err: msg }, 'sonic_create_step_exception');
-      // Transport blip — try next step once; otherwise fall through to Aurax.
+      // Transport blip — try next step.
       if (i < steps.length - 1) {
         continue;
       }

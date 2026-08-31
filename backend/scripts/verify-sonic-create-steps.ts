@@ -1,5 +1,5 @@
 /**
- * Sanity: non-Vodacom wallets must get multiple Sonic steps when Aurax is off.
+ * Sanity: SonicPesa-only checkout must try multiple steps per wallet.
  * Run: npx tsx scripts/verify-sonic-create-steps.ts
  */
 import { buildSonicCreateStepsForTest } from '../src/services/sonicPesa';
@@ -9,16 +9,18 @@ function assert(cond: boolean, msg: string): void {
 }
 
 function main() {
-  const tigoFull = buildSonicCreateStepsForTest('0712345678', { limitNonVodacomAttempts: false });
-  assert(tigoFull.length >= 3, `Tigo full path expected >=3 steps, got ${tigoFull.length}`);
+  const tigo = buildSonicCreateStepsForTest('0712345678');
+  assert(tigo.length >= 5, `Tigo expected >=5 Sonic steps, got ${tigo.length}`);
 
-  const tigoLight = buildSonicCreateStepsForTest('0712345678', { limitNonVodacomAttempts: true });
-  assert(tigoLight.length === 1, `Tigo Aurax-backup expected 1 step, got ${tigoLight.length}`);
+  const halotel = buildSonicCreateStepsForTest('0622345678');
+  assert(halotel.length >= 5, `Halotel expected >=5 Sonic steps, got ${halotel.length}`);
 
-  const mpesa = buildSonicCreateStepsForTest('0752345678', { limitNonVodacomAttempts: false });
-  assert(mpesa.length >= 2, `M-Pesa expected >=2 steps, got ${mpesa.length}`);
+  const mpesa = buildSonicCreateStepsForTest('0752345678');
+  assert(mpesa.length >= 3, `M-Pesa expected >=3 Sonic steps, got ${mpesa.length}`);
 
-  console.log(JSON.stringify({ ok: true, tigoFull: tigoFull.length, tigoLight: tigoLight.length, mpesa: mpesa.length }));
+  console.log(
+    JSON.stringify({ ok: true, tigo: tigo.length, halotel: halotel.length, mpesa: mpesa.length }),
+  );
 }
 
 main();
