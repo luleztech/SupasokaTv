@@ -5,6 +5,7 @@ import { logger } from '../lib/logger';
 import {
   isMobileMoneyStkSendFailure,
   isPaymentRateLimitError,
+  isRecoverablePaymentCreateError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
 import {
@@ -293,25 +294,19 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     },
   ];
 
+  // Max 2 Sonic hits per tap — a 3rd step burns per-MSISDN quota and surfaces "Too Many Attempts".
   const alt = phones.length > 1 ? phones[1]! : null;
   if (alt && alt !== phones[0]) {
+    const isNonVodacom =
+      isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
+    const channel = isNonVodacom ? sonicChannelHintsForNetwork(local0)[0] : undefined;
     steps.push({
       endpoint: 'payment/create_order',
       buyer_phone: alt,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}`,
-    });
-  }
-
-  const isNonVodacom =
-    isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
-  const channel = sonicChannelHintsForNetwork(local0)[0];
-  if (isNonVodacom && channel && phones[0]) {
-    steps.push({
-      endpoint: 'payment/create_order',
-      buyer_phone: phones[0]!,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `channel/${network}/${channel}`,
+      label: channel
+        ? `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}+${channel}`
+        : `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}`,
       channel,
     });
   }
@@ -523,11 +518,11 @@ export async function tryCreateSonicOrder(args: {
           message: paymentRateLimitUserMessage(),
           raw: last.data,
           errorMessage: paymentRateLimitUserMessage(),
-          errorCode,
+          errorCode: 'PAYMENT_RATE_LIMIT',
         };
       }
-      // Try alternate MSISDN format or channel hint — one step at a time.
-      if (i < steps.length - 1) {
+      // Only retry when another phone format / channel might help — not STK or generic failures.
+      if (i < steps.length - 1 && isRecoverablePaymentCreateError(errorMessage, errorCode)) {
         continue;
       }
       break;
@@ -554,7 +549,7 @@ export async function tryCreateSonicOrder(args: {
       message: paymentRateLimitUserMessage(),
       raw: last.data,
       errorMessage: paymentRateLimitUserMessage(),
-      errorCode,
+      errorCode: 'PAYMENT_RATE_LIMIT',
     };
   }
   logger.warn({ network, errorMessage, errorCode }, 'sonic_create_failed');

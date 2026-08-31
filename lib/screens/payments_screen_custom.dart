@@ -576,6 +576,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     });
   }
 
+  bool _isPaymentCooldownDetail(String lower) {
+    return lower.contains('limetumwa kwenye simu') ||
+        lower.contains('angalia pin') ||
+        lower.contains('payment_cooldown');
+  }
+
   String _mapPaymentError(Object e) {
     final raw = e.toString().replaceFirst('Exception:', '').trim();
     final lower = raw.toLowerCase();
@@ -586,11 +592,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         lower.contains('timed out')) {
       return 'Hakuna muunganisho thabiti. Washa data ya simu au Wi-Fi, kisha ujaribu tena.';
     }
-    // Per-number Sonic quota or our server cooldown — never blame generic "too many".
+    if (_isPaymentCooldownDetail(lower)) {
+      return raw.length > 20 && raw.length < 220
+          ? raw
+          : 'Ombi la malipo limetumwa kwenye simu yako. Angalia PIN kwenye simu, kisha subiri.';
+    }
+    // Per-number Sonic quota — not our post-success cooldown.
     final isPerNumberQuota = lower.contains('majaribio mengi') ||
         lower.contains('umefanya majaribio') ||
-        lower.contains('subiri sekunde') ||
-        lower.contains('lipia sasa" tena') ||
         ((lower.contains('nambari') ||
                 lower.contains('number') ||
                 lower.contains('phone') ||
@@ -985,7 +994,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       }
     } catch (e) {
       final detail = _mapPaymentError(e);
-      _showStatus('Malipo hayajakamilika', detail, _PayDialogTone.error);
+      final isCooldown = _isPaymentCooldownDetail(detail.toLowerCase());
+      _showStatus(
+        isCooldown ? 'Angalia simu yako' : 'Malipo hayajakamilika',
+        detail,
+        isCooldown ? _PayDialogTone.info : _PayDialogTone.error,
+      );
     } finally {
       if (_submitting) _endSubmitProgress();
     }

@@ -14,13 +14,14 @@ function assert(cond: boolean, msg: string): void {
 
 function main() {
   const tigo = buildSonicCreateStepsForTest('0712345678');
-  assert(tigo.length === 3, `Tigo expected 3 Sonic steps, got ${tigo.length}`);
+  assert(tigo.length === 2, `Tigo expected 2 Sonic steps, got ${tigo.length}`);
   assert(tigo[0]!.buyer_phone.startsWith('0'), 'Tigo primary should be local 0…');
   assert(tigo[1]!.buyer_phone.startsWith('255'), 'Tigo alt should be intl 255…');
-  assert(Boolean(tigo[2]!.channel), 'Tigo should have channel hint step');
+  assert(Boolean(tigo[1]!.channel), 'Tigo alt step should include channel hint');
 
   const halotel = buildSonicCreateStepsForTest('0622345678');
-  assert(halotel.length === 3, `Halotel expected 3 Sonic steps, got ${halotel.length}`);
+  assert(halotel.length === 2, `Halotel expected 2 Sonic steps, got ${halotel.length}`);
+  assert(Boolean(halotel[1]!.channel), 'Halotel alt step should include channel hint');
 
   const mpesa = buildSonicCreateStepsForTest('0752345678');
   assert(mpesa.length === 2, `M-Pesa expected 2 Sonic steps, got ${mpesa.length}`);

@@ -65,18 +65,23 @@ class _PaymentsApi {
       // Prefer backend Swahili. Only invent Subiri 2–5 for true per-number quotas —
       // never for Railway/CDN "Too Many Requests" (that falsely blocks first-time 070 users).
       final lower = msg.toLowerCase();
-      final isPerNumberQuota = lower.contains('majaribio mengi') ||
-          lower.contains('umefanya majaribio') ||
-          lower.contains('subiri sekunde') ||
-          ((lower.contains('nambari') ||
-                  lower.contains('number') ||
-                  lower.contains('phone') ||
-                  lower.contains('msisdn') ||
-                  lower.contains('simu')) &&
-              (lower.contains('attempt') ||
-                lower.contains('majaribio') ||
-                lower.contains('rate limit') ||
-                lower.contains('limit reached')));
+      final errCode = err is Map ? (err['code']?.toString() ?? '') : '';
+      final isCooldown = errCode == 'PAYMENT_COOLDOWN' ||
+          lower.contains('limetumwa kwenye simu') ||
+          lower.contains('angalia pin');
+      final isPerNumberQuota = !isCooldown &&
+          (errCode == 'PAYMENT_RATE_LIMIT' ||
+              lower.contains('majaribio mengi') ||
+              lower.contains('umefanya majaribio') ||
+              ((lower.contains('nambari') ||
+                      lower.contains('number') ||
+                      lower.contains('phone') ||
+                      lower.contains('msisdn') ||
+                      lower.contains('simu')) &&
+                  (lower.contains('attempt') ||
+                      lower.contains('majaribio') ||
+                      lower.contains('rate limit') ||
+                      lower.contains('limit reached'))));
       if (isPerNumberQuota &&
           !(err is Map && (err['message']?.toString().trim().isNotEmpty ?? false))) {
         msg =
@@ -85,7 +90,9 @@ class _PaymentsApi {
           lower.contains('too many requests') ||
           lower == 'rate limited' ||
           RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower)) {
-        if (isPerNumberQuota || lower.contains('subiri sekunde') || lower.contains('majaribio')) {
+        if (isCooldown) {
+          // Keep server cooldown copy — STK already sent, not a quota violation.
+        } else if (isPerNumberQuota || errCode == 'PAYMENT_RATE_LIMIT') {
           msg = err is Map && err['message'] != null
               ? err['message'].toString()
               : 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';

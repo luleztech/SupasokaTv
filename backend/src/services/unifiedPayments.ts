@@ -249,7 +249,15 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     const userMsg =
       (sonic.errorMessage && sonic.errorMessage.trim()) ||
       mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
-    throw new HttpError(400, userMsg, 'SONIC_CREATE_FAILED');
+    const rateLimited =
+      sonic.errorCode === 'PAYMENT_RATE_LIMIT' ||
+      userMsg.includes('majaribio mengi') ||
+      userMsg.includes('umefanya majaribio');
+    throw new HttpError(
+      rateLimited ? 429 : 400,
+      userMsg,
+      rateLimited ? 'PAYMENT_RATE_LIMIT' : 'SONIC_CREATE_FAILED',
+    );
   }
 
   await upsertPendingIntent({
