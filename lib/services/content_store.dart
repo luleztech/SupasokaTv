@@ -10,6 +10,7 @@ import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/data/pay_plan.dart';
 import 'package:supasoka/services/app_update_service.dart';
+import 'package:supasoka/services/network_reachability.dart';
 import 'package:supasoka/util/image_url.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v2';
@@ -423,9 +424,22 @@ class ContentStore extends ChangeNotifier {
       }
 
       if (_loadError == _msgNetwork) {
-        _connectionBlocked = true;
-        _clearCatalog();
-        _loadError = null;
+        await applyCached();
+        if (_channels.isNotEmpty) {
+          // Wi‑Fi/mobile works but backend was slow — keep cached channels.
+          _connectionBlocked = false;
+          _loadError = null;
+        } else {
+          final online = await NetworkReachability.hasGeneralInternet();
+          if (online) {
+            _connectionBlocked = false;
+            _loadError = _msgService;
+          } else {
+            _connectionBlocked = true;
+            _clearCatalog();
+            _loadError = null;
+          }
+        }
       } else {
         _connectionBlocked = false;
         await applyCached();

@@ -46,6 +46,33 @@ function main() {
   });
   assertEq(legacyYearly3Mo, 90 * MS_DAY, 'legacy yearly 12000 => 3 months');
 
+  const tvWeek = inferDurationMsFromMalipoRow({
+    id: 'weekly',
+    period: '',
+    label: '',
+    amount: '3000',
+    price_lines: '',
+  });
+  assertEq(tvWeek, 7 * MS_DAY, 'SupaTV weekly 3000');
+
+  const tvMonth = inferDurationMsFromMalipoRow({
+    id: 'monthly',
+    period: '',
+    label: '',
+    amount: '6000',
+    price_lines: '',
+  });
+  assertEq(tvMonth, 30 * MS_DAY, 'SupaTV monthly 6000');
+
+  const mobileQuarter = inferDurationMsFromMalipoRow({
+    id: 'quarterly',
+    period: '',
+    label: '',
+    amount: '10000',
+    price_lines: '',
+  });
+  assertEq(mobileQuarter, 90 * MS_DAY, 'mobile quarterly 10000');
+
   const activatedAt = 1_700_000_000_000;
   const end = computePremiumEndMs(activatedAt, 7 * MS_DAY);
   assertEq(end, activatedAt + 7 * MS_DAY, 'exact weekly window');
@@ -61,7 +88,7 @@ function main() {
   assert(!isPremiumUntilActive(past), 'past premium is locked');
   assert(!isPremiumUntilActive(null), 'null premium is locked');
 
-  console.log(JSON.stringify({ ok: true, checks: 12 }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: 15 }, null, 2));
 }
 
 main();

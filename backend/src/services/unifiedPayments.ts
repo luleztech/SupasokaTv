@@ -828,7 +828,8 @@ export async function confirmPremiumForOrder(args: {
   planId: string;
   phone?: string;
 }): Promise<{ premiumUntilMs: number }> {
-  const { orderId, planId } = args;
+  const { orderId } = args;
+  let planId = String(args.planId ?? '').trim();
   let publicId = String(args.publicId ?? '').trim();
   if (!orderId || !publicId || !planId) {
     throw new HttpError(400, 'Missing orderId/publicId/planId', 'MISSING_FIELDS');
@@ -865,7 +866,11 @@ export async function confirmPremiumForOrder(args: {
     }
   }
   if (tracked?.plan_id && tracked.plan_id !== planId) {
-    throw new HttpError(409, 'Order does not match selected plan', 'PLAN_MISMATCH');
+    logger.info(
+      { orderId, clientPlanId: planId, trackedPlanId: tracked.plan_id },
+      'payment_confirm_adopting_tracked_plan_id',
+    );
+    planId = tracked.plan_id;
   }
   if (!tracked?.public_id || !tracked.plan_id) {
     await upsertPendingIntent({

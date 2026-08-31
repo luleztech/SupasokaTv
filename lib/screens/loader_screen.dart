@@ -3,10 +3,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
-import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/network_reachability.dart';
 import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/theme/app_typography.dart';
@@ -184,36 +183,10 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
   }
 
   Future<bool> _hasInternetConnection() async {
-    final origin = apiConfigUrl.trim().replaceAll(RegExp(r'/$'), '');
-    if (origin.isNotEmpty) {
-      try {
-        final uri = Uri.parse('$origin/api/v1/public/config-meta').replace(
-          queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
-        );
-        final res = await http.get(
-          uri,
-          headers: const {
-            'Accept': 'application/json',
-            'Cache-Control': 'no-cache',
-          },
-        ).timeout(Duration(seconds: kIsWeb ? 10 : 5));
-        if (res.statusCode == 200) return true;
-      } catch (_) {}
-    }
-
-    if (kIsWeb) {
-      if (origin.isEmpty) return true;
-      return false;
-    }
-
-    try {
-      final response = await http
-          .head(Uri.parse('https://www.example.com'))
-          .timeout(const Duration(seconds: 2));
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
+    return NetworkReachability.canProceedOnline(
+      generalTimeout: Duration(seconds: kIsWeb ? 8 : 5),
+      backendTimeout: Duration(seconds: kIsWeb ? 12 : 10),
+    );
   }
 
   @override

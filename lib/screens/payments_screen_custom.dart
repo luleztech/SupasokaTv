@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supasoka/config/big_screen_payment_pricing.dart';
 import 'package:supasoka/config/api.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/config/payment_helpers.dart'
@@ -63,6 +64,10 @@ class PaymentsScreen extends StatefulWidget {
     this.bottomPadding = 0,
     this.onPaymentSuccess,
     this.autoPlayGuide = true,
+    this.desktopLayout = false,
+    this.onClose,
+    this.contextTitle,
+    this.audioAssetPackage,
   });
 
   final Color accentColor;
@@ -70,6 +75,13 @@ class PaymentsScreen extends StatefulWidget {
   final Future<void> Function()? onPaymentSuccess;
   /// Auto-start the audio guide while this screen is the active payments view.
   final bool autoPlayGuide;
+  /// Wide-screen layout for SupaTV / desktop (two-column checkout).
+  final bool desktopLayout;
+  final VoidCallback? onClose;
+  /// e.g. locked channel name shown in the TV checkout header.
+  final String? contextTitle;
+  /// Package that owns payment audio assets (e.g. `supatv` on desktop builds).
+  final String? audioAssetPackage;
 
   @override
   State<PaymentsScreen> createState() => _PaymentsScreenState();
@@ -116,8 +128,9 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   List<_Bundle> _bundlesFromStore(List<PayPlan> plans) {
+    final source = widget.desktopLayout ? BigScreenPaymentPricing.applyAll(plans) : plans;
     final out = <_Bundle>[];
-    for (final p in plans) {
+    for (final p in source) {
       final amountRaw = p.amount.replaceAll(RegExp(r'[^0-9]'), '');
       final amount = int.tryParse(amountRaw);
       if (amount == null || amount <= 0) continue;
@@ -212,7 +225,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
         }
       } else if (isPaymentTerminalFailure(st)) {
-        await prefs.remove('pendingPaymentOrderId');
+        await _clearPendingOrderPrefs();
         if (mounted) {
           setState(() {
             _paymentUiPhase = _PaymentUiPhase.failed;
@@ -290,6 +303,20 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   /// Fast status checks first, then ~1.5s — fits the 60s confirmation window.
+  Future<String> _resolvePlanIdForOrder(
+    Map<String, dynamic> response,
+    SharedPreferences prefs,
+  ) async {
+    final fromPrefs = prefs.getString('pendingPaymentPlanId')?.trim();
+    if (fromPrefs != null && fromPrefs.isNotEmpty) return fromPrefs;
+    final fromStatus = (response['intentPlanId'] ?? response['planId'])?.toString().trim();
+    if (fromStatus != null && fromStatus.isNotEmpty) {
+      await prefs.setString('pendingPaymentPlanId', fromStatus);
+      return fromStatus;
+    }
+    return '';
+  }
+
   Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
     const warmDelaysMs = <int>[0, 500, 800, 1100, 1400, 1800, 2200];
     var warmIdx = 0;
@@ -324,12 +351,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             return;
           }
           final prefs = await SharedPreferences.getInstance();
-          final planFromIntent = (response['intentPlanId'] ?? response['planId'])?.toString().trim();
-          final planId = (prefs.getString('pendingPaymentPlanId')?.trim().isNotEmpty == true)
-              ? prefs.getString('pendingPaymentPlanId')!.trim()
-              : (planFromIntent ?? '');
-          if (planId.isNotEmpty && prefs.getString('pendingPaymentPlanId')?.trim() != planId) {
-            await prefs.setString('pendingPaymentPlanId', planId);
+          final planId = await _resolvePlanIdForOrder(response, prefs);
+          if (planId.isEmpty) {
+            // Wait for intent metadata before confirm — avoids 400 spam.
+            continue;
           }
           final phone = prefs.getString('pendingPaymentPhone')?.trim();
           final publicId = await UserIdentity.getOrCreatePublicId();
@@ -429,12 +454,13 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             return;
           }
           final prefs = await SharedPreferences.getInstance();
-          final planFromIntent = (response['intentPlanId'] ?? response['planId'])?.toString().trim();
-          final planId = (prefs.getString('pendingPaymentPlanId')?.trim().isNotEmpty == true)
-              ? prefs.getString('pendingPaymentPlanId')!.trim()
-              : (planFromIntent ?? '');
-          if (planId.isNotEmpty) {
-            await prefs.setString('pendingPaymentPlanId', planId);
+          final planId = await _resolvePlanIdForOrder(response, prefs);
+          if (planId.isEmpty) {
+            await _finalizeSessionTimedOut(
+              detail:
+                  'Malipo yamekamilika lakini bado hatujafungua akaunti yako. Fungua programu tena baada ya dakika 1–2 au wasiliana na msaada.',
+            );
+            return;
           }
           final phone = prefs.getString('pendingPaymentPhone')?.trim();
           final publicId = await UserIdentity.getOrCreatePublicId();
@@ -674,11 +700,17 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         final j = jsonDecode(res.body) as Map<String, dynamic>;
         if (j['ok'] == true) {
           final raw = j['premiumUntilMs'];
-          if (raw is int) return _ConfirmProbeOutcome.completed(premiumUntilMs: raw);
-          if (raw is num) return _ConfirmProbeOutcome.completed(premiumUntilMs: raw.toInt());
+          const skewGraceMs = 5 * 60 * 1000;
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          if (raw is int && raw > nowMs - skewGraceMs) {
+            return _ConfirmProbeOutcome.completed(premiumUntilMs: raw);
+          }
+          if (raw is num && raw.toInt() > nowMs - skewGraceMs) {
+            return _ConfirmProbeOutcome.completed(premiumUntilMs: raw.toInt());
+          }
         }
       } catch (_) {}
-      return _ConfirmProbeOutcome.completed();
+      return _ConfirmProbeOutcome.pending();
     }
 
     if (res.statusCode == 409) {
@@ -972,245 +1004,46 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       color: _scaffold,
       child: Stack(
         children: [
-          Positioned.fill(child: _PayAmbientLayer(accent: ac)),
+          Positioned.fill(
+            child: widget.desktopLayout
+                ? _DesktopPayAmbient(accent: ac)
+                : _PayAmbientLayer(accent: ac),
+          ),
           SafeArea(
             top: true,
             bottom: false,
-            child: RefreshIndicator(
-              color: _accentCta,
-              onRefresh: () => context.read<ContentStore>().refresh(),
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.fromLTRB(22, 8, 22, bottom),
-                child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _Reveal(
-                    controller: _entryCtrlSafe,
-                    delay: 0.00,
-                    child: AudioGuideCard(
-                      assetPath: 'audio/fungua_zote_guide.mp3',
-                      title: 'Jinsi ya kufungua channel zote',
-                      subtitle: 'Mwongozo mfupi wa hatua zote',
-                      autoPlay: widget.autoPlayGuide,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _Reveal(
-                    controller: _entryCtrlSafe,
-                    delay: 0.04,
-                    child: _PayPremiumHero(accent: ac),
-                  ),
-                  const SizedBox(height: 26),
-                  _Reveal(
-                    controller: _entryCtrlSafe,
-                    delay: 0.16,
-                    child: _PayGlassPanel(
-                      child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Andika namba ya simu ukianza na 0.',
-                          style: const TextStyle(
-                            fontSize: 13.5,
-                            height: 1.45,
-                            color: _payMuted,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            color: _paySurface,
-                            border: Border.all(
-                              color: _phoneOk ? _accentCta.withValues(alpha: 0.55) : _payLine,
-                              width: _phoneOk ? 1.5 : 1,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _phoneCtrl,
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: [
-                                    FilteringTextInputFormatter.digitsOnly,
-                                    // Allow paste of +255/255… then normalize down to 0XXXXXXXXX.
-                                    LengthLimitingTextInputFormatter(13),
-                                  ],
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 0.8,
-                                  ),
-                                  decoration: InputDecoration(
-                                    border: InputBorder.none,
-                                    hintText: '0712345678',
-                                    hintStyle: TextStyle(
-                                      color: _payMuted.withValues(alpha: 0.65),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    counterText: '',
-                                    contentPadding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
-                                    prefixIcon: Padding(
-                                      padding: const EdgeInsets.only(left: 4),
-                                      child: Icon(
-                                        Icons.phone_iphone_rounded,
-                                        color: _phoneOk ? _accentCta : _payMuted,
-                                        size: 22,
-                                      ),
-                                    ),
-                                  ),
-                                  onChanged: (value) {
-                                    final normalized = TanzaniaPhone.normalize(value);
-                                    if (normalized != null && normalized != value) {
-                                      _phoneCtrl.value = TextEditingValue(
-                                        text: normalized,
-                                        selection: TextSelection.collapsed(offset: normalized.length),
-                                      );
-                                    }
-                                    setState(() {
-                                      if (!_phoneOk) _selectedBundle = null;
-                                    });
-                                  },
-                                ),
-                              ),
-                              if (_phoneOk)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 16),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(6),
-                                    decoration: BoxDecoration(
-                                      color: _accentCta.withValues(alpha: 0.15),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.check_rounded,
-                                      color: _accentCta,
-                                      size: 20,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        if (_phoneOk) ...[
-                          const SizedBox(height: 10),
-                          Builder(
-                            builder: (_) {
-                              final wallet = TanzaniaPhone.walletLabel(_phoneCtrl.text);
-                              final supported = TanzaniaPhone.supportsPushUssd(_phoneCtrl.text);
-                              if (wallet == null) {
-                                return Text(
-                                  TanzaniaPhone.networksHint(),
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    height: 1.35,
-                                    color: _payMuted.withValues(alpha: 0.9),
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                );
-                              }
-                              return Text(
-                                supported
-                                    ? 'Ombi litatumwa kwa $wallet. ${TanzaniaPhone.networksHint()}'
-                                    : 'Nambari hii ($wallet) huenda isipokee Push USSD. ${TanzaniaPhone.networksHint()}',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  height: 1.35,
-                                  color: supported
-                                      ? _accentCta.withValues(alpha: 0.95)
-                                      : const Color(0xFFFFB74D),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              );
-                            },
-                          ),
-                        ] else ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            TanzaniaPhone.networksHint(),
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              height: 1.35,
-                              color: _payMuted.withValues(alpha: 0.85),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    ),
-                  ),
-                  if (_phoneOk) ...[
-                    const SizedBox(height: 18),
-                    _Reveal(
-                      controller: _entryCtrlSafe,
-                      delay: 0.26,
-                      child: _PayGlassPanel(
-                        child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _PayStepTitle(number: '02', title: 'Chagua muda', accent: ac),
-                          const SizedBox(height: 16),
-                          if (bundles.isEmpty)
-                            _MalipoPlansEmptyPanel(
-                              accent: ac,
-                              refreshing: content.refreshing,
-                              onRefresh: () => context.read<ContentStore>().refresh(),
-                            )
-                          else
-                            ...bundles.map(
-                              (b) => Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _PriceOptionTile(
-                                  bundle: b,
-                                  accent: ac,
-                                  selected: _selectedBundle == b.id,
-                                  onTap: () => setState(() => _selectedBundle = b.id),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+            child: widget.desktopLayout
+                ? _buildDesktopBody(
+                    ac: ac,
+                    content: content,
+                    bundles: bundles,
+                    showPayCta: showPayCta,
+                    payEnabled: payEnabled,
+                  )
+                : RefreshIndicator(
+                    color: _accentCta,
+                    onRefresh: () => context.read<ContentStore>().refresh(),
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(22, 8, 22, bottom),
+                      child: _buildMobileCheckoutColumn(
+                        ac: ac,
+                        content: content,
+                        bundles: bundles,
+                        showPayCta: showPayCta,
+                        payEnabled: payEnabled,
                       ),
                     ),
-                  ],
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 280),
-                    transitionBuilder: (child, animation) => FadeTransition(
-                      opacity: animation,
-                      child: SizeTransition(sizeFactor: animation, child: child),
-                    ),
-                    child: showPayCta
-                        ? Padding(
-                            key: const ValueKey('pay-button'),
-                            padding: const EdgeInsets.only(top: 16),
-                            child: TweenAnimationBuilder<double>(
-                              tween: Tween(begin: 0.98, end: 1.0),
-                              duration: const Duration(milliseconds: 280),
-                              curve: Curves.easeOutCubic,
-                              builder: (_, scale, child) =>
-                                  Transform.scale(scale: scale, child: child),
-                              child: _PremiumPayCta(
-                                submitting: _submitting,
-                                onPressed: payEnabled ? _send : null,
-                              ),
-                            ),
-                          )
-                        : const SizedBox.shrink(key: ValueKey('no-pay-button')),
                   ),
-                ],
-              ),
-            ),
-            ),
           ),
+          ..._buildPaymentOverlays(),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildPaymentOverlays() {
+    return [
           if (_submitting && _submitStatus.isNotEmpty)
             Positioned.fill(
               child: _PaymentProcessingOverlay(status: _submitStatus),
@@ -1246,49 +1079,406 @@ class _PaymentsScreenState extends State<PaymentsScreen>
                     color: const Color(0xFF0F172A),
                     borderRadius: BorderRadius.circular(20),
                     child: Container(
-                      constraints: const BoxConstraints(maxWidth: 340),
-                      padding: const EdgeInsets.all(24),
+                      constraints: BoxConstraints(maxWidth: widget.desktopLayout ? 440 : 340),
+                      padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          Icon(
+                            switch (_statusTone) {
+                              _PayDialogTone.success => Icons.check_circle_rounded,
+                              _PayDialogTone.error => Icons.error_outline_rounded,
+                              _PayDialogTone.info => Icons.info_outline_rounded,
+                            },
+                            size: 44,
+                            color: switch (_statusTone) {
+                              _PayDialogTone.success => const Color(0xFF4ADE80),
+                              _PayDialogTone.error => const Color(0xFFF87171),
+                              _PayDialogTone.info => _accentBlue,
+                            },
+                          ),
+                          const SizedBox(height: 14),
                           Text(
                             _statusTitle,
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 22,
                               fontWeight: FontWeight.w800,
                               color: Colors.white,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 10),
                           Text(
                             _statusMsg,
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.blueGrey.shade300,
-                              height: 1.5,
+                              fontSize: 14.5,
+                              height: 1.45,
+                              color: Colors.white.withValues(alpha: 0.78),
                             ),
                           ),
-                          const SizedBox(height: 18),
-                          FilledButton(
-                            onPressed: () => setState(() => _statusOpen = false),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _statusTone == _PayDialogTone.error
-                                  ? const Color(0xFFE8002D)
-                                  : _accentBlue,
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              onPressed: () => setState(() => _statusOpen = false),
+                              child: const Text('Sawa'),
                             ),
-                            child: const Text('Sawa'),
                           ),
                         ],
                       ),
                     ),
                   ),
                 ),
+              ),
+            ),
+    ];
+  }
+
+  Widget _buildDesktopBody({
+    required Color ac,
+    required ContentStore content,
+    required List<_Bundle> bundles,
+    required bool showPayCta,
+    required bool payEnabled,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _DesktopPayTopBar(
+          onClose: widget.onClose,
+          contextTitle: widget.contextTitle,
+        ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 960;
+              final checkout = _DesktopCheckoutCard(
+                ac: ac,
+                content: content,
+                bundles: bundles,
+                showPayCta: showPayCta,
+                payEnabled: payEnabled,
+                horizontalPlans: wide,
+                phoneOk: _phoneOk,
+                phoneCtrl: _phoneCtrl,
+                selectedBundle: _selectedBundle,
+                submitting: _submitting,
+                onPhoneChanged: (value) {
+                  final normalized = TanzaniaPhone.normalize(value);
+                  if (normalized != null && normalized != value) {
+                    _phoneCtrl.value = TextEditingValue(
+                      text: normalized,
+                      selection: TextSelection.collapsed(offset: normalized.length),
+                    );
+                  }
+                  setState(() {
+                    if (!_phoneOk) _selectedBundle = null;
+                  });
+                },
+                onSelectBundle: (id) => setState(() => _selectedBundle = id),
+                onPay: payEnabled ? _send : null,
+                onRefreshPlans: () => context.read<ContentStore>().refresh(),
+              );
+
+              if (!wide) {
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _DesktopPayHero(
+                        accent: ac,
+                        contextTitle: widget.contextTitle,
+                        autoPlayGuide: widget.autoPlayGuide,
+                        audioAssetPackage: widget.audioAssetPackage,
+                      ),
+                      const SizedBox(height: 20),
+                      checkout,
+                    ],
+                  ),
+                );
+              }
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(32, 12, 32, 28),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 42,
+                      child: SingleChildScrollView(
+                        child: _DesktopPayHero(
+                          accent: ac,
+                          contextTitle: widget.contextTitle,
+                          autoPlayGuide: widget.autoPlayGuide,
+                          audioAssetPackage: widget.audioAssetPackage,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 28),
+                    Expanded(flex: 58, child: SingleChildScrollView(child: checkout)),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileCheckoutColumn({
+    required Color ac,
+    required ContentStore content,
+    required List<_Bundle> bundles,
+    required bool showPayCta,
+    required bool payEnabled,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Reveal(
+          controller: _entryCtrlSafe,
+          delay: 0.00,
+          child: AudioGuideCard(
+            assetPath: 'audio/fungua_zote_guide.mp3',
+            title: 'Jinsi ya kufungua channel zote',
+            subtitle: 'Mwongozo mfupi wa hatua zote',
+            autoPlay: widget.autoPlayGuide,
+          ),
+        ),
+        const SizedBox(height: 18),
+        _Reveal(
+          controller: _entryCtrlSafe,
+          delay: 0.04,
+          child: _PayPremiumHero(accent: ac),
+        ),
+        const SizedBox(height: 26),
+        _Reveal(
+          controller: _entryCtrlSafe,
+          delay: 0.16,
+          child: _PayGlassPanel(child: _buildPhoneStep(ac)),
+        ),
+        if (_phoneOk) ...[
+          const SizedBox(height: 18),
+          _Reveal(
+            controller: _entryCtrlSafe,
+            delay: 0.26,
+            child: _PayGlassPanel(
+              child: _buildPlansStep(ac: ac, content: content, bundles: bundles),
             ),
           ),
         ],
+        _buildAnimatedPayCta(showPayCta: showPayCta, payEnabled: payEnabled),
+      ],
+    );
+  }
+
+  Widget _buildPhoneStep(Color ac) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
+        const SizedBox(height: 6),
+        const Text(
+          'Andika namba ya simu ukianza na 0.',
+          style: TextStyle(
+            fontSize: 13.5,
+            height: 1.45,
+            color: _payMuted,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 18),
+        _buildPhoneField(ac),
+        const SizedBox(height: 10),
+        _buildWalletHint(),
+      ],
+    );
+  }
+
+  Widget _buildPlansStep({
+    required Color ac,
+    required ContentStore content,
+    required List<_Bundle> bundles,
+    bool horizontal = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _PayStepTitle(number: '02', title: 'Chagua muda', accent: ac),
+        const SizedBox(height: 16),
+        if (bundles.isEmpty)
+          _MalipoPlansEmptyPanel(
+            accent: ac,
+            refreshing: content.refreshing,
+            onRefresh: () => context.read<ContentStore>().refresh(),
+          )
+        else if (horizontal)
+          LayoutBuilder(
+            builder: (context, c) {
+              final cols = bundles.length.clamp(1, 3);
+              final gap = 12.0;
+              final itemW = (c.maxWidth - gap * (cols - 1)) / cols;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final b in bundles)
+                    SizedBox(
+                      width: itemW,
+                      child: _DesktopPlanCard(
+                        bundle: b,
+                        accent: ac,
+                        selected: _selectedBundle == b.id,
+                        onTap: () => setState(() => _selectedBundle = b.id),
+                      ),
+                    ),
+                ],
+              );
+            },
+          )
+        else
+          ...bundles.map(
+            (b) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _PriceOptionTile(
+                bundle: b,
+                accent: ac,
+                selected: _selectedBundle == b.id,
+                onTap: () => setState(() => _selectedBundle = b.id),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildPhoneField(Color ac) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        color: _paySurface,
+        border: Border.all(
+          color: _phoneOk ? _accentCta.withValues(alpha: 0.55) : _payLine,
+          width: _phoneOk ? 1.5 : 1,
+        ),
       ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(13),
+              ],
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: widget.desktopLayout ? 22 : 18,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: '0712345678',
+                hintStyle: TextStyle(
+                  color: _payMuted.withValues(alpha: 0.65),
+                  fontWeight: FontWeight.w500,
+                ),
+                counterText: '',
+                contentPadding: EdgeInsets.fromLTRB(20, widget.desktopLayout ? 22 : 20, 12, widget.desktopLayout ? 22 : 20),
+                prefixIcon: Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Icon(
+                    Icons.phone_iphone_rounded,
+                    color: _phoneOk ? _accentCta : _payMuted,
+                    size: widget.desktopLayout ? 26 : 22,
+                  ),
+                ),
+              ),
+              onChanged: (value) {
+                final normalized = TanzaniaPhone.normalize(value);
+                if (normalized != null && normalized != value) {
+                  _phoneCtrl.value = TextEditingValue(
+                    text: normalized,
+                    selection: TextSelection.collapsed(offset: normalized.length),
+                  );
+                }
+                setState(() {
+                  if (!_phoneOk) _selectedBundle = null;
+                });
+              },
+            ),
+          ),
+          if (_phoneOk)
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _accentCta.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.check_rounded, color: _accentCta, size: 20),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWalletHint() {
+    if (!_phoneOk) return const SizedBox.shrink();
+
+    return Builder(
+      builder: (_) {
+        final wallet = TanzaniaPhone.walletLabel(_phoneCtrl.text);
+        final supported = TanzaniaPhone.supportsPushUssd(_phoneCtrl.text);
+        if (wallet == null) return const SizedBox.shrink();
+
+        return Text(
+          supported
+              ? 'Ombi litatumwa kwa $wallet.'
+              : 'Nambari hii ($wallet) huenda isipokee Push USSD.',
+          style: TextStyle(
+            fontSize: 12.5,
+            height: 1.35,
+            color: supported ? _accentCta.withValues(alpha: 0.95) : const Color(0xFFFFB74D),
+            fontWeight: FontWeight.w600,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAnimatedPayCta({required bool showPayCta, required bool payEnabled}) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SizeTransition(sizeFactor: animation, child: child),
+      ),
+      child: showPayCta
+          ? Padding(
+              key: const ValueKey('pay-button'),
+              padding: const EdgeInsets.only(top: 16),
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.98, end: 1.0),
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutCubic,
+                builder: (_, scale, child) => Transform.scale(scale: scale, child: child),
+                child: _PremiumPayCta(
+                  submitting: _submitting,
+                  onPressed: payEnabled ? _send : null,
+                ),
+              ),
+            )
+          : const SizedBox.shrink(key: ValueKey('no-pay-button')),
     );
   }
 }
@@ -2085,6 +2275,600 @@ class _Reveal extends StatelessWidget {
         );
       },
       child: child,
+    );
+  }
+}
+
+class _DesktopPayAmbient extends StatelessWidget {
+  const _DesktopPayAmbient({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF030508), Color(0xFF0A1018), Color(0xFF050A12)],
+              stops: [0.0, 0.45, 1.0],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -120,
+          left: -80,
+          child: Container(
+            width: 420,
+            height: 420,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [accent.withValues(alpha: 0.18), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -100,
+          right: -60,
+          child: Container(
+            width: 360,
+            height: 360,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [const Color(0xFF22C55E).withValues(alpha: 0.12), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DesktopPayTopBar extends StatelessWidget {
+  const _DesktopPayTopBar({this.onClose, this.contextTitle});
+
+  final VoidCallback? onClose;
+  final String? contextTitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 20, 0),
+      child: Row(
+        children: [
+          if (onClose != null)
+            IconButton(
+              tooltip: 'Rudi',
+              onPressed: onClose,
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+            )
+          else
+            const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              color: Colors.white.withValues(alpha: 0.06),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.live_tv_rounded, size: 16, color: _accentCta),
+                SizedBox(width: 8),
+                Text(
+                  'SupaTV Premium',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (contextTitle != null && contextTitle!.trim().isNotEmpty) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                contextTitle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.72),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ] else
+            const Spacer(),
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopPayHero extends StatelessWidget {
+  const _DesktopPayHero({
+    required this.accent,
+    this.contextTitle,
+    this.autoPlayGuide = false,
+    this.audioAssetPackage,
+  });
+
+  final Color accent;
+  final String? contextTitle;
+  final bool autoPlayGuide;
+  final String? audioAssetPackage;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                accent.withValues(alpha: 0.22),
+                const Color(0xFF22C55E).withValues(alpha: 0.08),
+              ],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: LinearGradient(colors: [accent, const Color(0xFF22C55E)]),
+                  boxShadow: [
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.35),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.lock_open_rounded, color: Colors.white, size: 28),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      contextTitle != null && contextTitle!.trim().isNotEmpty
+                          ? 'Fungua ${contextTitle!.trim()}'
+                          : 'Fungua channel zote',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        height: 1.15,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Malipo salama kupitia M-Pesa, Tigo, Airtel na Halopesa.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.72),
+                        fontSize: 14,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        for (final item in const [
+          (Icons.sports_soccer_rounded, 'Vituo vyote vya michezo na sinema'),
+          (Icons.hd_rounded, 'Ubora wa video hadi 1080p kwenye SupaTV'),
+        ])
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(item.$1, size: 18, color: accent),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      item.$2,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.82),
+                        fontSize: 14.5,
+                        height: 1.35,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        AudioGuideCard(
+          assetPath: 'audio/fungua_zote_guide.mp3',
+          assetPackage: audioAssetPackage,
+          title: 'Jinsi ya kufungua channel zote',
+          subtitle: 'Sikiliza mwongozo wa hatua 3',
+          autoPlay: autoPlayGuide,
+        ),
+      ],
+    );
+  }
+}
+
+class _DesktopCheckoutCard extends StatelessWidget {
+  const _DesktopCheckoutCard({
+    required this.ac,
+    required this.content,
+    required this.bundles,
+    required this.showPayCta,
+    required this.payEnabled,
+    required this.horizontalPlans,
+    required this.phoneOk,
+    required this.phoneCtrl,
+    required this.selectedBundle,
+    required this.submitting,
+    required this.onPhoneChanged,
+    required this.onSelectBundle,
+    required this.onPay,
+    required this.onRefreshPlans,
+  });
+
+  final Color ac;
+  final ContentStore content;
+  final List<_Bundle> bundles;
+  final bool showPayCta;
+  final bool payEnabled;
+  final bool horizontalPlans;
+  final bool phoneOk;
+  final TextEditingController phoneCtrl;
+  final String? selectedBundle;
+  final bool submitting;
+  final ValueChanged<String> onPhoneChanged;
+  final ValueChanged<String> onSelectBundle;
+  final VoidCallback? onPay;
+  final Future<void> Function() onRefreshPlans;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(26, 26, 26, 24),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.08),
+            Colors.white.withValues(alpha: 0.03),
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 40,
+            offset: const Offset(0, 18),
+          ),
+        ],
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+            children: [
+              _DesktopStepChip(number: '1', active: true, accent: ac),
+              Expanded(
+                child: Container(
+                  height: 2,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
+                  color: phoneOk ? ac.withValues(alpha: 0.45) : Colors.white12,
+                ),
+              ),
+              _DesktopStepChip(number: '2', active: phoneOk, accent: ac),
+              Expanded(
+                child: Container(
+                  height: 2,
+                  margin: const EdgeInsets.symmetric(horizontal: 8),
+                  color: showPayCta ? ac.withValues(alpha: 0.45) : Colors.white12,
+                ),
+              ),
+              _DesktopStepChip(number: '3', active: showPayCta, accent: ac),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _PayStepTitle(number: '01', title: 'Nambari ya simu', accent: ac),
+          const SizedBox(height: 8),
+          const Text(
+            'Andika namba ya simu ukianza na 0.',
+            style: TextStyle(fontSize: 13.5, color: _payMuted, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              color: _paySurface,
+              border: Border.all(
+                color: phoneOk ? _accentCta.withValues(alpha: 0.55) : _payLine,
+                width: phoneOk ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: phoneCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(13),
+                    ],
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8,
+                    ),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      hintText: '0712345678',
+                      hintStyle: TextStyle(color: _payMuted.withValues(alpha: 0.65)),
+                      counterText: '',
+                      contentPadding: const EdgeInsets.fromLTRB(20, 22, 12, 22),
+                      prefixIcon: Icon(
+                        Icons.phone_iphone_rounded,
+                        color: phoneOk ? _accentCta : _payMuted,
+                        size: 26,
+                      ),
+                    ),
+                    onChanged: onPhoneChanged,
+                  ),
+                ),
+                if (phoneOk)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 16),
+                    child: Icon(Icons.check_circle_rounded, color: _accentCta, size: 24),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Builder(
+            builder: (_) {
+              if (!phoneOk) return const SizedBox.shrink();
+
+              final wallet = TanzaniaPhone.walletLabel(phoneCtrl.text);
+              final supported = TanzaniaPhone.supportsPushUssd(phoneCtrl.text);
+              if (wallet == null) return const SizedBox.shrink();
+
+              return Text(
+                supported
+                    ? 'Ombi litatumwa kwa $wallet.'
+                    : 'Nambari hii ($wallet) huenda isipokee Push USSD.',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.35,
+                  color: supported ? _accentCta.withValues(alpha: 0.95) : const Color(0xFFFFB74D),
+                  fontWeight: FontWeight.w600,
+                ),
+              );
+            },
+          ),
+          if (phoneOk) ...[
+            const SizedBox(height: 24),
+            _PayStepTitle(number: '02', title: 'Chagua muda', accent: ac),
+            const SizedBox(height: 14),
+            if (bundles.isEmpty)
+              _MalipoPlansEmptyPanel(
+                accent: ac,
+                refreshing: content.refreshing,
+                onRefresh: onRefreshPlans,
+              )
+            else if (horizontalPlans)
+              LayoutBuilder(
+                builder: (context, c) {
+                  final cols = bundles.length <= 3 ? bundles.length.clamp(1, 3) : 2;
+                  final gap = 12.0;
+                  final itemW = (c.maxWidth - gap * (cols - 1)) / cols;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: [
+                      for (final b in bundles)
+                        SizedBox(
+                          width: itemW,
+                          child: _DesktopPlanCard(
+                            bundle: b,
+                            accent: ac,
+                            selected: selectedBundle == b.id,
+                            onTap: () => onSelectBundle(b.id),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              )
+            else
+              ...bundles.map(
+                (b) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _PriceOptionTile(
+                    bundle: b,
+                    accent: ac,
+                    selected: selectedBundle == b.id,
+                    onTap: () => onSelectBundle(b.id),
+                  ),
+                ),
+              ),
+          ],
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 260),
+            child: showPayCta
+                ? Padding(
+                    key: const ValueKey('desktop-pay'),
+                    padding: const EdgeInsets.only(top: 22),
+                    child: _PremiumPayCta(submitting: submitting, onPressed: onPay),
+                  )
+                : const SizedBox.shrink(key: ValueKey('desktop-no-pay')),
+          ),
+        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DesktopStepChip extends StatelessWidget {
+  const _DesktopStepChip({required this.number, required this.active, required this.accent});
+
+  final String number;
+  final bool active;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: active ? accent.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.05),
+        border: Border.all(color: active ? accent.withValues(alpha: 0.7) : Colors.white24),
+      ),
+      child: Text(
+        number,
+        style: TextStyle(
+          color: active ? Colors.white : Colors.white54,
+          fontWeight: FontWeight.w800,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+}
+
+class _DesktopPlanCard extends StatelessWidget {
+  const _DesktopPlanCard({
+    required this.bundle,
+    required this.accent,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _Bundle bundle;
+  final Color accent;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: selected ? accent.withValues(alpha: 0.12) : _paySurface,
+            border: Border.all(
+              color: selected ? accent.withValues(alpha: 0.65) : _payLine,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (bundle.badge.trim().isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: bundle.accent1.withValues(alpha: 0.16),
+                  ),
+                  child: Text(
+                    bundle.badge.trim(),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: bundle.accent1,
+                    ),
+                  ),
+                ),
+              Text(
+                bundle.priceLine,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  height: 1.2,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${bundle.name} · ${bundle.duration}',
+                style: const TextStyle(color: _payMuted, fontSize: 12, height: 1.3),
+              ),
+              if (selected) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded, size: 16, color: accent),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Imechaguliwa',
+                      style: TextStyle(
+                        color: accent.withValues(alpha: 0.95),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

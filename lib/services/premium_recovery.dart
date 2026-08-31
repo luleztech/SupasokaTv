@@ -60,12 +60,18 @@ class PremiumRecovery {
             final j = jsonDecode(res.body) as Map<String, dynamic>;
             if (j['ok'] == true) {
               final raw = j['premiumUntilMs'];
+              // Trust server on ok==true; allow small clock skew on the handset.
+              const skewGraceMs = 5 * 60 * 1000;
               final nowMs = DateTime.now().millisecondsSinceEpoch;
-              if (raw is int && raw > nowMs) return raw;
-              if (raw is num && raw.toInt() > nowMs) return raw.toInt();
+              if (raw is int && raw > nowMs - skewGraceMs) return raw;
+              if (raw is num && raw.toInt() > nowMs - skewGraceMs) return raw.toInt();
             }
           } catch (_) {}
-        } else if ((res.statusCode == 402 || res.statusCode == 409 || res.statusCode == 500) && attempt < 4) {
+        } else if ((res.statusCode == 402 ||
+                res.statusCode == 409 ||
+                res.statusCode == 500 ||
+                res.statusCode == 503) &&
+            attempt < 4) {
           await Future<void>.delayed(Duration(milliseconds: 1200 + (attempt * 900)));
           continue;
         }
@@ -206,8 +212,10 @@ class PremiumRecovery {
 
     final createdAtMs = prefs.getInt(_pendingCreatedAtKey);
     if (createdAtMs == null || createdAtMs <= 0) {
-      await _clearPendingOrderPrefs();
-      return false;
+      // Legacy pending orders may lack a timestamp — backfill instead of wiping recovery state.
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      await prefs.setInt(_pendingCreatedAtKey, nowMs);
+      return true;
     }
     final ageMs = DateTime.now().millisecondsSinceEpoch - createdAtMs;
     if (ageMs <= maxAge.inMilliseconds) return true;

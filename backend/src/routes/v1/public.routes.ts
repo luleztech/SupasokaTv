@@ -247,8 +247,11 @@ async function handleConfirmPremium(req: import('express').Request, res: import(
     res.json({ ok: true, premiumUntilMs: out.premiumUntilMs });
   } catch (e) {
     if (e && typeof e === 'object' && 'statusCode' in e) {
-      const he = e as { statusCode: number; message: string };
-      res.status(he.statusCode).json({ ok: false, error: he.message });
+      const he = e as { statusCode: number; message: string; code?: string };
+      res.status(he.statusCode).json({
+        ok: false,
+        error: { message: he.message, code: he.code ?? 'HTTP_ERROR' },
+      });
       return;
     }
     next(e);

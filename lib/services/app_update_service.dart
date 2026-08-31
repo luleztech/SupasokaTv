@@ -98,14 +98,8 @@ Future<AppUpdateStatus> evaluateAppUpdateFromConfig(Map<String, dynamic> j) asyn
           ? (j['playStoreUrl'] as String).trim()
           : kDefaultPlayStoreUrl;
 
-  if (kIsWeb || !Platform.isAndroid) {
-    return AppUpdateStatus.upToDate(
-      currentVersion: currentVersion,
-      currentBuild: currentBuild,
-      playStoreUrl: playStoreUrl,
-    );
-  }
-
+  // Server-computed gate applies on every platform (TV/desktop too) — otherwise
+  // `/config` returns channels:[] while the client ignores updateRequired.
   final serverRequired = j['updateRequired'] == true || appUpdate?['updateRequired'] == true;
   if (j.containsKey('updateRequired') || (appUpdate?.containsKey('updateRequired') ?? false)) {
     return AppUpdateStatus(
@@ -116,6 +110,14 @@ Future<AppUpdateStatus> evaluateAppUpdateFromConfig(Map<String, dynamic> j) asyn
       latestVersion: latestVersion,
       minBuild: minBuild,
       latestBuild: latestBuild > 0 ? latestBuild : minBuild,
+      playStoreUrl: playStoreUrl,
+    );
+  }
+
+  if (kIsWeb || !Platform.isAndroid) {
+    return AppUpdateStatus.upToDate(
+      currentVersion: currentVersion,
+      currentBuild: currentBuild,
       playStoreUrl: playStoreUrl,
     );
   }

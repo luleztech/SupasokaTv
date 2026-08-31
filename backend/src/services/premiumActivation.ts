@@ -54,7 +54,10 @@ function parseLargestIntFromMoneyText(s: string): number | null {
  */
 function durationMsFromKnownTzAmountTiers(tzs: number): number | null {
   if (tzs === 2000) return 7 * MS_DAY;
+  if (tzs === 3000) return 7 * MS_DAY;
   if (tzs === 5000) return 30 * MS_DAY;
+  if (tzs === 6000) return 30 * MS_DAY;
+  if (tzs === 10000) return 90 * MS_DAY;
   if (tzs === 12000) return 90 * MS_DAY;
   return null;
 }

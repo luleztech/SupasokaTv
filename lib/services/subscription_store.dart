@@ -97,7 +97,8 @@ class SubscriptionStore {
   /// Sets expiry from server confirmation (authoritative).
   static Future<void> setPremiumUntilMs(int premiumUntilMs) async {
     final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
-    if (!end.isAfter(DateTime.now())) {
+    // Allow small handset clock skew vs server-authoritative expiry.
+    if (!end.isAfter(DateTime.now().subtract(const Duration(minutes: 5)))) {
       await clearLocalPremium();
       return;
     }

@@ -168,21 +168,30 @@ class _PaymentsApi {
     ];
 
     http.Response? res;
+    Object? lastErr;
     for (final uri in uris) {
-      try {
-        res = await http
-            .get(uri, headers: {
-              'Accept': 'application/json',
-              ...versionHeaders,
-            })
-            .timeout(const Duration(seconds: 22));
-        if (res.statusCode != 404) break;
-      } catch (_) {
-        continue;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          res = await http
+              .get(uri, headers: {
+                'Accept': 'application/json',
+                ...versionHeaders,
+              })
+              .timeout(const Duration(seconds: 22));
+          if (res.statusCode != 404) break;
+        } catch (e) {
+          lastErr = e;
+          if (attempt == 0 && _isTransientStartPaymentError(e)) {
+            await Future<void>.delayed(const Duration(milliseconds: 600));
+            continue;
+          }
+        }
+        break;
       }
+      if (res != null && res.statusCode != 404) break;
     }
     if (res == null) {
-      throw Exception('Haikuweza kupata hali ya malipo.');
+      throw Exception(lastErr?.toString() ?? 'Haikuweza kupata hali ya malipo.');
     }
 
     final text = utf8.decode(res.bodyBytes);
