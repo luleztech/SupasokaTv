@@ -604,7 +604,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (raw.length > 20 && raw.length < 220) return raw;
       return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
     }
-    if (/too many attempts?/i.hasMatch(lower)) {
+    if (RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower)) {
       return 'Ombi la malipo limetumwa hivi karibuni. Subiri dakika 2 bila kubonyeza "Lipia sasa" tena, kisha angalia simu yako kwa PIN.';
     }
     if (lower.contains('too many requests') ||

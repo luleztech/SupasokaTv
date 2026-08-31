@@ -84,7 +84,7 @@ class _PaymentsApi {
       } else if (res.statusCode == 429 ||
           lower.contains('too many requests') ||
           lower == 'rate limited' ||
-          /too many attempts?/i.hasMatch(lower)) {
+          RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower)) {
         if (isPerNumberQuota || lower.contains('subiri sekunde') || lower.contains('majaribio')) {
           msg = err is Map && err['message'] != null
               ? err['message'].toString()
