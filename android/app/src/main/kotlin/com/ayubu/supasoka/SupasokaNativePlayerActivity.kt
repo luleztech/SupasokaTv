@@ -653,14 +653,13 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
     }
 
     private fun PlayerView.applyResizeModeForOrientation() {
-        // FIT keeps the full picture on screen (no crop). ZOOM was cutting edges.
-        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
     }
 
     private fun syncExoVideoScalingForOrientation() {
         if (!::playerManager.isInitialized || playerManager.isWebViewPlayback()) return
         val p = playerManager.getExoPlayer() ?: return
-        p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
     }
 
     private fun hideRotateHintOverlay() {
@@ -715,7 +714,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                 p.playWhenReady = true
                 if (!p.isPlaying) p.play()
             }
-            p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
             p.removeListener(exoPlayListener)
             p.addListener(exoPlayListener)
             updatePlayPauseIcon(p.playWhenReady && !playerManager.isUserPaused())

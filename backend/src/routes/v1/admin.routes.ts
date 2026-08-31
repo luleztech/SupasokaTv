@@ -329,7 +329,7 @@ adminRouter.post('/notify', requireAdmin, async (req, res, next) => {
     }
     const [out, eamaxMirror] = await Promise.all([
       sendPushToTopic({ title, body, target }),
-      mirrorPushToEamax({ title, body, scope: 'broadcast', target }),
+      mirrorPushToEamax({ title, body, scope: 'broadcast', target, kind: 'broadcast' }),
     ]);
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;
@@ -445,12 +445,6 @@ adminRouter.post('/notify-user/:id', requireAdmin, async (req, res, next) => {
     }
 
     const out = await sendPushToUser({ publicId, title, body });
-    const eamaxMirror = await mirrorPushToEamax({
-      title,
-      body,
-      scope: 'user',
-      externalId: publicId,
-    });
     const pool = getPool();
     let savedNotification: Record<string, unknown> | null = null;
     let notificationPersistError: string | undefined;
@@ -473,7 +467,6 @@ adminRouter.post('/notify-user/:id', requireAdmin, async (req, res, next) => {
     res.json({
       ok: true,
       ...out,
-      eamaxMirror,
       notification: savedNotification,
       ...(notificationPersistError ? { notificationPersistError } : {}),
     });
@@ -502,7 +495,7 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
       ok: boolean;
       messageId?: string;
       error?: string;
-      eamaxMirror?: Awaited<ReturnType<typeof mirrorPushToEamax>>;
+      eamaxMirror?: never;
     };
     const results: RowResult[] = [];
     let notificationPersistErrors = 0;
@@ -514,20 +507,11 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
         continue;
       }
       try {
-        const [out, eamaxMirror] = await Promise.all([
-          sendPushToUser({ publicId, title, body: bodyText }),
-          mirrorPushToEamax({
-            title,
-            body: bodyText,
-            scope: 'user',
-            externalId: publicId,
-          }),
-        ]);
+        const out = await sendPushToUser({ publicId, title, body: bodyText });
         results.push({
           id: publicId,
           ok: true,
           messageId: out.messageId,
-          eamaxMirror,
         });
         if (pool) {
           try {

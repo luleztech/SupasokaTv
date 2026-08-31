@@ -1,0 +1,53 @@
+name: SupaTV release builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'supatv-v*'
+
+jobs:
+  android-tv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supatv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses || true
+      - name: Build Android TV APK
+        run: chmod +x scripts/*.sh && ./scripts/build_android_tv.sh
+      - name: Upload Android TV APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: supatv-android-tv
+          path: supatv/releases/*-android-tv.apk
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: supatv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build Windows release
+        shell: bash
+        run: chmod +x scripts/*.sh && ./scripts/build_windows.sh
+      - name: Upload Windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: supatv-windows
+          path: supatv/releases/*-windows-x64.zip

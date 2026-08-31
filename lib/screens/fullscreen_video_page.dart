@@ -344,7 +344,7 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
       }));
 
       final started = await _waitUntilPlaying(
-        maxWait: Duration(seconds: kIsWeb ? 4 : 8),
+        maxWait: Duration(seconds: kIsWeb ? 3 : 4),
       );
       if (!mounted) return;
       if (!started && !_playbackConfirmed) {
@@ -593,8 +593,7 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
           });
         }
 
-        final isLandscape = orientation == Orientation.landscape;
-        final videoFit = isLandscape ? BoxFit.cover : BoxFit.contain;
+        final videoFit = BoxFit.cover;
 
         return Scaffold(
           backgroundColor: Colors.black,

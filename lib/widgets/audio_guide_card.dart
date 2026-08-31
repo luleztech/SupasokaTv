@@ -22,12 +22,14 @@ class AudioGuideCard extends StatefulWidget {
     required this.title,
     this.subtitle,
     this.autoPlay = false,
+    this.assetPackage,
     this.accent = const Color(0xFF22C55E),
     this.accentSecondary = const Color(0xFF06B6D4),
   });
 
   /// e.g. `audio/fungua_zote_guide.mp3` (relative to the `assets/` folder).
   final String assetPath;
+  final String? assetPackage;
   final String title;
   final String? subtitle;
   /// Start playback as soon as the card mounts (e.g. payments screen open).
@@ -123,13 +125,37 @@ class _AudioGuideCardState extends State<AudioGuideCard>
       _error = null;
     });
     try {
-      await _player.play(AssetSource(widget.assetPath));
+      await _playFirstAvailableAsset();
     } catch (_) {
       if (!mounted) return;
       setState(() => _error = 'Imeshindikana kuanzisha sauti. Jaribu tena.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _playFirstAvailableAsset() async {
+    Object? lastErr;
+    for (final path in _assetCandidates()) {
+      try {
+        await _player.play(AssetSource(path));
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr ?? Exception('asset missing');
+  }
+
+  List<String> _assetCandidates() {
+    final paths = <String>[widget.assetPath];
+    final pkg = widget.assetPackage?.trim();
+    if (pkg != null && pkg.isNotEmpty) {
+      paths.add('packages/$pkg/assets/${widget.assetPath}');
+    }
+    paths.add('packages/supasoka/assets/${widget.assetPath}');
+    final seen = <String>{};
+    return paths.where(seen.add).toList(growable: false);
   }
 
   Future<void> _toggle() async {
