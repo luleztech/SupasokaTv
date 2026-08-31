@@ -4,7 +4,6 @@ import { HttpError } from '../middleware/errorHandler';
 import { logger } from '../lib/logger';
 import {
   isMobileMoneyStkSendFailure,
-  isPaymentCreateRetryable,
   isPaymentRateLimitError,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
@@ -21,7 +20,7 @@ import {
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
-import { markPaymentStartAttempt } from './paymentStartCooldown';
+import { markPaymentStartSent } from './paymentStartCooldown';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 /** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
@@ -274,9 +273,8 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa create strategy — **one checkout = at most two API calls**:
- * 1) best MSISDN format for the wallet, 2) alternate format only if the first fails
- * with invalid-phone / routing (never chain channel hints — that burns quota).
+ * SonicPesa create strategy — up to 3 API calls per checkout, only on failure:
+ * 1) best MSISDN format, 2) alternate format, 3) one channel hint (non-Vodacom only).
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
@@ -302,6 +300,19 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
       buyer_phone: alt,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
       label: `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}`,
+    });
+  }
+
+  const isNonVodacom =
+    isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
+  const channel = sonicChannelHintsForNetwork(local0)[0];
+  if (isNonVodacom && channel && phones[0]) {
+    steps.push({
+      endpoint: 'payment/create_order',
+      buyer_phone: phones[0]!,
+      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+      label: `channel/${network}/${channel}`,
+      channel,
     });
   }
 
@@ -461,8 +472,6 @@ export async function tryCreateSonicOrder(args: {
     'sonic_create_begin',
   );
 
-  markPaymentStartAttempt(local0);
-
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
     try {
@@ -488,6 +497,7 @@ export async function tryCreateSonicOrder(args: {
             { orderId, network, step: step.label, phone: step.buyer_phone },
             'sonic_create_ok',
           );
+          markPaymentStartSent(local0);
           return {
             ok: true,
             orderId,
@@ -516,12 +526,8 @@ export async function tryCreateSonicOrder(args: {
           errorCode,
         };
       }
-      // STK / upstream failure — do not chain more create_order (burns MSISDN quota).
-      if (isSonicStkSendFailure(errorMessage, errorCode)) {
-        break;
-      }
-      // Wrong MSISDN shape or wallet channel — try the single alternate format only.
-      if (i < steps.length - 1 && isPaymentCreateRetryable(errorMessage, errorCode)) {
+      // Try alternate MSISDN format or channel hint — one step at a time.
+      if (i < steps.length - 1) {
         continue;
       }
       break;
