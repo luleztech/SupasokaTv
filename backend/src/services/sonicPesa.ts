@@ -492,7 +492,7 @@ export async function tryCreateSonicOrder(args: {
             { orderId, network, step: step.label, phone: step.buyer_phone },
             'sonic_create_ok',
           );
-          markPaymentStartSent(local0);
+          markPaymentStartSent(local0, orderId);
           return {
             ok: true,
             orderId,

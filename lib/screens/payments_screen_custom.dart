@@ -233,6 +233,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           });
         }
       } else {
+        final createdAtMs = prefs.getInt('pendingPaymentCreatedAtMs') ?? 0;
+        final ageMs = createdAtMs > 0
+            ? DateTime.now().millisecondsSinceEpoch - createdAtMs
+            : 0;
+        if (createdAtMs > 0 && ageMs > const Duration(minutes: 20).inMilliseconds) {
+          await _clearPendingOrderPrefs();
+          return;
+        }
         setState(() {
           _pollingOrderId = pending;
           _paymentUiPhase = _PaymentUiPhase.waiting;
@@ -240,11 +248,53 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         WidgetsBinding.instance.addPostFrameCallback((_) => _startPolling());
       }
     } catch (e) {
+      await _clearPendingOrderPrefs();
       if (mounted) {
         setState(() {
           _paymentUiPhase = _PaymentUiPhase.failed;
           _sessionEndDetail = _mapPaymentError(e);
         });
+      }
+    }
+  }
+
+  /// Drop abandoned pending checkout before a fresh "Lipia sasa" tap.
+  Future<void> _prepareForNewPaymentAttempt() async {
+    if (_paymentUiPhase == _PaymentUiPhase.waiting &&
+        _pollingOrderId != null &&
+        _pollingOrderId!.isNotEmpty) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final pending = prefs.getString('pendingPaymentOrderId')?.trim();
+    if (pending == null || pending.isEmpty) return;
+
+    try {
+      final res = await paymentsApi.checkPaymentStatus(pending);
+      final st = paymentStatusFromCheckResponse(res);
+      if (isPaymentCompleted(st)) return;
+      if (isPaymentTerminalFailure(st)) {
+        await _clearPendingOrderPrefs();
+        return;
+      }
+    } catch (_) {
+      if (_paymentUiPhase == _PaymentUiPhase.failed ||
+          _paymentUiPhase == _PaymentUiPhase.timedOut) {
+        await _clearPendingOrderPrefs();
+        return;
+      }
+    }
+
+    if (_paymentUiPhase == _PaymentUiPhase.failed ||
+        _paymentUiPhase == _PaymentUiPhase.timedOut ||
+        _paymentUiPhase == _PaymentUiPhase.none) {
+      final createdAtMs = prefs.getInt('pendingPaymentCreatedAtMs') ?? 0;
+      final ageMs = createdAtMs > 0
+          ? DateTime.now().millisecondsSinceEpoch - createdAtMs
+          : const Duration(hours: 1).inMilliseconds;
+      if (ageMs >= _kPaymentWaitSeconds * 1000) {
+        await _clearPendingOrderPrefs();
       }
     }
   }
@@ -554,8 +604,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     _paymentCompletionInProgress = false;
     _waitExpiryHandling = false;
     _stopPaymentTimersOnly();
-    // Keep pending order prefs so background recovery can still unlock if the
-    // previous payment actually completed after the user tapped "Anza upya".
+    unawaited(_prepareForNewPaymentAttempt());
+    // Keep pending order prefs only while recovery can still finish activation.
     setState(() {
       _paymentUiPhase = _PaymentUiPhase.none;
       _pollingOrderId = null;
@@ -912,6 +962,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     }
     final plan = bundle;
 
+    await _prepareForNewPaymentAttempt();
     _beginSubmitProgress();
     try {
       if (_userId == null || _userId!.isEmpty) {

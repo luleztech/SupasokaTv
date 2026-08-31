@@ -4,6 +4,7 @@
  */
 import { buildSonicCreateStepsForTest } from '../src/services/sonicPesa';
 import {
+  clearPaymentStartCooldown,
   markPaymentStartSent,
   paymentStartCooldownMessage,
 } from '../src/services/paymentStartCooldown';
@@ -28,11 +29,13 @@ function main() {
   assert(mpesa[0]!.buyer_phone.startsWith('255'), 'M-Pesa primary should be intl 255…');
 
   assert(paymentStartCooldownMessage('0712345678') === null, 'no cooldown before success');
-  markPaymentStartSent('0712345678');
+  markPaymentStartSent('0712345678', 'order-test-1');
   assert(
     paymentStartCooldownMessage('0712345678') != null,
     'cooldown after successful STK dispatch',
   );
+  clearPaymentStartCooldown('0712345678');
+  assert(paymentStartCooldownMessage('0712345678') === null, 'cooldown clears on reset');
 
   console.log(
     JSON.stringify({ ok: true, tigo: tigo.length, halotel: halotel.length, mpesa: mpesa.length }),

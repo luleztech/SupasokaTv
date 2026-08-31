@@ -28,7 +28,11 @@ import {
 import { getPool } from '../db/pool';
 import { activatePremiumForUser } from './premiumActivation';
 import { HttpError } from '../middleware/errorHandler';
-import { paymentStartCooldownMessage } from './paymentStartCooldown';
+import {
+  clearPaymentStartCooldown,
+  getPaymentStartCooldownEntry,
+  paymentStartCooldownMessage,
+} from './paymentStartCooldown';
 import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
@@ -175,6 +179,45 @@ export function startPaymentSuccessJson(out: {
   };
 }
 
+/** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
+async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<void> {
+  const entry = getPaymentStartCooldownEntry(localPhone);
+  if (!entry) return;
+
+  if (Date.now() - entry.at > 15 * 60 * 1000) {
+    clearPaymentStartCooldown(localPhone);
+    logger.info({ phone: localPhone, orderId: entry.orderId }, 'payment_cooldown_cleared_stale');
+    return;
+  }
+
+  if (!entry.orderId) {
+    // Legacy entry without order id — expire with the normal window only.
+    return;
+  }
+
+  try {
+    const { ok, paymentStatus } = await fetchSonicOrderStatus(entry.orderId);
+    const ps = String(paymentStatus ?? '').trim().toUpperCase();
+    if (!ok && !ps) {
+      clearPaymentStartCooldown(localPhone);
+      logger.info({ phone: localPhone, orderId: entry.orderId }, 'payment_cooldown_cleared_missing_order');
+      return;
+    }
+    if (isPaymentTerminalFailure(ps) || isPaymentCompletedStatus(ps)) {
+      clearPaymentStartCooldown(localPhone);
+      logger.info(
+        { phone: localPhone, orderId: entry.orderId, paymentStatus: ps },
+        'payment_cooldown_cleared_terminal_order',
+      );
+    }
+  } catch (e) {
+    logger.warn(
+      { phone: localPhone, orderId: entry.orderId, err: e instanceof Error ? e.message : String(e) },
+      'payment_cooldown_refresh_skipped',
+    );
+  }
+}
+
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   orderId: string;
   message: string;
@@ -232,6 +275,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   const buyerName = (input.buyerName ?? publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${publicId}@supasoka.app`).trim();
 
+  await refreshPaymentStartCooldownForPhone(localPhone);
   const cooldownMsg = paymentStartCooldownMessage(localPhone);
   if (cooldownMsg) {
     throw new HttpError(429, cooldownMsg, 'PAYMENT_COOLDOWN');
