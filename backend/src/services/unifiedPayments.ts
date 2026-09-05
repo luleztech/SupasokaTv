@@ -296,11 +296,15 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     const rateLimited =
       sonic.errorCode === 'PAYMENT_RATE_LIMIT' ||
       userMsg.includes('majaribio mengi') ||
-      userMsg.includes('umefanya majaribio');
+      userMsg.includes('umefanya majaribio') ||
+      userMsg.includes('umejaribu mara nyingi');
+    const busy =
+      sonic.errorCode === 'PAYMENT_BUSY' ||
+      userMsg.includes('huduma ina shughuli');
     throw new HttpError(
-      rateLimited ? 429 : 400,
+      rateLimited || busy ? 429 : 400,
       userMsg,
-      rateLimited ? 'PAYMENT_RATE_LIMIT' : 'SONIC_CREATE_FAILED',
+      rateLimited ? 'PAYMENT_RATE_LIMIT' : busy ? 'PAYMENT_BUSY' : 'SONIC_CREATE_FAILED',
     );
   }
 

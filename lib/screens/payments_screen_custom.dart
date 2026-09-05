@@ -647,26 +647,25 @@ class _PaymentsScreenState extends State<PaymentsScreen>
           ? raw
           : 'Ombi la malipo limetumwa kwenye simu yako. Angalia PIN kwenye simu, kisha subiri.';
     }
-    // Per-number Sonic quota — not our post-success cooldown.
+    // Per-number Sonic quota — not our post-success cooldown or API throttle.
     final isPerNumberQuota = lower.contains('majaribio mengi') ||
         lower.contains('umefanya majaribio') ||
+        lower.contains('umejaribu mara nyingi') ||
         ((lower.contains('nambari') ||
                 lower.contains('number') ||
                 lower.contains('phone') ||
-                lower.contains('msisdn') ||
-                lower.contains('simu')) &&
+                lower.contains('msisdn')) &&
             (lower.contains('attempt') ||
                 lower.contains('majaribio') ||
+                lower.contains('mara nyingi') ||
                 lower.contains('rate limit') ||
                 lower.contains('limit reached')));
     if (isPerNumberQuota) {
       if (raw.length > 20 && raw.length < 220) return raw;
       return 'Umefanya majaribio mengi kwa nambari hii. Subiri dakika 2–5 bila kubonyeza tena, kisha jaribu.';
     }
-    if (RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower)) {
-      return 'Ombi la malipo limetumwa hivi karibuni. Subiri dakika 2 bila kubonyeza "Lipia sasa" tena, kisha angalia simu yako kwa PIN.';
-    }
-    if (lower.contains('too many requests') ||
+    if (RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower) ||
+        lower.contains('too many requests') ||
         lower == 'rate limited' ||
         lower.contains('huduma ina shughuli')) {
       return 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';

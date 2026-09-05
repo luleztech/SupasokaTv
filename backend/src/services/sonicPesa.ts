@@ -4,20 +4,18 @@ import { HttpError } from '../middleware/errorHandler';
 import { logger } from '../lib/logger';
 import {
   isMobileMoneyStkSendFailure,
+  isPaymentApiThrottleError,
   isPaymentRateLimitError,
-  isRecoverablePaymentCreateError,
+  paymentBusyUserMessage,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
 import {
   detectTzMobileNetwork,
   formatPhoneToIntl255,
-  isAirtelLocalPhone,
   isHalotelLocalPhone,
   isSupportedSonicPushWallet,
-  isTigoYasLocalPhone,
   isVodacomMpesaLocalPhone,
   phoneCandidatesForSonicPesaApi,
-  sonicChannelHintsForNetwork,
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
@@ -26,21 +24,6 @@ import { markPaymentStartSent } from './paymentStartCooldown';
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
 /** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
 const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
-const SONIC_USSD_BUSY_DELAY_MS = 3_000;
-
-const sonicDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-function isTransientTransportError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes('timeout') ||
-    lower.includes('timed out') ||
-    lower.includes('aborted') ||
-    lower.includes('econnreset') ||
-    lower.includes('fetch failed') ||
-    lower.includes('network')
-  );
-}
 
 const SONIC_PAID_STATUSES = new Set([
   'SUCCESS',
@@ -274,60 +257,28 @@ type SonicCreateStep = {
 };
 
 /**
- * SonicPesa create strategy — up to 3 API calls per checkout, only on failure:
- * 1) best MSISDN format, 2) alternate format, 3) one channel hint (non-Vodacom only).
+ * Exactly one SonicPesa create_order per Lipia sasa tap.
+ * Official MSISDN is always `255XXXXXXXXX` — gateway auto-detects the wallet.
+ * Extra format/channel retries burn Sonic quota and surface "Too Many Attempts".
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
   const phones = phoneCandidatesForSonicPesaApi(local0);
-  if (phones.length === 0) {
-    return [buildSonicPrimaryCreateStep(local0)];
-  }
-
-  const steps: SonicCreateStep[] = [
+  const buyerPhone = phones[0] ?? formatPhoneToIntl255(local0);
+  return [
     {
       endpoint: 'payment/create_order',
-      buyer_phone: phones[0]!,
+      buyer_phone: buyerPhone,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `primary/${network}/${phones[0]!.startsWith('255') ? 'intl' : 'local'}`,
+      label: `intl/${network}/auto`,
     },
   ];
-
-  // Max 2 Sonic hits per tap — a 3rd step burns per-MSISDN quota and surfaces "Too Many Attempts".
-  const alt = phones.length > 1 ? phones[1]! : null;
-  if (alt && alt !== phones[0]) {
-    const isNonVodacom =
-      isHalotelLocalPhone(local0) || isTigoYasLocalPhone(local0) || isAirtelLocalPhone(local0);
-    const channel = isNonVodacom ? sonicChannelHintsForNetwork(local0)[0] : undefined;
-    steps.push({
-      endpoint: 'payment/create_order',
-      buyer_phone: alt,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: channel
-        ? `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}+${channel}`
-        : `alt/${network}/${alt.startsWith('255') ? 'intl' : 'local'}`,
-      channel,
-    });
-  }
-
-  return steps;
 }
 
 /** Test hook — mirrors production step builder without hitting SonicPesa API. */
 export function buildSonicCreateStepsForTest(localPhone: string): SonicCreateStep[] {
   return buildSonicCreateSteps(localPhone);
-}
-
-function buildSonicPrimaryCreateStep(localPhone: string): SonicCreateStep {
-  const local0 = toLocal0Digits(localPhone);
-  const network = detectTzMobileNetwork(local0);
-  return {
-    endpoint: 'payment/create_order',
-    buyer_phone: formatPhoneToIntl255(local0),
-    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    label: `intl/${network}/auto`,
-  };
 }
 
 function isSonicUssdBusy(responseMessage: string, responseCode: string): boolean {
@@ -394,14 +345,14 @@ export function mapSonicInitiateUserError(
   const msg = String(rawMessage || '').trim();
   const hayajatumika = /hayajatumika|hayajaweza kutumika|hayajaweza kutuma/i.test(msg);
   const wallet = walletLabelForLocalPhone(localPhone);
-  if (/too many attempts?/i.test(msg) || isPaymentRateLimitError(msg, code)) {
+  if (isPaymentRateLimitError(msg, code)) {
     return paymentRateLimitUserMessage();
+  }
+  if (isPaymentApiThrottleError(msg, code)) {
+    return paymentBusyUserMessage();
   }
   if (code === '103' || /ongoing ussd/i.test(msg)) {
     return 'Simu yako ina USSD nyingine zinazoendelea. Funga dirisha la malipo/USSD kwenye simu, subiri sekunde 30, kisha jaribu tena.';
-  }
-  if (isPaymentRateLimitError(msg, code)) {
-    return paymentRateLimitUserMessage();
   }
   if (isSonicStkSendFailure(msg, code) || hayajatumika) {
     if (isHalotelLocalPhone(localPhone)) {
@@ -474,14 +425,17 @@ export async function tryCreateSonicOrder(args: {
       const responseMessage = extractSonicResponseMessage(last.data);
       const responseCode = extractSonicResponseCode(last.data);
 
-      // Same-step retry only when handset already has an open USSD session.
+      // Do not auto-retry USSD-busy — a second create_order burns Sonic quota.
       if (isSonicUssdBusy(responseMessage, responseCode)) {
-        await sonicDelay(SONIC_USSD_BUSY_DELAY_MS);
-        last = await postSonicCreateOrder(step, { ...args, amountTzs });
+        return {
+          ok: false,
+          orderId: '',
+          message: responseMessage,
+          raw: last.data,
+          errorMessage: mapSonicInitiateUserError(args.localPhone, responseMessage, responseCode),
+          errorCode: responseCode || '103',
+        };
       }
-
-      const retryMessage = extractSonicResponseMessage(last.data);
-      const retryCode = extractSonicResponseCode(last.data);
 
       if (isSonicInitiateSuccess(last.data, last.response)) {
         const orderId = extractSonicOrderId(last.data);
@@ -505,8 +459,8 @@ export async function tryCreateSonicOrder(args: {
         }
       }
 
-      const errorMessage = retryMessage || 'Failed to start SonicPesa payment';
-      const errorCode = retryCode;
+      const errorMessage = responseMessage || 'Failed to start SonicPesa payment';
+      const errorCode = responseCode;
       logger.warn(
         { network, step: step.label, errorMessage, errorCode, phone: step.buyer_phone },
         'sonic_create_step_failed',
@@ -521,9 +475,15 @@ export async function tryCreateSonicOrder(args: {
           errorCode: 'PAYMENT_RATE_LIMIT',
         };
       }
-      // Only retry when another phone format / channel might help — not STK or generic failures.
-      if (i < steps.length - 1 && isRecoverablePaymentCreateError(errorMessage, errorCode)) {
-        continue;
+      if (isPaymentApiThrottleError(errorMessage, errorCode)) {
+        return {
+          ok: false,
+          orderId: '',
+          message: paymentBusyUserMessage(),
+          raw: last.data,
+          errorMessage: paymentBusyUserMessage(),
+          errorCode: 'PAYMENT_BUSY',
+        };
       }
       break;
     } catch (e) {
@@ -533,9 +493,6 @@ export async function tryCreateSonicOrder(args: {
       };
       const msg = e instanceof Error ? e.message : String(e);
       logger.warn({ network, step: step.label, err: msg }, 'sonic_create_step_exception');
-      if (i < steps.length - 1 && isTransientTransportError(msg)) {
-        continue;
-      }
       break;
     }
   }
@@ -550,6 +507,16 @@ export async function tryCreateSonicOrder(args: {
       raw: last.data,
       errorMessage: paymentRateLimitUserMessage(),
       errorCode: 'PAYMENT_RATE_LIMIT',
+    };
+  }
+  if (isPaymentApiThrottleError(errorMessage, errorCode)) {
+    return {
+      ok: false,
+      orderId: '',
+      message: paymentBusyUserMessage(),
+      raw: last.data,
+      errorMessage: paymentBusyUserMessage(),
+      errorCode: 'PAYMENT_BUSY',
     };
   }
   logger.warn({ network, errorMessage, errorCode }, 'sonic_create_failed');

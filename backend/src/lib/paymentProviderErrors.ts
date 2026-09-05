@@ -1,7 +1,8 @@
 /**
  * True only for explicit per-MSISDN / wallet attempt quotas.
- * Never treat Railway/CDN "Too Many Requests", bare 429, 9009, or "try again later"
- * as "umefanya majaribio mengi kwa nambari hii" — that falsely blocks first-time 070/Yas users.
+ * Never treat Railway/CDN "Too Many Requests", bare Laravel "Too Many Attempts.",
+ * bare 429, 9009, or "try again later" as "umefanya majaribio mengi kwa nambari hii"
+ * — that falsely blocks first-time users on every network.
  */
 export function isPaymentRateLimitError(message: string, code: string): boolean {
   const msg = String(message || '').toLowerCase().trim();
@@ -12,22 +13,14 @@ export function isPaymentRateLimitError(message: string, code: string): boolean 
   if (
     combined.includes('majaribio mengi') ||
     combined.includes('umefanya majaribio') ||
+    combined.includes('umejaribu mara nyingi') ||
     /subiri dakika\s*2|subiri dakika\s*5|dakika 2–5|dakika 2-5/i.test(combined)
   ) {
     return true;
   }
 
-  // Sonic per-MSISDN / merchant quota (often after chained create_order calls).
-  if (/too many attempts?/i.test(msg)) {
-    return true;
-  }
-
-  // Generic edge/CDN throttling — NOT a phone-number quota.
-  if (
-    /^too many requests$/i.test(msg) ||
-    /^rate limited$/i.test(msg) ||
-    /railway|edge rate|api rate limit|global rate/i.test(combined)
-  ) {
+  // Generic API/edge throttling — NOT a phone-number quota.
+  if (isPaymentApiThrottleError(message, code)) {
     return false;
   }
 
@@ -36,7 +29,7 @@ export function isPaymentRateLimitError(message: string, code: string): boolean 
       combined,
     );
   const mentionsAttempts =
-    /majaribio|attempt|tries|jaribio|too many (payment )?attempt|many attempt/i.test(
+    /majaribio|attempt|tries|jaribio|too many (payment )?attempt|many attempt|mara nyingi/i.test(
       combined,
     );
 
@@ -66,6 +59,39 @@ export function isPaymentRateLimitError(message: string, code: string): boolean 
   }
 
   // Bare HTTP 429 / "too many" / "rate limit" without phone context = not per-number.
+  return false;
+}
+
+/**
+ * Laravel/Sonic API or CDN throttle (merchant/IP), not per-wallet MSISDN quota.
+ * Bare "Too Many Attempts." must NOT become "Umefanya majaribio mengi…".
+ */
+export function isPaymentApiThrottleError(message: string, code: string): boolean {
+  const msg = String(message || '').toLowerCase().trim();
+  const codeStr = String(code ?? '').trim();
+  const combined = `${msg} ${codeStr}`.toLowerCase();
+
+  if (
+    /^too many attempts\.?$/i.test(msg) ||
+    /^too many requests\.?$/i.test(msg) ||
+    /^rate limited\.?$/i.test(msg)
+  ) {
+    return true;
+  }
+  if (
+    /railway|edge rate|api rate limit|global rate/i.test(combined) ||
+    codeStr === '429' ||
+    codeStr === 'E905'
+  ) {
+    return true;
+  }
+  // "Too Many Attempts" without phone/number wording = gateway throttle.
+  if (
+    /too many attempts?/i.test(msg) &&
+    !/nambari|number|phone|msisdn|simu|buyer/i.test(msg)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -135,6 +161,7 @@ export function isWalletRoutingPaymentError(message: string, code: string): bool
  */
 export function isRecoverablePaymentCreateError(message: string, code: string): boolean {
   if (isPaymentRateLimitError(message, code)) return false;
+  if (isPaymentApiThrottleError(message, code)) return false;
   if (isMobileMoneyStkSendFailure(message, code)) return false;
   return isInvalidPhonePaymentError(message, code) || isWalletRoutingPaymentError(message, code);
 }

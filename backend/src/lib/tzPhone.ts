@@ -144,24 +144,16 @@ export function formatPhoneToIntl255(local0: string): string {
 }
 
 /**
- * SonicPesa buyer_phone per official API docs — international 255XXXXXXXXX first
- * for Vodacom. Halopesa / Tigo-Yas / Airtel often reject 255… on Sonic — local 0… first.
+ * SonicPesa buyer_phone — official docs require international `255XXXXXXXXX` only.
+ * One format for every TZ wallet (M-Pesa, Tigo/Yas, Airtel, Halopesa) so we never
+ * burn a second create_order attempt with a local `0…` retry.
  * @see https://api.sonicpesa.com/api/v1/payment/create_order
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
   const intl255 = formatPhoneToIntl255(local0fmt);
-  // Halopesa / Mixx-Yas / Airtel: local national format first (matches EaMax).
-  if (
-    isHalotelLocalPhone(local0fmt) ||
-    isTigoYasLocalPhone(local0fmt) ||
-    isAirtelLocalPhone(local0fmt)
-  ) {
-    return [...new Set([local0fmt, intl255].filter((p) => p.length > 0))];
-  }
-  // Vodacom M-Pesa: international first (Sonic docs).
-  return [...new Set([intl255, local0fmt].filter((p) => p.length > 0))];
+  return intl255.length > 0 ? [intl255] : [];
 }
 
 /** Preferred SonicPesa `channel` values per operator (from gateway webhooks/docs). */
