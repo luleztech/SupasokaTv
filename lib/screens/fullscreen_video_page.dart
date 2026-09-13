@@ -34,7 +34,7 @@ class FullscreenVideoPage extends StatefulWidget {
     this.playbackToken,
     this.playbackMode = FlutterPlaybackMode.mediaKit,
     this.audioLanguage = 'sw',
-    this.defaultQuality = '360p',
+    this.defaultQuality = 'auto',
   });
 
   final String videoUrl;
@@ -306,7 +306,11 @@ class _FullscreenVideoPageState extends State<FullscreenVideoPage> with WidgetsB
   }
 
   Future<void> _initMediaKitWithFallback() async {
-    final player = Player();
+    final player = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 24 * 1024 * 1024,
+      ),
+    );
     _player = player;
     _videoController = VideoController(player);
 

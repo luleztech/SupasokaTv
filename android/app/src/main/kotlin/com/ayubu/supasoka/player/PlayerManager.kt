@@ -339,8 +339,7 @@ class PlayerManager(
                 ActiveEngine.NONE -> Log.w(TAG, "setAudioLanguage ignored — no active engine")
             }
             Log.d(TAG, "Audio language → $language (engine=$activeEngine)")
-            // Language APIs keep playWhenReady; only nudge if explicitly paused is false and not playing.
-            if (!userPaused && !isPlaying()) play()
+            // Keep playWhenReady; never re-enter play mid-stream (causes scratch).
         } catch (e: Exception) {
             Log.e(TAG, "setAudioLanguage error: ${e.message}", e)
         }

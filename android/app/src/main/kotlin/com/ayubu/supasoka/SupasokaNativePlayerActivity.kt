@@ -516,7 +516,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                 if (!playerManager.isUserPaused()) {
                     p.playWhenReady = true
                     p.volume = 1f
-                    if (!p.isPlaying) p.play()
+                    // Never call p.play() if already playWhenReady — mid-stream restart scratches audio.
                 }
                 updatePlayPauseIcon(p.isPlaying || p.playWhenReady)
             }
@@ -546,9 +546,7 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
                         PlayerLanguagePreferences.set(this, preferredAudioLanguage)
                         playerManager.setAudioLanguage(preferredAudioLanguage)
                         refreshLanguageChip()
-                        if (!playerManager.isUserPaused()) {
-                            playerManager.play()
-                        }
+                        // Do not call play() after language change — mid-stream restart scratches.
                     } catch (e: Exception) {
                         Log.e(TAG, "language switch failed", e)
                     }
@@ -712,7 +710,6 @@ class SupasokaNativePlayerActivity : AppCompatActivity() {
             p.volume = 1f
             if (!playerManager.isUserPaused() && !startupAutoplayDone) {
                 p.playWhenReady = true
-                if (!p.isPlaying) p.play()
             }
             p.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
             p.removeListener(exoPlayListener)

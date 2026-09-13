@@ -23,7 +23,9 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import com.ayubu.supasoka.domain.model.StreamSession
@@ -94,7 +96,20 @@ class ExoPlayerEngine(
     private val onTracksChangedCallback: (Tracks) -> Unit = {}
 ) {
     private var exoPlayer: ExoPlayer? = null
-    private val trackSelector = DefaultTrackSelector(context)
+    // Conservative ABR: slow upswitch + lower bandwidthFraction so WiFi spikes
+    // do not jump to 1080p then immediately rebuffer (audible scratch).
+    private val trackSelector = DefaultTrackSelector(
+        context,
+        AdaptiveTrackSelection.Factory(
+            /* minDurationForQualityIncreaseMs= */ 12_000,
+            /* maxDurationForQualityDecreaseMs= */ 8_000,
+            /* minDurationToRetainAfterDiscardMs= */ 15_000,
+            /* bandwidthFraction= */ 0.70f,
+        ),
+    )
+    private val bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+        .setSlidingWindowMaxWeight(8)
+        .build()
     private var currentSession: StreamSession? = null
     private var preferredAudioLanguage = "sw"
     private var selectedQuality: StreamQuality = StreamQuality.AUTO
@@ -114,9 +129,32 @@ class ExoPlayerEngine(
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 8_000
         private const val BACK_BUFFER_MS = 10_000
 
-        // Timeout configuration
-        private const val CONNECT_TIMEOUT_MS = 12_000
-        private const val READ_TIMEOUT_MS = 12_000
+        // AUTO soft-cap keeps WiFi stable; user can still pick 1080p manually.
+        private const val AUTO_MAX_HEIGHT = 720
+        private const val AUTO_MAX_BITRATE = 3_500_000
+
+        // Soft live edge — enough headroom for WiFi jitter without chasing forever.
+        private const val LIVE_TARGET_OFFSET_MS = 15_000L
+        private const val LIVE_MIN_OFFSET_MS = 4_000L
+        private const val LIVE_MAX_OFFSET_MS = 35_000L
+
+        // Timeout configuration — tolerate slow WiFi segments instead of hard-failing.
+        private const val CONNECT_TIMEOUT_MS = 18_000
+        private const val READ_TIMEOUT_MS = 20_000
+        private const val LOAD_RETRY_COUNT = 6
+    }
+
+    /** Shared DASH/HLS retry policy — flaky WiFi segment fetches recover instead of stalling. */
+    private fun createLoadErrorHandlingPolicy(): LoadErrorHandlingPolicy {
+        return object : DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                if (loadErrorInfo.errorCount >= LOAD_RETRY_COUNT) return C.TIME_UNSET
+                if (loadErrorInfo.exception !is IOException) return C.TIME_UNSET
+                return minOf(1000L shl (loadErrorInfo.errorCount - 1), 8_000L)
+            }
+
+            override fun getMinimumLoadableRetryCount(dataType: Int): Int = LOAD_RETRY_COUNT
+        }
     }
 
     fun initialize(streamSession: StreamSession) {
@@ -175,8 +213,12 @@ class ExoPlayerEngine(
                 .build()
 
             // Configure preferred audio before build (avoid ExoPlayer.trackSelector nullable shadow).
+            // Soft-cap AUTO so ABR never leaps to 1080p on a brief WiFi spike.
             trackSelector.parameters = trackSelector.parameters.buildUpon()
                 .setForceHighestSupportedBitrate(false)
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .setMaxVideoSize(Int.MAX_VALUE, AUTO_MAX_HEIGHT)
+                .setMaxVideoBitrate(AUTO_MAX_BITRATE)
                 .setPreferredAudioLanguages(
                     *preferredAudioLanguageAliases(preferredAudioLanguage).toTypedArray(),
                 )
@@ -185,16 +227,22 @@ class ExoPlayerEngine(
             exoPlayer = ExoPlayer.Builder(context)
                 .setTrackSelector(trackSelector)
                 .setLoadControl(loadControl)
+                .setBandwidthMeter(bandwidthMeter)
                 .build()
                 .apply {
                     addListener(PlayerEventListener())
                     setMediaSource(mediaSource)
                     prepare()
                     playWhenReady = true
-                    Log.d(TAG, "✅ Player prepared with playWhenReady=true loadControl=${MIN_BUFFER_MS}-${MAX_BUFFER_MS}ms")
+                    Log.d(
+                        TAG,
+                        "✅ Player prepared playWhenReady=true " +
+                            "loadControl=${MIN_BUFFER_MS}-${MAX_BUFFER_MS}ms " +
+                            "autoCap=${AUTO_MAX_HEIGHT}p/${AUTO_MAX_BITRATE / 1000}kbps",
+                    )
                 }
 
-            // Start on AUTO — forced 360p reselection at prepare causes audible scratch.
+            // Start on soft-capped AUTO — forced 360p reselection at prepare causes audible scratch.
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ Initialization failed", e)
@@ -357,9 +405,9 @@ class ExoPlayerEngine(
         if (format == StreamFormat.HLS || format == StreamFormat.DASH) {
             mediaItemBuilder.setLiveConfiguration(
                 MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(12_000)
-                    .setMinOffsetMs(3_000)
-                    .setMaxOffsetMs(35_000)
+                    .setTargetOffsetMs(LIVE_TARGET_OFFSET_MS)
+                    .setMinOffsetMs(LIVE_MIN_OFFSET_MS)
+                    .setMaxOffsetMs(LIVE_MAX_OFFSET_MS)
                     .setMinPlaybackSpeed(0.97f)
                     .setMaxPlaybackSpeed(1.03f)
                     .build(),
@@ -468,18 +516,7 @@ class ExoPlayerEngine(
         headers: Map<String, String>
     ): MediaSource {
         val dashFactory = DashMediaSource.Factory(dataSourceFactory)
-            .setLoadErrorHandlingPolicy(
-                object : DefaultLoadErrorHandlingPolicy() {
-                    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-                        if (loadErrorInfo.errorCount >= 6) return C.TIME_UNSET
-                        val cause = loadErrorInfo.exception
-                        if (cause !is IOException) return C.TIME_UNSET
-                        return minOf(1000L shl (loadErrorInfo.errorCount - 1), 8000L)
-                    }
-
-                    override fun getMinimumLoadableRetryCount(dataType: Int): Int = 6
-                },
-            )
+            .setLoadErrorHandlingPolicy(createLoadErrorHandlingPolicy())
 
         // Add DRM session manager if needed
         if (streamSession.drmType != DrmType.NONE) {
@@ -506,7 +543,8 @@ class ExoPlayerEngine(
         headers: Map<String, String>
     ): MediaSource {
         val hlsFactory = HlsMediaSource.Factory(dataSourceFactory)
-            .setAllowChunklessPreparation(false) // ✅ Change to FALSE for better compatibility
+            .setAllowChunklessPreparation(false) // better compatibility on flaky gateways
+            .setLoadErrorHandlingPolicy(createLoadErrorHandlingPolicy())
 
         // Add DRM session manager if needed (for SAMPLE-AES encryption)
         if (streamSession.drmType != DrmType.NONE) {
@@ -652,9 +690,14 @@ class ExoPlayerEngine(
     // ========== PLAYBACK CONTROL METHODS ==========
 
     fun play() {
-        exoPlayer?.playWhenReady = true
-        exoPlayer?.play()
-        Log.d(TAG, "▶️ Play called (autoplay)")
+        val player = exoPlayer ?: return
+        // Only flip playWhenReady — calling play() while already playing can scratch on some devices.
+        if (!player.playWhenReady) {
+            player.playWhenReady = true
+        } else if (!player.isPlaying && player.playbackState == Player.STATE_READY) {
+            player.playWhenReady = true
+        }
+        Log.d(TAG, "▶️ Play (playWhenReady=true, isPlaying=${player.isPlaying})")
     }
 
     fun pause() {
@@ -682,11 +725,11 @@ class ExoPlayerEngine(
                 player.trackSelectionParameters = player.trackSelectionParameters
                     .buildUpon()
                     .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                    .clearVideoSizeConstraints()
-                    .setMaxVideoBitrate(Int.MAX_VALUE)
+                    .setMaxVideoSize(Int.MAX_VALUE, AUTO_MAX_HEIGHT)
+                    .setMaxVideoBitrate(AUTO_MAX_BITRATE)
                     .setForceHighestSupportedBitrate(false)
                     .build()
-                Log.d(TAG, "🎨 Quality set to AUTO")
+                Log.d(TAG, "🎨 Quality set to AUTO (soft-cap ${AUTO_MAX_HEIGHT}p)")
                 return
             }
 
@@ -730,7 +773,7 @@ class ExoPlayerEngine(
         StreamQuality.QUALITY_480P -> 2_000_000
         StreamQuality.QUALITY_720P -> 4_000_000
         StreamQuality.QUALITY_1080P -> 8_000_000
-        StreamQuality.AUTO -> Int.MAX_VALUE
+        StreamQuality.AUTO -> AUTO_MAX_BITRATE
     }
 
     /**
@@ -1088,7 +1131,7 @@ class ExoPlayerEngine(
                         try {
                             player.seekToDefaultPosition()
                             player.prepare()
-                            player.play()
+                            player.playWhenReady = true
                             PlaybackState.BUFFERING
                         } catch (e: Exception) {
                             Log.w(TAG, "Live ENDED recovery failed: ${e.message}")

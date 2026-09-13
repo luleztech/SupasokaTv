@@ -498,12 +498,13 @@ object GatewayPlaybackJs {
           function applyDrm(pl) {
             if (!pl || typeof pl.configure !== 'function') return false;
             try {
-              // Clear any prior app restrictions that caused hasAppRestrictions=true.
+              // Clear height restrictions that caused hasAppRestrictions=true,
+              // but keep a soft bandwidth ceiling so AUTO ABR stays WiFi-stable.
               pl.configure({
                 restrictions: {
                   minHeight: 0, maxHeight: Infinity,
                   minWidth: 0, maxWidth: Infinity,
-                  minBandwidth: 0, maxBandwidth: Infinity
+                  minBandwidth: 0, maxBandwidth: 3500000
                 }
               });
               pl.configure(softDrmConfig());
@@ -959,6 +960,28 @@ object GatewayPlaybackJs {
                     try { hls.loadLevel = -1; } catch (eLoad) {}
                     try { hls.nextLevel = -1; } catch (eNext) {}
                     if (typeof hls.autoLevelEnabled !== 'undefined') hls.autoLevelEnabled = true;
+                    // Cap auto bitrate ~3.5 Mbps so WiFi spikes do not thrash quality.
+                    try {
+                      if (hls.config) {
+                        hls.config.maxMaxBufferLength = Math.max(hls.config.maxMaxBufferLength || 0, 40);
+                        hls.config.maxBufferLength = Math.max(hls.config.maxBufferLength || 0, 30);
+                        hls.config.maxBufferSize = Math.max(hls.config.maxBufferSize || 0, 60 * 1000 * 1000);
+                        hls.config.abrEwmaDefaultEstimate = Math.min(
+                          hls.config.abrEwmaDefaultEstimate || 500000, 1200000
+                        );
+                        hls.config.abrBandWidthFactor = 0.7;
+                        hls.config.abrBandWidthUpFactor = 0.6;
+                      }
+                      if (typeof hls.autoLevelCapping === 'number' || 'autoLevelCapping' in hls) {
+                        var cap = -1;
+                        for (var li = 0; li < hls.levels.length; li++) {
+                          var lh = hls.levels[li].height || 0;
+                          var lb = hls.levels[li].bitrate || hls.levels[li].bandwidth || 0;
+                          if ((lh > 0 && lh <= 720) || (lb > 0 && lb <= 3500000)) cap = li;
+                        }
+                        if (cap >= 0) hls.autoLevelCapping = cap;
+                      }
+                    } catch (eAbr) {}
                     return;
                   }
                   if (typeof hls.autoLevelEnabled !== 'undefined') hls.autoLevelEnabled = false;
@@ -1026,12 +1049,26 @@ object GatewayPlaybackJs {
                     if (maxH <= 0) {
                       pl.__eaMaxOkoaMaxH = 0;
                       pl.__eaMaxOkoaPinnedId = null;
+                      // Soft-cap AUTO bandwidth (not height) — avoids DRM 4012 while
+                      // stopping WiFi ABR from leaping to unstable high variants.
                       pl.configure({
-                        abr: { enabled: true },
+                        abr: {
+                          enabled: true,
+                          useNetworkInformation: true,
+                          switchInterval: 8,
+                          bandwidthUpgradeTarget: 0.80,
+                          bandwidthDowngradeTarget: 0.92
+                        },
+                        streaming: {
+                          bufferingGoal: 25,
+                          rebufferingGoal: 5,
+                          bufferBehind: 20,
+                          retryParameters: { maxAttempts: 6, baseDelay: 1000, timeout: 20000 }
+                        },
                         restrictions: {
                           minHeight: 0, maxHeight: Infinity,
                           minWidth: 0, maxWidth: Infinity,
-                          minBandwidth: 0, maxBandwidth: Infinity
+                          minBandwidth: 0, maxBandwidth: 3500000
                         }
                       });
                       applied = true;

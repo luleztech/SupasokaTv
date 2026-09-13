@@ -138,9 +138,9 @@ video::-webkit-media-controls-timeline{display:none!important}
     if(drm.clearKeys&&Object.keys(drm.clearKeys).length) drmCfg.clearKeys=drm.clearKeys;
     if(drm.servers&&Object.keys(drm.servers).length) drmCfg.servers=drm.servers;
     player.configure({
-      streaming:{bufferingGoal:20,rebufferingGoal:3,retryParameters:{maxAttempts:5,baseDelay:1000,timeout:30000}},
+      streaming:{bufferingGoal:25,rebufferingGoal:5,bufferBehind:20,retryParameters:{maxAttempts:6,baseDelay:1000,timeout:20000}},
       drm:drmCfg,
-      abr:{enabled:true,restrictions:{maxHeight:maxH,maxWidth:maxW}}
+      abr:{enabled:true,switchInterval:8,bandwidthUpgradeTarget:0.8,bandwidthDowngradeTarget:0.92,restrictions:{maxHeight:maxH,maxWidth:maxW,maxBandwidth:3500000}}
     });
     player.addEventListener('error',function(){ fail(true); });
     v.addEventListener('playing', ready);
