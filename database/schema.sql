@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS payment_intents (
   status TEXT NOT NULL DEFAULT 'PENDING',
   provider_status TEXT,
   activated_at_ms BIGINT,
+  premium_granted_until_ms BIGINT,
   provider_payload JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

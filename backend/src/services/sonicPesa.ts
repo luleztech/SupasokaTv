@@ -22,8 +22,11 @@ import {
 import { markPaymentStartSent } from './paymentStartCooldown';
 
 const SONIC_API_BASE = 'https://api.sonicpesa.com/api/v1';
-/** Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN. */
-const SONIC_CREATE_ORDER_TIMEOUT_MS = 28_000;
+/**
+ * Docs: Push USSD via create_order — gateway auto-detects wallet from MSISDN.
+ * Keep under ~16s so Vodacom can fall through to Aurax without a long hang.
+ */
+const SONIC_CREATE_ORDER_TIMEOUT_MS = 16_000;
 
 const SONIC_PAID_STATUSES = new Set([
   'SUCCESS',
@@ -446,7 +449,7 @@ export async function tryCreateSonicOrder(args: {
             { orderId, network, step: step.label, phone: step.buyer_phone },
             'sonic_create_ok',
           );
-          markPaymentStartSent(local0, orderId);
+          markPaymentStartSent(local0, orderId, 'sonicpesa');
           return {
             ok: true,
             orderId,
@@ -487,18 +490,33 @@ export async function tryCreateSonicOrder(args: {
       }
       break;
     } catch (e) {
-      last = {
-        response: new Response(null, { status: 502 }),
-        data: { status: 'error', message: e instanceof Error ? e.message : String(e) },
-      };
       const msg = e instanceof Error ? e.message : String(e);
-      logger.warn({ network, step: step.label, err: msg }, 'sonic_create_step_exception');
+      const timedOut = /abort|timeout|timed out|network|fetch failed|econnreset|enotfound/i.test(msg);
+      last = {
+        response: new Response(null, { status: timedOut ? 504 : 502 }),
+        data: {
+          status: 'error',
+          message: timedOut ? 'SonicPesa gateway timeout' : msg,
+          code: timedOut ? 'GATEWAY_TIMEOUT' : 'GATEWAY_ERROR',
+        },
+      };
+      logger.warn({ network, step: step.label, err: msg, timedOut }, 'sonic_create_step_exception');
+      if (timedOut) {
+        return {
+          ok: false,
+          orderId: '',
+          message: 'SonicPesa gateway timeout',
+          raw: last.data,
+          errorMessage: paymentBusyUserMessage(),
+          errorCode: 'GATEWAY_TIMEOUT',
+        };
+      }
       break;
     }
   }
 
   const errorMessage = extractSonicResponseMessage(last.data) || 'Failed to start SonicPesa payment';
-  const errorCode = extractSonicResponseCode(last.data);
+  const errorCode = extractSonicResponseCode(last.data) || String(last.data.code ?? '');
   if (isPaymentRateLimitError(errorMessage, errorCode)) {
     return {
       ok: false,
@@ -509,14 +527,18 @@ export async function tryCreateSonicOrder(args: {
       errorCode: 'PAYMENT_RATE_LIMIT',
     };
   }
-  if (isPaymentApiThrottleError(errorMessage, errorCode)) {
+  if (
+    isPaymentApiThrottleError(errorMessage, errorCode) ||
+    errorCode === 'GATEWAY_TIMEOUT' ||
+    /gateway timeout|timed out|abort/i.test(errorMessage)
+  ) {
     return {
       ok: false,
       orderId: '',
       message: paymentBusyUserMessage(),
       raw: last.data,
       errorMessage: paymentBusyUserMessage(),
-      errorCode: 'PAYMENT_BUSY',
+      errorCode: errorCode === 'GATEWAY_TIMEOUT' ? 'GATEWAY_TIMEOUT' : 'PAYMENT_BUSY',
     };
   }
   logger.warn({ network, errorMessage, errorCode }, 'sonic_create_failed');

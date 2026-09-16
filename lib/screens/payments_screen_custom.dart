@@ -920,9 +920,12 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
   Future<void> _send() async {
     if (_submitting || _paymentPollArmed || _paymentCompletionInProgress) return;
+    // Guard immediately so a second tap cannot race past the async gap below.
+    setState(() => _submitting = true);
 
     final bundles = _bundlesFromStore(context.read<ContentStore>().malipoPayPlans);
     if (bundles.isEmpty) {
+      if (mounted) setState(() => _submitting = false);
       _showStatus(
         'Mipango hayajapatikana',
         'Bei zinasimamiwa na msimamizi kwenye SupaAdmin (Malipo). Sasisha ukurasa huu baada ya kuweka mipango.',
@@ -931,14 +934,26 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       return;
     }
     if (_selectedBundle == null) {
+      if (mounted) setState(() => _submitting = false);
       _showStatus('Chagua bundle', 'Tafadhali chagua bundle unayotaka kulipa.', _PayDialogTone.error);
       return;
     }
     final clean = _cleanPhone;
     if (clean.isEmpty || !_phoneValid(_phoneCtrl.text)) {
+      if (mounted) setState(() => _submitting = false);
       _showStatus(
         'Nambari ya simu',
-        'Andika namba ya simu ukianza na 0.',
+        'Andika namba kamili ya Tanzania ukianza na 0.\n${TanzaniaPhone.networksHint()}',
+        _PayDialogTone.error,
+      );
+      return;
+    }
+    if (!TanzaniaPhone.supportsPushUssd(clean)) {
+      if (mounted) setState(() => _submitting = false);
+      final wallet = TanzaniaPhone.walletLabel(clean) ?? 'simu hii';
+      _showStatus(
+        'Nambari haikubaliwi',
+        'Nambari hii ($wallet) haipokei ombi la malipo. ${TanzaniaPhone.networksHint()}',
         _PayDialogTone.error,
       );
       return;
@@ -952,6 +967,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       }
     }
     if (bundle == null) {
+      if (mounted) setState(() => _submitting = false);
       _showStatus(
         'Chagua mpango tena',
         'Mipango yalisasishwa. Chagua bei/kipindi tena.',
@@ -1068,7 +1084,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         setState(() => _selectedBundle = null);
       });
     }
-    final showPayCta = _phoneOk && _selectedBundle != null;
+    final showPayCta =
+        _phoneOk && TanzaniaPhone.supportsPushUssd(_phoneCtrl.text) && _selectedBundle != null;
     final payEnabled = showPayCta && !_submitting;
 
     return Material(
@@ -1504,7 +1521,17 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Widget _buildWalletHint() {
-    if (!_phoneOk) return const SizedBox.shrink();
+    if (!_phoneOk) {
+      return Text(
+        TanzaniaPhone.networksHint(),
+        style: TextStyle(
+          fontSize: 12,
+          height: 1.35,
+          color: _payMuted.withValues(alpha: 0.95),
+          fontWeight: FontWeight.w500,
+        ),
+      );
+    }
 
     return Builder(
       builder: (_) {
@@ -1514,8 +1541,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
 
         return Text(
           supported
-              ? 'Ombi litatumwa kwa $wallet.'
-              : 'Nambari hii ($wallet) huenda isipokee Push USSD.',
+              ? 'Ombi litatumwa kwa $wallet — angalia PIN kwenye simu.'
+              : 'Nambari hii ($wallet) haipokei Push USSD. ${TanzaniaPhone.networksHint()}',
           style: TextStyle(
             fontSize: 12.5,
             height: 1.35,
@@ -2742,7 +2769,17 @@ class _DesktopCheckoutCard extends StatelessWidget {
           const SizedBox(height: 10),
           Builder(
             builder: (_) {
-              if (!phoneOk) return const SizedBox.shrink();
+              if (!phoneOk) {
+                return Text(
+                  TanzaniaPhone.networksHint(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: _payMuted.withValues(alpha: 0.95),
+                    fontWeight: FontWeight.w500,
+                  ),
+                );
+              }
 
               final wallet = TanzaniaPhone.walletLabel(phoneCtrl.text);
               final supported = TanzaniaPhone.supportsPushUssd(phoneCtrl.text);
@@ -2750,8 +2787,8 @@ class _DesktopCheckoutCard extends StatelessWidget {
 
               return Text(
                 supported
-                    ? 'Ombi litatumwa kwa $wallet.'
-                    : 'Nambari hii ($wallet) huenda isipokee Push USSD.',
+                    ? 'Ombi litatumwa kwa $wallet — angalia PIN kwenye simu.'
+                    : 'Nambari hii ($wallet) haipokei Push USSD. ${TanzaniaPhone.networksHint()}',
                 style: TextStyle(
                   fontSize: 12.5,
                   height: 1.35,

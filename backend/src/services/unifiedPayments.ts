@@ -23,6 +23,7 @@ import {
   ensurePaymentIntentsTable,
   getIntent,
   markIntentActivated,
+  markIntentPremiumGranted,
   upsertPendingIntent,
   updateIntentStatus,
 } from './paymentIntents';
@@ -32,6 +33,8 @@ import { HttpError } from '../middleware/errorHandler';
 import {
   clearPaymentStartCooldown,
   getPaymentStartCooldownEntry,
+  getRecentPaymentStartEntry,
+  isPaymentStartPendingRetryWindow,
   markPaymentStartSent,
   paymentStartCooldownMessage,
 } from './paymentStartCooldown';
@@ -196,7 +199,7 @@ export function startPaymentSuccessJson(out: {
 
 /** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
 async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<void> {
-  const entry = getPaymentStartCooldownEntry(localPhone);
+  const entry = getRecentPaymentStartEntry(localPhone) ?? getPaymentStartCooldownEntry(localPhone);
   if (!entry) return;
 
   if (Date.now() - entry.at > 15 * 60 * 1000) {
@@ -212,7 +215,7 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
 
   try {
     const intent = await getIntent(entry.orderId);
-    const provider = String(intent?.payment_provider ?? '').toLowerCase();
+    const provider = String(intent?.payment_provider ?? entry.provider ?? '').toLowerCase();
     let ok = false;
     let paymentStatus = '';
     if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
@@ -235,6 +238,15 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
       logger.info(
         { phone: localPhone, orderId: entry.orderId, paymentStatus: ps },
         'payment_cooldown_cleared_terminal_order',
+      );
+      return;
+    }
+    // Still PENDING after ~45s — likely silent STK miss; free the user to retry.
+    if (isPaymentStartPendingRetryWindow(localPhone)) {
+      clearPaymentStartCooldown(localPhone);
+      logger.info(
+        { phone: localPhone, orderId: entry.orderId, paymentStatus: ps || 'PENDING' },
+        'payment_cooldown_cleared_pending_retry',
       );
     }
   } catch (e) {
@@ -262,7 +274,18 @@ function shouldPreferAuraxForPhone(localPhone: string): boolean {
   );
 }
 
-/** Fall back to Aurax when Sonic is busy/throttled or STK never left the gateway. */
+/**
+ * If the last "successful" Aurax order is still pending (no PIN on phone),
+ * skip Aurax prefer and try Sonic so the user is not stuck in a silent loop.
+ */
+function shouldSkipAuraxPreferAfterSilentMiss(localPhone: string): boolean {
+  const recent = getRecentPaymentStartEntry(localPhone);
+  if (!recent?.orderId) return false;
+  if (String(recent.provider ?? '').toLowerCase() !== PAYMENT_PROVIDERS.AURAX) return false;
+  return isPaymentStartPendingRetryWindow(localPhone);
+}
+
+/** Fall back to Aurax when Sonic is busy/throttled, times out, or STK never left the gateway. */
 function shouldFallbackSonicToAurax(args: {
   localPhone: string;
   rawMsg: string;
@@ -279,9 +302,12 @@ function shouldFallbackSonicToAurax(args: {
   }
   return (
     args.errorCode === 'PAYMENT_BUSY' ||
+    args.errorCode === 'GATEWAY_TIMEOUT' ||
+    args.errorCode === 'GATEWAY_ERROR' ||
     isPaymentApiThrottleError(args.rawMsg, args.rawCode) ||
     isMobileMoneyStkSendFailure(args.rawMsg, args.rawCode) ||
     /huduma ina shughuli|too many attempts|too many requests|rate limited/i.test(args.rawMsg) ||
+    /gateway timeout|timed out|abort|fetch failed|network|econnreset/i.test(args.rawMsg) ||
     /hayajatumika|could not send|push failed|upstream|9012|9009|999/i.test(
       `${args.rawMsg} ${args.rawCode}`,
     )
@@ -303,47 +329,59 @@ async function startAuraxPaymentIntent(args: {
   status: string;
 } | null> {
   if (!isAuraxConfigured()) return null;
-  const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const aurax = await tryCreateAuraxOrder({
-    localPhone: args.localPhone,
-    amountTzs: args.amountTzs,
-    buyerName: args.buyerName,
-    buyerEmail: args.buyerEmail,
-    publicId: args.publicId,
-    planId: args.planId,
-    clientOrderId,
-  });
-  if (!aurax.ok || !aurax.orderId) {
+  try {
+    const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const aurax = await tryCreateAuraxOrder({
+      localPhone: args.localPhone,
+      amountTzs: args.amountTzs,
+      buyerName: args.buyerName,
+      buyerEmail: args.buyerEmail,
+      publicId: args.publicId,
+      planId: args.planId,
+      clientOrderId,
+    });
+    if (!aurax.ok || !aurax.orderId) {
+      logger.warn(
+        {
+          phone: args.localPhone,
+          network: detectTzMobileNetwork(args.localPhone),
+          auraxMsg: aurax.errorMessage ?? aurax.message,
+        },
+        'payment_aurax_create_failed',
+      );
+      return null;
+    }
+    await upsertPendingIntent({
+      orderId: aurax.orderId,
+      publicId: args.publicId,
+      planId: args.planId,
+      amountTzs: args.amountTzs,
+      buyerPhone: args.localPhone,
+      provider: PAYMENT_PROVIDERS.AURAX,
+      providerPayload: {
+        ...aurax.raw,
+        ...(args.fallbackFrom ? { fallbackFrom: args.fallbackFrom } : { preferredRoute: 'aurax' }),
+        clientOrderId,
+      },
+    });
+    markPaymentStartSent(args.localPhone, aurax.orderId, PAYMENT_PROVIDERS.AURAX);
+    return {
+      orderId: aurax.orderId,
+      message: aurax.message,
+      provider: PAYMENT_PROVIDERS.AURAX,
+      status: 'pending',
+    };
+  } catch (e) {
     logger.warn(
       {
         phone: args.localPhone,
         network: detectTzMobileNetwork(args.localPhone),
-        auraxMsg: aurax.errorMessage ?? aurax.message,
+        err: e instanceof Error ? e.message : String(e),
       },
-      'payment_aurax_create_failed',
+      'payment_aurax_create_threw',
     );
     return null;
   }
-  await upsertPendingIntent({
-    orderId: aurax.orderId,
-    publicId: args.publicId,
-    planId: args.planId,
-    amountTzs: args.amountTzs,
-    buyerPhone: args.localPhone,
-    provider: PAYMENT_PROVIDERS.AURAX,
-    providerPayload: {
-      ...aurax.raw,
-      ...(args.fallbackFrom ? { fallbackFrom: args.fallbackFrom } : { preferredRoute: 'aurax' }),
-      clientOrderId,
-    },
-  });
-  markPaymentStartSent(args.localPhone, aurax.orderId);
-  return {
-    orderId: aurax.orderId,
-    message: aurax.message,
-    provider: PAYMENT_PROVIDERS.AURAX,
-    status: 'pending',
-  };
 }
 
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
@@ -358,9 +396,11 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   }
   const localPhone = phoneNorm.local;
   if (!isSupportedSonicPushWallet(localPhone)) {
-    logger.warn(
-      { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
-      'payment_start_unsupported_prefix',
+    const wallet = walletLabelForLocalPhone(localPhone);
+    throw new HttpError(
+      400,
+      `Nambari hii (${wallet}) haipokei Push USSD. Tumia M-Pesa (074–079), Tigo/Yas (065/067/070/071/077), Airtel (066/068/069/078) au Halopesa (061–063).`,
+      'UNSUPPORTED_WALLET',
     );
   }
   const amountTzs = Math.trunc(input.amountTzs);
@@ -409,8 +449,12 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     throw new HttpError(429, cooldownMsg, 'PAYMENT_COOLDOWN');
   }
 
+  let auraxAlreadyTried = false;
+
   // Halopesa / Tigo-Yas / Airtel → Aurax first so Push USSD reaches the handset.
-  if (shouldPreferAuraxForPhone(localPhone)) {
+  // Skip prefer if a recent Aurax order looks like a silent STK miss — try Sonic instead.
+  const skipAuraxPrefer = shouldSkipAuraxPreferAfterSilentMiss(localPhone);
+  if (shouldPreferAuraxForPhone(localPhone) && !skipAuraxPrefer) {
     logger.info(
       {
         phone: localPhone,
@@ -427,10 +471,20 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
       publicId,
       planId: input.planId,
     });
+    auraxAlreadyTried = true;
     if (auraxFirst) return auraxFirst;
     logger.warn(
       { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
       'payment_aurax_preferred_failed_trying_sonic',
+    );
+  } else if (skipAuraxPrefer) {
+    logger.info(
+      {
+        phone: localPhone,
+        network: detectTzMobileNetwork(localPhone),
+        recent: getRecentPaymentStartEntry(localPhone),
+      },
+      'payment_skip_aurax_prefer_silent_miss_trying_sonic',
     );
   }
 
@@ -454,14 +508,15 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   if (!sonic.ok || !sonic.orderId) {
     const rawMsg = sonic.message || sonic.errorMessage || '';
     const rawCode = sonic.errorCode ?? '';
-    if (
+    const canFallback =
+      !auraxAlreadyTried &&
       shouldFallbackSonicToAurax({
         localPhone,
         rawMsg,
         rawCode,
         errorCode: sonic.errorCode,
-      })
-    ) {
+      });
+    if (canFallback) {
       logger.warn(
         {
           phone: localPhone,
@@ -471,7 +526,10 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
           rawCode,
           errorCode: sonic.errorCode,
           stkFailure: isMobileMoneyStkSendFailure(rawMsg, rawCode),
-          busy: sonic.errorCode === 'PAYMENT_BUSY' || isPaymentApiThrottleError(rawMsg, rawCode),
+          busy:
+            sonic.errorCode === 'PAYMENT_BUSY' ||
+            sonic.errorCode === 'GATEWAY_TIMEOUT' ||
+            isPaymentApiThrottleError(rawMsg, rawCode),
         },
         'payment_sonic_failed_trying_aurax',
       );
@@ -497,6 +555,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
       userMsg.includes('umejaribu mara nyingi');
     const busy =
       sonic.errorCode === 'PAYMENT_BUSY' ||
+      sonic.errorCode === 'GATEWAY_TIMEOUT' ||
       userMsg.includes('huduma ina shughuli');
     throw new HttpError(
       rateLimited || busy ? 429 : 400,
@@ -581,12 +640,13 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   if (!pool) return null;
   await ensurePaymentIntentsTable();
 
-  // Catch paid orders that never granted premium (missed webhook / status lag / stuck stamp).
+  // Only never-granted paid orders — already-granted must not re-extend after expiry.
   const res = await pool.query<{ order_id: string; status: string; provider_status: string | null }>(
     `SELECT order_id, status, provider_status
      FROM payment_intents
      WHERE public_id = $1
-       AND updated_at > now() - interval '90 days'
+       AND premium_granted_until_ms IS NULL
+       AND updated_at > now() - interval '14 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC
      LIMIT 25`,
@@ -603,7 +663,6 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
     }
     if (!paid) continue;
 
-    // Verified paid order must unlock (trustPaid also clears/bypass revoke for never-granted repairs).
     const act = await ensurePremiumActivatedForPaidOrder(
       row.order_id,
       { publicId: trimmed },
@@ -651,6 +710,7 @@ async function writePremiumForOrder(
     note: `${notePrefix}:${orderId}`,
   });
   await markIntentActivated(orderId);
+  await markIntentPremiumGranted(orderId, activated.premiumUntilMs);
   logger.info(
     { orderId, publicId: identity.publicId, planId: identity.planId, premiumUntilMs: activated.premiumUntilMs },
     'payment_activated_premium',
@@ -658,21 +718,40 @@ async function writePremiumForOrder(
   return { premiumUntilMs: activated.premiumUntilMs };
 }
 
+/** Fresh activation race: stamp set but premium write failed — only repair within this window. */
+const PREMIUM_GRANT_REPAIR_MS = 15 * 60 * 1000;
+
 /**
  * Handle intents already stamped activated_at_ms.
- * - Active premium → success
- * - Note has sonicpesa:orderId and premium expired → one-shot window, do not re-grant
- * - Stamp without grant marker (delete/race stuck) → repair when paid/trustPaid
- * - Admin revoke + grant marker → honor revoke unless trustPaid repair of never-granted
+ * One-shot: once premium_granted_until_ms is set (or legacy grant marker / old stamp),
+ * never write a new premium window for this order after natural expiry.
  */
 async function resolveActivatedIntentPremium(
   orderId: string,
   identity: { publicId: string; planId: string; phone: string },
   opts?: { trustPaid?: boolean },
 ): Promise<{ activated: boolean; premiumUntilMs?: number }> {
+  const intent = await getIntent(orderId);
   const { getUserPremiumRecord } = await import('./userDirectory.js');
   const rec = await getUserPremiumRecord(identity.publicId);
+
+  const grantedUntilRaw = intent?.premium_granted_until_ms;
+  const alreadyGranted =
+    grantedUntilRaw != null &&
+    String(grantedUntilRaw).trim() !== '' &&
+    Number.isFinite(Number(grantedUntilRaw));
+
+  if (alreadyGranted) {
+    if (isPremiumUntilActiveLocal(rec.premiumUntilMs)) {
+      return { activated: true, premiumUntilMs: rec.premiumUntilMs };
+    }
+    // Window for this payment already consumed — do not re-grant after expiry.
+    return { activated: false };
+  }
+
   if (isPremiumUntilActiveLocal(rec.premiumUntilMs)) {
+    // User is active; backfill one-shot marker without extending.
+    await markIntentPremiumGranted(orderId, rec.premiumUntilMs);
     return { activated: true, premiumUntilMs: rec.premiumUntilMs };
   }
 
@@ -680,12 +759,22 @@ async function resolveActivatedIntentPremium(
   const grantedThisOrder =
     note.includes(`sonicpesa:${orderId}`) || note.includes(`aurax:${orderId}`);
   if (grantedThisOrder) {
-    // Subscription window already consumed for this order (expired or revoked after grant).
+    const stamp = Number(rec.premiumUntilMs) || Number(intent?.activated_at_ms) || Date.now();
+    await markIntentPremiumGranted(orderId, stamp);
     return { activated: false };
   }
 
-  // activated_at_ms set but premium never written for this order (legacy delete stamp / failed write).
-  if (!opts?.trustPaid) {
+  const activatedAt = Number(intent?.activated_at_ms ?? 0);
+  const freshStamp =
+    Number.isFinite(activatedAt) &&
+    activatedAt > 0 &&
+    Date.now() - activatedAt < PREMIUM_GRANT_REPAIR_MS;
+
+  // Legacy activated stamp without grant column: treat as already consumed unless very fresh.
+  if (!freshStamp || !opts?.trustPaid) {
+    if (Number.isFinite(activatedAt) && activatedAt > 0) {
+      await markIntentPremiumGranted(orderId, activatedAt);
+    }
     return { activated: false };
   }
 
@@ -756,8 +845,22 @@ export async function ensurePremiumActivatedForPaidOrder(
   }
 
   const { isUserPremiumRevokeLocked } = await import('./userDirectory.js');
-  // Admin revoke lock blocks casual paths — verified paid (trustPaid) still unlocks.
-  if (!opts?.trustPaid && (await isUserPremiumRevokeLocked(identity.publicId))) {
+  // Admin revoke blocks re-unlock from old orders. A brand-new unpaid grant for this
+  // order still proceeds — activatePremiumForUser clears the revoke marker.
+  if (await isUserPremiumRevokeLocked(identity.publicId)) {
+    const alreadyConsumed =
+      intent?.premium_granted_until_ms != null || intent?.activated_at_ms != null;
+    if (alreadyConsumed) {
+      return { activated: false };
+    }
+  }
+
+  if (intent?.premium_granted_until_ms != null) {
+    const { getUserPremiumRecord } = await import('./userDirectory.js');
+    const rec = await getUserPremiumRecord(identity.publicId);
+    if (isPremiumUntilActiveLocal(rec.premiumUntilMs)) {
+      return { activated: true, premiumUntilMs: rec.premiumUntilMs };
+    }
     return { activated: false };
   }
 
@@ -792,6 +895,7 @@ export async function reconcileUnactivatedPaidIntents(limit = 40): Promise<numbe
      FROM payment_intents
      WHERE public_id IS NOT NULL AND public_id <> ''
        AND plan_id IS NOT NULL AND plan_id <> ''
+       AND premium_granted_until_ms IS NULL
        AND updated_at > now() - interval '14 days'
        AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC

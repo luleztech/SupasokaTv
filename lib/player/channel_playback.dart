@@ -135,7 +135,8 @@ Future<void> _handlePlaybackResolve(
         await _openResolvedPlayback(context, retry.session!, channel: channel);
         return;
       }
-      if (channel.streamUrl.trim().isNotEmpty &&
+      if (channel.free &&
+          channel.streamUrl.trim().isNotEmpty &&
           !channelRequiresPlaybackResolve(channel)) {
         await _openQuickFromChannel(context, channel);
         return;
@@ -156,13 +157,23 @@ Future<void> openChannelPlayback(BuildContext context, int channelId) async {
   await openChannelPlaybackForChannel(context, ch);
 }
 
-/// One-tap open — uses cached/list URL immediately; refreshes authority in background.
+/// One-tap open — paid channels always go through /playback (server premium gate).
 Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel) async {
   final store = context.read<ContentStore>();
   if (store.updateRequired) return;
 
+  // Paid channels: never quick-open a list URL — enforce server premium + expiry.
   if (!channel.free) {
-    unawaited(SubscriptionStore.syncPremiumFromBackend());
+    final active = await SubscriptionStore.syncAndCheckPremiumActive();
+    if (!context.mounted) return;
+    if (!active) {
+      await _handlePremiumRequired(context, channel);
+      return;
+    }
+    final resolved = await resolveChannelPlayback(channel.id, bypassCache: true);
+    if (!context.mounted) return;
+    await _handlePlaybackResolve(context, channel, resolved);
+    return;
   }
 
   final needsSecrets = channelRequiresPlaybackResolve(channel);
@@ -172,7 +183,7 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
       cached.streamUrl.trim().isNotEmpty &&
       (!needsSecrets || !_sessionNeedsFreshPlaybackResolve(cached))) {
     await _openResolvedPlayback(context, cached, channel: channel);
-    unawaited(resolveChannelPlayback(channel.id, bypassCache: !channel.free));
+    unawaited(resolveChannelPlayback(channel.id, bypassCache: false));
     return;
   }
 
@@ -196,7 +207,7 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
 
   final resolved = await resolveChannelPlayback(
     channel.id,
-    bypassCache: !channel.free,
+    bypassCache: false,
   );
   if (!context.mounted) return;
   await _handlePlaybackResolve(context, channel, resolved);

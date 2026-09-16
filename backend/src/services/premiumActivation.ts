@@ -167,6 +167,13 @@ async function resolvePlanDurationMs(pool: Pool, planId: string): Promise<number
   return planDurationMsFromSlug(trimmed) ?? 30 * MS_DAY;
 }
 
+/** Public helper for maintenance / reconcile capping. */
+export async function resolvePlanDurationMsForPlanId(planId: string): Promise<number> {
+  const pool = getPool();
+  if (!pool) return planDurationMsFromSlug(planId.trim()) ?? 30 * MS_DAY;
+  return resolvePlanDurationMs(pool, planId);
+}
+
 /**
  * Premium end = base + plan duration.
  * When renewing while still premium, base is the current end so leftover time is kept.
@@ -227,21 +234,31 @@ export async function activatePremiumForUser(args: {
   const baseMs = Number.isFinite(existingMs) && existingMs > now ? existingMs : now;
   const end = computePremiumEndMs(baseMs, dur);
 
+  const existingNote = String(
+    (
+      await pool.query<{ note: string | null }>(`SELECT note FROM users WHERE id = $1`, [publicId])
+    ).rows[0]?.note ?? '',
+  );
+  const clearedRevoke = existingNote
+    .replace(/(\s*\|\s*)?premium_revoked:(admin|no_verified_payment)/gi, '')
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
+    .trim();
+  let nextNote = clearedRevoke;
+  if (note) {
+    nextNote = clearedRevoke.includes(note)
+      ? clearedRevoke
+      : clearedRevoke
+        ? `${clearedRevoke} | ${note}`
+        : note;
+  }
+
   const res = await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
-         note = CASE
-           WHEN $3 <> '' THEN $3
-           ELSE trim(both ' |' from regexp_replace(
-             COALESCE(note, ''),
-             '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
-             '',
-             'g'
-           ))
-         END,
+         note = $3,
          updated_at = now()
      WHERE id = $1`,
-    [publicId, end, note],
+    [publicId, end, nextNote],
   );
   if ((res.rowCount ?? 0) === 0) {
     throw new HttpError(500, 'Failed to set premium on user record', 'PREMIUM_UPDATE_FAILED');
