@@ -9,6 +9,7 @@ import {
   fetchAuraxOrderStatus,
   isAuraxConfigured,
   isAuraxPaymentCompleted,
+  tryCreateAuraxOrder,
 } from './auraxPay';
 import { logger } from '../lib/logger';
 import {
@@ -31,9 +32,23 @@ import { HttpError } from '../middleware/errorHandler';
 import {
   clearPaymentStartCooldown,
   getPaymentStartCooldownEntry,
+  markPaymentStartSent,
   paymentStartCooldownMessage,
 } from './paymentStartCooldown';
-import { normalizePhoneToLocal0, detectTzMobileNetwork, isSupportedSonicPushWallet } from '../lib/tzPhone';
+import {
+  isMobileMoneyStkSendFailure,
+  isPaymentApiThrottleError,
+  isPaymentRateLimitError,
+} from '../lib/paymentProviderErrors';
+import {
+  detectTzMobileNetwork,
+  isAirtelLocalPhone,
+  isHalotelLocalPhone,
+  isSupportedSonicPushWallet,
+  isTigoYasLocalPhone,
+  normalizePhoneToLocal0,
+  walletLabelForLocalPhone,
+} from '../lib/tzPhone';
 
 export { normalizePhoneToLocal0 } from '../lib/tzPhone';
 
@@ -196,7 +211,19 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
   }
 
   try {
-    const { ok, paymentStatus } = await fetchSonicOrderStatus(entry.orderId);
+    const intent = await getIntent(entry.orderId);
+    const provider = String(intent?.payment_provider ?? '').toLowerCase();
+    let ok = false;
+    let paymentStatus = '';
+    if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
+      const aurax = await fetchAuraxOrderStatus(entry.orderId);
+      ok = aurax.ok;
+      paymentStatus = aurax.paymentStatus;
+    } else {
+      const sonic = await fetchSonicOrderStatus(entry.orderId);
+      ok = sonic.ok;
+      paymentStatus = sonic.paymentStatus;
+    }
     const ps = String(paymentStatus ?? '').trim().toUpperCase();
     if (!ok && !ps) {
       clearPaymentStartCooldown(localPhone);
@@ -216,6 +243,107 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
       'payment_cooldown_refresh_skipped',
     );
   }
+}
+
+function canUseAuraxStkFallback(localPhone: string): boolean {
+  return isSupportedSonicPushWallet(localPhone);
+}
+
+/**
+ * Halopesa + Mixx/Yas + Airtel often never receive Sonic Push USSD.
+ * When Aurax is configured, route them there first so the PIN prompt reaches the phone.
+ */
+function shouldPreferAuraxForPhone(localPhone: string): boolean {
+  return (
+    isAuraxConfigured() &&
+    (isHalotelLocalPhone(localPhone) ||
+      isTigoYasLocalPhone(localPhone) ||
+      isAirtelLocalPhone(localPhone))
+  );
+}
+
+/** Fall back to Aurax when Sonic is busy/throttled or STK never left the gateway. */
+function shouldFallbackSonicToAurax(args: {
+  localPhone: string;
+  rawMsg: string;
+  rawCode: string;
+  errorCode?: string;
+}): boolean {
+  if (!isAuraxConfigured() || !canUseAuraxStkFallback(args.localPhone)) return false;
+  // Per-number Sonic quota — do not open a second gateway charge attempt.
+  if (
+    args.errorCode === 'PAYMENT_RATE_LIMIT' ||
+    isPaymentRateLimitError(args.rawMsg, args.rawCode)
+  ) {
+    return false;
+  }
+  return (
+    args.errorCode === 'PAYMENT_BUSY' ||
+    isPaymentApiThrottleError(args.rawMsg, args.rawCode) ||
+    isMobileMoneyStkSendFailure(args.rawMsg, args.rawCode) ||
+    /huduma ina shughuli|too many attempts|too many requests|rate limited/i.test(args.rawMsg) ||
+    /hayajatumika|could not send|push failed|upstream|9012|9009|999/i.test(
+      `${args.rawMsg} ${args.rawCode}`,
+    )
+  );
+}
+
+async function startAuraxPaymentIntent(args: {
+  localPhone: string;
+  amountTzs: number;
+  buyerName: string;
+  buyerEmail: string;
+  publicId: string;
+  planId: string;
+  fallbackFrom?: string;
+}): Promise<{
+  orderId: string;
+  message: string;
+  provider: PaymentProviderId;
+  status: string;
+} | null> {
+  if (!isAuraxConfigured()) return null;
+  const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const aurax = await tryCreateAuraxOrder({
+    localPhone: args.localPhone,
+    amountTzs: args.amountTzs,
+    buyerName: args.buyerName,
+    buyerEmail: args.buyerEmail,
+    publicId: args.publicId,
+    planId: args.planId,
+    clientOrderId,
+  });
+  if (!aurax.ok || !aurax.orderId) {
+    logger.warn(
+      {
+        phone: args.localPhone,
+        network: detectTzMobileNetwork(args.localPhone),
+        auraxMsg: aurax.errorMessage ?? aurax.message,
+      },
+      'payment_aurax_create_failed',
+    );
+    return null;
+  }
+  await upsertPendingIntent({
+    orderId: aurax.orderId,
+    publicId: args.publicId,
+    planId: args.planId,
+    amountTzs: args.amountTzs,
+    buyerPhone: args.localPhone,
+    provider: PAYMENT_PROVIDERS.AURAX,
+    providerPayload: {
+      ...aurax.raw,
+      ...(args.fallbackFrom ? { fallbackFrom: args.fallbackFrom } : { preferredRoute: 'aurax' }),
+      clientOrderId,
+    },
+  });
+  markPaymentStartSent(args.localPhone, aurax.orderId);
+  return {
+    orderId: aurax.orderId,
+    message: aurax.message,
+    provider: PAYMENT_PROVIDERS.AURAX,
+    status: 'pending',
+  };
 }
 
 export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
@@ -264,7 +392,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
 
   await getSelectedPaymentProvider();
 
-  if (!isProviderConfigured()) {
+  if (!isProviderConfigured() && !isAuraxConfigured()) {
     throw new HttpError(
       503,
       'SonicPesa haijasanidi kwenye seva. Wasiliana na admin.',
@@ -281,6 +409,40 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     throw new HttpError(429, cooldownMsg, 'PAYMENT_COOLDOWN');
   }
 
+  // Halopesa / Tigo-Yas / Airtel → Aurax first so Push USSD reaches the handset.
+  if (shouldPreferAuraxForPhone(localPhone)) {
+    logger.info(
+      {
+        phone: localPhone,
+        network: detectTzMobileNetwork(localPhone),
+        wallet: walletLabelForLocalPhone(localPhone),
+      },
+      'payment_prefer_aurax_for_wallet',
+    );
+    const auraxFirst = await startAuraxPaymentIntent({
+      localPhone,
+      amountTzs,
+      buyerName,
+      buyerEmail,
+      publicId,
+      planId: input.planId,
+    });
+    if (auraxFirst) return auraxFirst;
+    logger.warn(
+      { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
+      'payment_aurax_preferred_failed_trying_sonic',
+    );
+  }
+
+  if (!isProviderConfigured()) {
+    // Aurax preferred path failed and Sonic is not configured.
+    throw new HttpError(
+      503,
+      'Hatukuweza kutuma ombi la malipo. Wasiliana na admin.',
+      'PAYMENT_NOT_CONFIGURED',
+    );
+  }
+
   const sonic = await tryCreateSonicOrder({
     buyerEmail,
     buyerName,
@@ -290,6 +452,41 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     planId: input.planId,
   });
   if (!sonic.ok || !sonic.orderId) {
+    const rawMsg = sonic.message || sonic.errorMessage || '';
+    const rawCode = sonic.errorCode ?? '';
+    if (
+      shouldFallbackSonicToAurax({
+        localPhone,
+        rawMsg,
+        rawCode,
+        errorCode: sonic.errorCode,
+      })
+    ) {
+      logger.warn(
+        {
+          phone: localPhone,
+          network: detectTzMobileNetwork(localPhone),
+          wallet: walletLabelForLocalPhone(localPhone),
+          rawMsg,
+          rawCode,
+          errorCode: sonic.errorCode,
+          stkFailure: isMobileMoneyStkSendFailure(rawMsg, rawCode),
+          busy: sonic.errorCode === 'PAYMENT_BUSY' || isPaymentApiThrottleError(rawMsg, rawCode),
+        },
+        'payment_sonic_failed_trying_aurax',
+      );
+      const aurax = await startAuraxPaymentIntent({
+        localPhone,
+        amountTzs,
+        buyerName,
+        buyerEmail,
+        publicId,
+        planId: input.planId,
+        fallbackFrom: 'sonicpesa',
+      });
+      if (aurax) return aurax;
+    }
+
     const userMsg =
       (sonic.errorMessage && sonic.errorMessage.trim()) ||
       mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
@@ -318,7 +515,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     providerPayload: sonic.raw,
   });
 
-  // create_order_simple can block ~60s; user may already have paid. Activate if Sonic already shows paid.
+  // User may already have paid while create_order was in flight. Activate if Sonic already shows paid.
   try {
     await ensurePremiumActivatedForPaidOrder(
       sonic.orderId,
@@ -444,11 +641,14 @@ async function writePremiumForOrder(
   orderId: string,
   identity: { publicId: string; planId: string; phone: string },
 ): Promise<{ premiumUntilMs: number }> {
+  const intent = await getIntent(orderId);
+  const provider = String(intent?.payment_provider ?? '').toLowerCase();
+  const notePrefix = provider === PAYMENT_PROVIDERS.AURAX ? 'aurax' : 'sonicpesa';
   const activated = await activatePremiumForUser({
     publicId: identity.publicId,
     planId: identity.planId,
     phone: identity.phone,
-    note: `sonicpesa:${orderId}`,
+    note: `${notePrefix}:${orderId}`,
   });
   await markIntentActivated(orderId);
   logger.info(
@@ -477,7 +677,8 @@ async function resolveActivatedIntentPremium(
   }
 
   const note = rec.note ?? '';
-  const grantedThisOrder = note.includes(`sonicpesa:${orderId}`);
+  const grantedThisOrder =
+    note.includes(`sonicpesa:${orderId}`) || note.includes(`aurax:${orderId}`);
   if (grantedThisOrder) {
     // Subscription window already consumed for this order (expired or revoked after grant).
     return { activated: false };
