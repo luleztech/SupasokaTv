@@ -144,16 +144,28 @@ export function formatPhoneToIntl255(local0: string): string {
 }
 
 /**
- * SonicPesa buyer_phone — official docs require international `255XXXXXXXXX` only.
- * One format for every TZ wallet (M-Pesa, Tigo/Yas, Airtel, Halopesa) so we never
- * burn a second create_order attempt with a local `0…` retry.
+ * SonicPesa buyer_phone for the single create_order.
+ * Vodacom and Airtel accept international `255XXXXXXXXX`.
+ * HaloPesa (061–063) and Mixx by Yas / Tigo (065/067/070/071/077) reject that
+ * form and never push USSD — those wallets need national `0XXXXXXXXX`.
  * @see https://api.sonicpesa.com/api/v1/payment/create_order
  */
 export function phoneCandidatesForSonicPesaApi(local0: string): string[] {
   const local0fmt = toLocal0Digits(local0);
   if (!isValidTzMobileLocal0(local0fmt)) return [local0fmt].filter(Boolean);
+  if (isHalotelLocalPhone(local0fmt) || isTigoYasLocalPhone(local0fmt)) {
+    return [local0fmt];
+  }
   const intl255 = formatPhoneToIntl255(local0fmt);
   return intl255.length > 0 ? [intl255] : [];
+}
+
+/**
+ * Intl `255…` fallback used only when Sonic rejects the national HaloPesa / Yas number.
+ * Not sent on the first attempt — a second create on every tap burns the per-number quota.
+ */
+export function sonicIntlPhoneFallback(local0: string): string {
+  return formatPhoneToIntl255(toLocal0Digits(local0));
 }
 
 /** Preferred SonicPesa `channel` values per operator (from gateway webhooks/docs). */
@@ -171,8 +183,9 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
         'MPESATZ',
       ];
     case 'tigo_yas':
-      // Mixx by Yas / TigoPesa — include MIXX aliases used after the Yas rebrand.
-      return ['TIGOPESA', 'TIGOPESATZ', 'MIXX', 'YAS', 'TIGO PESA', 'MIXX BY YAS', 'MIC'];
+      // Mixx by Yas / TigoPesa. Sonic's own paid payload uses TIGOPESATZ
+      // (e.g. 065… → channel TIGOPESATZ). That value is what actually dispatches the push.
+      return ['TIGOPESATZ', 'TIGOPESA', 'MIXX', 'YAS', 'TIGO PESA', 'MIXX BY YAS', 'MIC'];
     case 'airtel':
       return ['AIRTELMONEY', 'AIRTEL MONEY', 'AIRTEL', 'AIRTELMONEYTZ'];
     case 'halotel':
@@ -187,6 +200,18 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * Wallet Sonic must be told explicitly. Auto-detect from `255…` creates an order
+ * for HaloPesa and Mixx/Yas but does not send the USSD prompt.
+ * Vodacom and Airtel stay on auto-detect.
+ */
+export function sonicDispatchChannel(local0: string): string | undefined {
+  const network = detectTzMobileNetwork(toLocal0Digits(local0));
+  if (network !== 'halotel' && network !== 'tigo_yas') return undefined;
+  const hint = sonicChannelHintsForNetwork(local0)[0];
+  return hint || undefined;
 }
 
 export function isHalotelLocalPhone(local0: string): boolean {

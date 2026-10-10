@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import { HttpError } from '../middleware/errorHandler';
 import { logger } from '../lib/logger';
 import {
+  isInvalidPhonePaymentError,
   isMobileMoneyStkSendFailure,
   isPaymentApiThrottleError,
   isPaymentRateLimitError,
@@ -16,6 +17,8 @@ import {
   isSupportedSonicPushWallet,
   isVodacomMpesaLocalPhone,
   phoneCandidatesForSonicPesaApi,
+  sonicDispatchChannel,
+  sonicIntlPhoneFallback,
   toLocal0Digits,
   walletLabelForLocalPhone,
 } from '../lib/tzPhone';
@@ -147,15 +150,17 @@ export function isSonicInitiateSuccess(
   // Explicit gateway failure — do not treat as started.
   if (st === 'error' || st === 'failed') return false;
 
+  // "success" + order id is not enough when Sonic says the push itself was not sent.
+  // HaloPesa / Yas were taking this path and the handset never got a prompt.
+  if (isSonicStkSendFailure(responseMessage, responseCode) && !isSonicPushUssdSentMessage(responseMessage)) {
+    return false;
+  }
+
   // EaMax-compatible: status success / success:true + order_id means Push was accepted.
   // Do not reject solely on nested result codes (9009 etc.) when Sonic already minted an order —
   // that pattern was blocking Vodacom 079 after a real create.
   if (st === 'success' && orderId) return true;
   if (sonicData.success === true && orderId) return true;
-
-  if (isSonicStkSendFailure(responseMessage, responseCode) && !isSonicPushUssdSentMessage(responseMessage)) {
-    return false;
-  }
 
   if (orderId && httpResponse.ok && isSonicPushUssdSentMessage(responseMessage)) return true;
   if (orderId && httpResponse.ok && st !== 'error' && st !== 'failed') return true;
@@ -257,21 +262,37 @@ type SonicCreateStep = {
 };
 
 /**
- * Exactly one SonicPesa create_order per Lipia sasa tap.
- * Official MSISDN is always `255XXXXXXXXX` — gateway auto-detects the wallet.
- * Extra format/channel retries burn Sonic quota and surface "Too Many Attempts".
+ * One SonicPesa create_order per Lipia sasa tap.
+ * Vodacom / Airtel: international `255…`, wallet auto-detected.
+ * HaloPesa and Mixx/Yas: national `0…` plus the wallet channel. Without that
+ * channel Sonic accepts the order and never sends the USSD prompt.
+ * A second step exists only as an invalid-phone fallback and is not called
+ * unless Sonic rejects the national number.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
   const network = detectTzMobileNetwork(local0);
   const phones = phoneCandidatesForSonicPesaApi(local0);
   const buyerPhone = phones[0] ?? formatPhoneToIntl255(local0);
+  const channel = sonicDispatchChannel(local0);
+  const primary: SonicCreateStep = {
+    endpoint: 'payment/create_order',
+    buyer_phone: buyerPhone,
+    timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+    label: channel ? `local/${network}/${channel}` : `intl/${network}/auto`,
+    ...(channel ? { channel } : {}),
+  };
+  if (!channel) return [primary];
+  const intl = sonicIntlPhoneFallback(local0);
+  if (!intl || intl === buyerPhone) return [primary];
   return [
+    primary,
     {
       endpoint: 'payment/create_order',
-      buyer_phone: buyerPhone,
+      buyer_phone: intl,
       timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `intl/${network}/auto`,
+      label: `intl/${network}/${channel}`,
+      channel,
     },
   ];
 }
@@ -443,7 +464,7 @@ export async function tryCreateSonicOrder(args: {
         // but not required — rejecting here left Vodacom 079 stuck after a valid create.
         if (orderId) {
           logger.info(
-            { orderId, network, step: step.label, phone: step.buyer_phone },
+            { orderId, network, step: step.label, phone: step.buyer_phone, channel: step.channel ?? 'auto' },
             'sonic_create_ok',
           );
           markPaymentStartSent(local0, orderId);
@@ -484,6 +505,15 @@ export async function tryCreateSonicOrder(args: {
           errorMessage: paymentBusyUserMessage(),
           errorCode: 'PAYMENT_BUSY',
         };
+      }
+      // HaloPesa / Yas: retry once with 255… + the same channel only when Sonic
+      // rejected the national number. Any other failure stops here (no quota burn).
+      if (
+        i === 0 &&
+        i < steps.length - 1 &&
+        isInvalidPhonePaymentError(errorMessage, errorCode)
+      ) {
+        continue;
       }
       break;
     } catch (e) {
