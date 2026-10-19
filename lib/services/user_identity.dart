@@ -80,7 +80,7 @@ class UserIdentity {
     if (current == id) return;
     await p.setString(_prefsPublicId, id);
     if (kDebugMode) {
-      debugPrint('UserIdentity: adopted recovered public id $id (was $current)');
+      debugPrint('UserIdentity: adopted recovered public id');
     }
   }
 

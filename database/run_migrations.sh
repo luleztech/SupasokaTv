@@ -53,6 +53,8 @@ run_sql() {
 echo "Applying migrations from: $MIG"
 run_sql "$MIG/002_malipo_accent_bigint.sql"
 run_sql "$MIG/003_align_public_config_schema.sql"
+run_sql "$MIG/006_channel_audio_language.sql"
+run_sql "$MIG/007_channel_playback_headers.sql"
 
 echo ""
 echo "Done. Redeploy the API service on Railway, then check:"

@@ -14,6 +14,9 @@ class Channel {
     this.clearKeyKidKey = '',
     this.licenseUrl = '',
     this.audioLanguage = 'sw',
+    this.referer = '',
+    this.origin = '',
+    this.userAgent = '',
   });
 
   final int id;
@@ -32,6 +35,12 @@ class Channel {
   final String licenseUrl;
   /// Preferred playback audio from admin: `sw` | `en`.
   final String audioLanguage;
+  /// Optional Referer from admin. Empty means the player default.
+  final String referer;
+  /// Optional Origin from admin. Empty means the player default.
+  final String origin;
+  /// Optional User-Agent from admin. Empty means the player default.
+  final String userAgent;
 }
 
 class LiveMatch {

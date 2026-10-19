@@ -13,6 +13,7 @@ import '../analytics/playback_analytics.dart';
 import 'playback_session.dart';
 import '../../screens/fullscreen_video_page.dart';
 import '../../player/flutter_playback_mode.dart';
+import '../../player/playback_http_headers.dart';
 import '../../player/stream_url_utils.dart';
 
 typedef ClearKeyExtractor = String Function(Map<String, dynamic>?);
@@ -43,7 +44,7 @@ class PlaybackOrchestrator {
     required HeadersExtractor extractHeaders,
     required AudioLanguageExtractor extractAudioLanguage,
   }) async {
-    final url = session.url;
+    final url = normalizeStreamUrl(session.url);
     if (url.isEmpty) return;
 
     unawaited(PlaybackAnalytics.trackChannelOpen(
@@ -71,7 +72,7 @@ class PlaybackOrchestrator {
     final drm = normalizeDrm(channelData, ck, url);
     final license = channelData['licenseUrl'] ?? channelData['license_url'];
     final token = extractToken(channelData);
-    final playbackHeaders = extractHeaders(channelData);
+    final playbackHeaders = mergePlaybackHeaders(url, extractHeaders(channelData));
     final audioLanguage = extractAudioLanguage(channelData);
     final merged = Map<String, String>.from(playbackHeaders);
     if (token.isNotEmpty &&
@@ -143,6 +144,7 @@ class PlaybackOrchestrator {
     required HeadersExtractor extractHeaders,
     required AudioLanguageExtractor extractAudioLanguage,
   }) async {
+    url = normalizeStreamUrl(url);
     if (url.isEmpty) return;
 
     final policy = policyOverride ?? _globalPolicy;

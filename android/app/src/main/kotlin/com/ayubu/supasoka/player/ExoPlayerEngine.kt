@@ -3,6 +3,7 @@ package com.ayubu.supasoka.player
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import com.ayubu.supasoka.safeUrlForLogs
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -166,10 +167,9 @@ class ExoPlayerEngine(
         
         Log.d(TAG, "=".repeat(70))
         Log.d(TAG, "INITIALIZING UNIVERSAL STREAM PLAYER v4.0")
-        Log.d(TAG, "URL: ${streamSession.mpdUrl}")
+        Log.d(TAG, "URL: ${safeUrlForLogs(streamSession.mpdUrl)}")
         Log.d(TAG, "DRM Type: ${streamSession.drmType}")
-        Log.d(TAG, "License URL: ${streamSession.licenseUrl}")
-        Log.d(TAG, "Session Token: ${streamSession.token.take(20)}...")
+        Log.d(TAG, "License URL: ${safeUrlForLogs(streamSession.licenseUrl)}")
         Log.d(TAG, "Headers Count: ${streamSession.headers.size}")
         Log.d(TAG, "=".repeat(70))
 
@@ -289,7 +289,7 @@ class ExoPlayerEngine(
             
             // Default to DASH for unknown formats (most adaptive streaming)
             else -> {
-                Log.w(TAG, "⚠️ Unknown format, defaulting to DASH: $url")
+                Log.w(TAG, "⚠️ Unknown format, defaulting to DASH: ${safeUrlForLogs(url)}")
                 StreamFormat.DASH
             }
         }
@@ -340,8 +340,9 @@ class ExoPlayerEngine(
             }
         }
         
-        Log.d(TAG, "📋 Final headers count: ${headers.size}")
-        headers.forEach { (key, value) ->
+        val finalHeaders = PlaybackHttpHeaders.merge(headers, streamSession.mpdUrl)
+        Log.d(TAG, "📋 Final headers count: ${finalHeaders.size}")
+        finalHeaders.forEach { (key, value) ->
             val maskedValue = if (key.lowercase().contains("auth") || 
                                    key.lowercase().contains("token") ||
                                    key.lowercase().contains("nv-")) {
@@ -352,7 +353,7 @@ class ExoPlayerEngine(
             Log.v(TAG, "  $key: $maskedValue")
         }
         
-        return headers
+        return finalHeaders
     }
 
     /**
@@ -583,7 +584,7 @@ class ExoPlayerEngine(
         return when (streamSession.drmType) {
             DrmType.WIDEVINE, DrmType.WIDEVINE_L1, DrmType.WIDEVINE_L3 -> {
                 Log.d(TAG, "🔑 Creating Widevine DRM session manager")
-                Log.d(TAG, "  License URL: ${streamSession.licenseUrl}")
+                Log.d(TAG, "  License URL: ${safeUrlForLogs(streamSession.licenseUrl)}")
                 
                 val drmCallback = HttpMediaDrmCallback(
                     streamSession.licenseUrl,
@@ -616,7 +617,7 @@ class ExoPlayerEngine(
             
             DrmType.PLAYREADY -> {
                 Log.d(TAG, "🔑 Creating PlayReady DRM session manager")
-                Log.d(TAG, "  License URL: ${streamSession.licenseUrl}")
+                Log.d(TAG, "  License URL: ${safeUrlForLogs(streamSession.licenseUrl)}")
                 
                 val drmCallback = HttpMediaDrmCallback(
                     streamSession.licenseUrl,

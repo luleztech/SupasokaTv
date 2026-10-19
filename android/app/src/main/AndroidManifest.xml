@@ -32,13 +32,15 @@
             </intent-filter>
         </activity>
         <activity
-            android:name=".SupasokaNativePlayerActivity"
+            android:name=".OrizonPlayerActivity"
             android:exported="false"
-            android:theme="@style/NativePlayerTheme"
             android:screenOrientation="sensorLandscape"
-            android:resizeableActivity="true"
+            android:theme="@style/NativePlayerTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-            android:hardwareAccelerated="true" />
+            android:supportsPictureInPicture="false"
+            android:resizeableActivity="true"
+            android:hardwareAccelerated="true"
+            android:enableOnBackInvokedCallback="true" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -57,6 +59,14 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- Explicit visibility for traffic-capture apps checked by CaptureProtection. -->
+        <package android:name="com.reqable.android" />
+        <package android:name="com.guoshi.httpcanary" />
+        <package android:name="com.guoshi.httpcanary.premium" />
+        <package android:name="com.guoshi.httpcanary.premium.pro" />
+        <package android:name="com.emanuelef.remote_capture" />
+        <package android:name="app.greyshirts.sslcapture" />
+        <package android:name="tech.httptoolkit.android.v1" />
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

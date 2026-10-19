@@ -79,6 +79,7 @@ class AdminStore extends ChangeNotifier {
 
   String? _lastSyncError;
   bool _syncing = false;
+  bool _needsServerPush = false;
   bool _savingAppUpdatePolicy = false;
   Timer? _syncRetryTimer;
   Map<String, int> _paymentHealthSummary = const {};
@@ -199,6 +200,7 @@ class AdminStore extends ChangeNotifier {
   Future<void> _runBackgroundSync(Future<bool> Function() push) async {
     final ok = await push();
     if (!ok) {
+      _needsServerPush = true;
       await _pushConfigToServer();
     }
   }
@@ -458,10 +460,11 @@ class AdminStore extends ChangeNotifier {
   void _ensureAutoSyncRetryLoop() {
     _syncRetryTimer?.cancel();
     if (!hasAdminSession) return;
-    _syncRetryTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+    _syncRetryTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!hasAdminSession || _syncing) return;
-      if (_lastSyncError == null || _lastSyncError!.isEmpty) return;
-      _pushConfigToServer();
+      if (_needsServerPush) {
+        _pushConfigToServer();
+      }
     });
   }
 
@@ -520,8 +523,23 @@ class AdminStore extends ChangeNotifier {
       j.remove('configSyncedAt');
       final beforePull = _appUpdateSnapshot(_config);
       final savedPrefs = await _readAppUpdatePrefs();
+      final localChannelUrls = <int, String>{
+        for (final ch in _config.channels)
+          if (normalizeStreamUrl(ch.url).isNotEmpty) ch.id: normalizeStreamUrl(ch.url),
+      };
+      final healed = <ChannelDto>[];
       try {
         _config = AppConfig.fromJson(j);
+        // Server is the source of truth. If it has no link but this device still
+        // has one, write that link back — showing it only on screen left the
+        // player with nothing to open.
+        for (final ch in _config.channels) {
+          if (ch.url.isNotEmpty) continue;
+          final local = localChannelUrls[ch.id];
+          if (local == null || local.isEmpty) continue;
+          ch.url = local;
+          healed.add(ch);
+        }
       } catch (e, st) {
         _lastSyncError = 'Could not parse server config: $e';
         assert(() {
@@ -548,6 +566,9 @@ class AdminStore extends ChangeNotifier {
       await _writeAppUpdatePrefs(_config);
       _lastSyncError = null;
       notifyListeners();
+      for (final ch in healed) {
+        unawaited(_pushChannelUpsert(ch));
+      }
     } catch (e) {
       _lastSyncError = 'Could not load from server: $e';
       notifyListeners();
@@ -804,14 +825,19 @@ class AdminStore extends ChangeNotifier {
     try {
       if (res == null) {
         _lastSyncError = 'Sync failed: $lastErr';
+        _needsServerPush = true;
       } else if (res.statusCode == 401 || res.statusCode == 403) {
         _lastSyncError = 'Unauthorized — login again with your admin password.';
+        _needsServerPush = false;
       } else if (res.statusCode == 503) {
         _lastSyncError = 'Database unavailable (503). Check Railway DATABASE_URL.';
+        _needsServerPush = true;
       } else if (res.statusCode >= 200 && res.statusCode < 300) {
         _lastSyncError = null;
+        _needsServerPush = false;
       } else {
         _lastSyncError = 'Sync failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
+        _needsServerPush = true;
       }
     } finally {
       _syncing = false;
@@ -892,8 +918,16 @@ class AdminStore extends ChangeNotifier {
   }
 
   Future<void> upsertChannel(ChannelDto c) async {
+    c.url = c.clearStreamUrl ? '' : normalizeStreamUrl(c.url);
     final i = _config.channels.indexWhere((x) => x.id == c.id);
     if (i >= 0) {
+      final prev = _config.channels[i];
+      final previousUrl = normalizeStreamUrl(prev.url);
+      // A name/toggle save with a blank link must not erase the saved URL.
+      // clearStreamUrl is set only when the editor field was cleared on purpose.
+      if (!c.clearStreamUrl && c.url.isEmpty && previousUrl.isNotEmpty) {
+        c.url = previousUrl;
+      }
       _config.channels[i] = c;
     } else {
       _config.channels.add(c);

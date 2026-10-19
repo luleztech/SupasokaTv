@@ -13,6 +13,7 @@ import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/native_android_player.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
 import 'package:supasoka/player/stream_url_classifier.dart';
+import 'package:supasoka/player/stream_url_utils.dart';
 import 'package:supasoka/player/web_playback_config.dart';
 import 'package:supasoka/player/web_stream_probe.dart';
 import 'package:supasoka/theme/app_theme.dart';
@@ -119,7 +120,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
 
-    final url = session?.streamUrl.trim() ?? '';
+    final url = normalizeStreamUrl(session?.streamUrl);
     if (url.isEmpty) {
       setState(() {
         _loading = false;
@@ -275,9 +276,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return true;
     }());
 
-    final url = _playbackUrl.trim().isNotEmpty
-        ? _playbackUrl.trim()
-        : (_channel?.streamUrl.trim() ?? '');
+    final url = normalizeStreamUrl(
+      _playbackUrl.isNotEmpty ? _playbackUrl : _channel?.streamUrl,
+    );
     if (url.isEmpty) {
       _disposeNativeControllers();
       setState(() {
@@ -426,9 +427,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _reloadWeb() async {
     final w = _web;
-    final url = _playbackUrl.trim().isNotEmpty
-        ? _playbackUrl.trim()
-        : (_channel?.streamUrl ?? '').trim();
+    final url = normalizeStreamUrl(
+      _playbackUrl.isNotEmpty ? _playbackUrl : _channel?.streamUrl,
+    );
     if (w == null || url.isEmpty) return;
     _webLoadingSafetyTimer?.cancel();
     setState(() => _loading = true);

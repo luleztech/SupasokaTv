@@ -1,4 +1,6 @@
+import { ensureChannelPlaybackHeaderColumns } from '../db/channelPlaybackHeaders';
 import { getPool } from '../db/pool';
+import { firstStreamUrl, resolveStoredStreamUrl } from '../lib/streamUrl';
 import { HttpError } from '../middleware/errorHandler';
 import {
   accentRgbFromDartColor,
@@ -21,7 +23,23 @@ type ChannelBody = {
   drm?: string;
   clearKeyKidKey?: string;
   audioLanguage?: string;
+  /** `null` means the client did not send the field — keep the stored value. */
+  referer?: string | null;
+  origin?: string | null;
+  userAgent?: string | null;
+  /** True only when the editor cleared the link on purpose. */
+  clearStreamUrl?: boolean;
 };
+
+function optionalHeader(raw: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      const value = asString(raw[key], '').trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
 
 function requirePool() {
   const pool = getPool();
@@ -40,11 +58,10 @@ function parseChannel(raw: unknown): ChannelBody {
   if (id === null) {
     throw new HttpError(400, 'Channel id must be a number', 'BAD_CHANNEL_ID');
   }
-  // Admin Flutter sends `url`; some clients send `streamUrl`. Prefer any non-empty value.
-  // Do NOT use `??` alone — empty string would shadow a valid `url` and wipe the DB.
-  const streamUrl = [c.streamUrl, c.url, c.stream_url]
-    .map((v) => asString(v, '').trim())
-    .find((s) => s.length > 0) ?? '';
+  // Admin sends `url`; some clients send `streamUrl` / `stream_url`.
+  // An empty string must not hide a later alias, and paste noise is not a link.
+  const streamUrl = firstStreamUrl([c.streamUrl, c.url, c.stream_url]);
+  const clearRequested = c.clearStreamUrl === true || c.clear_stream_url === true;
   return {
     id,
     name: asString(c.name, ''),
@@ -58,19 +75,36 @@ function parseChannel(raw: unknown): ChannelBody {
     drm: asString(c.drm, 'none'),
     clearKeyKidKey: asString(c.clearKeyKidKey, ''),
     audioLanguage: normalizeChannelAudioLanguage(c.audioLanguage),
+    referer: optionalHeader(c, ['referer', 'Referer']),
+    origin: optionalHeader(c, ['origin', 'Origin']),
+    userAgent: optionalHeader(c, ['userAgent', 'user_agent', 'User-Agent']),
+    clearStreamUrl: clearRequested && streamUrl.length === 0,
   };
 }
 
 export async function upsertChannelFast(body: unknown): Promise<void> {
   const ch = parseChannel(body);
   const pool = requirePool();
-  const streamUrl = ch.streamUrl || ch.url || '';
-  const existing = await pool.query(`SELECT id FROM channels WHERE id = $1`, [ch.id]);
+  await ensureChannelPlaybackHeaderColumns(pool);
+  const existing = await pool.query<{ id: number; stream_url: string | null }>(
+    `SELECT id, stream_url FROM channels WHERE id = $1`,
+    [ch.id],
+  );
   if (existing.rowCount && existing.rowCount > 0) {
+    const streamUrl = resolveStoredStreamUrl(
+      [ch.streamUrl, ch.url],
+      existing.rows[0]?.stream_url,
+      ch.clearStreamUrl === true,
+    );
     await pool.query(
       `UPDATE channels
-       SET name = $2, cat = $3, img = $4, free = $5, viewers = $6, stream_url = $7,
-           enabled = $8, drm = $9, clear_key_kid_key = $10, audio_language = $11
+       SET name = $2, cat = $3, img = $4, free = $5, viewers = $6,
+           stream_url = $7,
+           enabled = $8, drm = $9, clear_key_kid_key = $10, audio_language = $11,
+           referer = COALESCE($12, referer),
+           origin = COALESCE($13, origin),
+           user_agent = COALESCE($14, user_agent),
+           updated_at = now()
        WHERE id = $1`,
       [
         ch.id,
@@ -84,15 +118,22 @@ export async function upsertChannelFast(body: unknown): Promise<void> {
         asString(ch.drm, 'none'),
         asString(ch.clearKeyKidKey, ''),
         normalizeChannelAudioLanguage(ch.audioLanguage),
+        ch.referer,
+        ch.origin,
+        ch.userAgent,
       ],
+    );
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('configSyncedAt', (EXTRACT(EPOCH FROM now()) * 1000)::bigint::text)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
     );
     return;
   }
   const maxSort = await pool.query(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM channels`);
   const sortOrder = Number(maxSort.rows[0]?.m ?? -1) + 1;
   await pool.query(
-    `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, referer, origin, user_agent, sort_order, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
     [
       ch.id,
       ch.name,
@@ -100,16 +141,23 @@ export async function upsertChannelFast(body: unknown): Promise<void> {
       ch.img,
       ch.free,
       ch.viewers,
-      streamUrl,
+      resolveStoredStreamUrl([ch.streamUrl, ch.url], '', false),
       ch.enabled ?? true,
       asString(ch.drm, 'none'),
       asString(ch.clearKeyKidKey, ''),
       normalizeChannelAudioLanguage(ch.audioLanguage),
+      ch.referer ?? '',
+      ch.origin ?? '',
+      ch.userAgent ?? '',
       sortOrder,
     ],
   );
   await pool.query(
     `SELECT setval(pg_get_serial_sequence('channels','id'), (SELECT COALESCE(MAX(id),1) FROM channels))`,
+  );
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('configSyncedAt', (EXTRACT(EPOCH FROM now()) * 1000)::bigint::text)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
   );
 }
 
@@ -119,7 +167,14 @@ export async function deleteChannelFast(channelId: number): Promise<boolean> {
   }
   const pool = requirePool();
   const out = await pool.query(`DELETE FROM channels WHERE id = $1`, [channelId]);
-  return (out.rowCount ?? 0) > 0;
+  const deleted = (out.rowCount ?? 0) > 0;
+  if (deleted) {
+    await pool.query(
+      `INSERT INTO app_settings (key, value) VALUES ('configSyncedAt', (EXTRACT(EPOCH FROM now()) * 1000)::bigint::text)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    );
+  }
+  return deleted;
 }
 
 export async function reorderChannelsFast(ids: number[]): Promise<void> {

@@ -11,6 +11,7 @@ import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/data/pay_plan.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/network_reachability.dart';
+import 'package:supasoka/player/stream_url_utils.dart';
 import 'package:supasoka/util/image_url.dart';
 
 const _prefsKey = 'supasoka_public_config_cache_v2';
@@ -93,6 +94,31 @@ int _asInt(dynamic v) {
   if (v is int) return v;
   if (v is num) return v.toInt();
   return int.tryParse(v.toString()) ?? 0;
+}
+
+String _looseText(dynamic v, [String fallback = '']) {
+  if (v == null) return fallback;
+  if (v is String) return v;
+  if (v is num || v is bool) return v.toString();
+  return fallback;
+}
+
+bool _looseBool(dynamic v, bool fallback) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v?.toString().trim().toLowerCase() ?? '';
+  if (s == 'true' || s == '1' || s == 'yes') return true;
+  if (s == 'false' || s == '0' || s == 'no') return false;
+  return fallback;
+}
+
+String _headerText(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final raw = json[key];
+    if (raw == null) continue;
+    return raw.toString().trim();
+  }
+  return '';
 }
 
 /// Same rules as admin `malipoAccentFromJson`: num or hex-ish string from API/DB.
@@ -553,24 +579,30 @@ class ContentStore extends ChangeNotifier {
   }
 
   void _applyConfig(Map<String, dynamic> j) {
+    invalidatePlaybackCache();
     final chRaw = j['channels'] as List<dynamic>? ?? [];
     _channels = <Channel>[];
     for (final e in chRaw) {
-      final m = Map<String, dynamic>.from(e as Map);
+      if (e is! Map) continue;
+      final m = Map<String, dynamic>.from(e);
       if (m['enabled'] == false) continue;
+      final streamUrl = firstStreamUrl([m['streamUrl'], m['url'], m['stream_url']]);
       _channels.add(
         Channel(
           id: _asInt(m['id']),
-          name: m['name'] as String? ?? '',
-          cat: m['cat'] as String? ?? 'movies',
-          img: sanitizeImageUrl(m['img'] as String? ?? ''),
-          free: m['free'] as bool? ?? true,
-          viewers: m['viewers'] as String? ?? '',
-          streamUrl: (m['streamUrl'] as String? ?? m['url'] as String? ?? '').trim(),
-          drm: (m['drm'] as String? ?? 'none').trim(),
+          name: _looseText(m['name']),
+          cat: _looseText(m['cat'], 'movies'),
+          img: sanitizeImageUrl(_looseText(m['img'])),
+          free: _looseBool(m['free'], true),
+          viewers: _looseText(m['viewers']),
+          streamUrl: streamUrl,
+          drm: _looseText(m['drm'], 'none').trim(),
           clearKeyKidKey: '',
           licenseUrl: '',
-          audioLanguage: normalizePlaybackAudioLanguage(m['audioLanguage'] as String?),
+          audioLanguage: normalizePlaybackAudioLanguage(_looseText(m['audioLanguage'], 'sw')),
+          referer: _headerText(m, const ['referer', 'Referer']),
+          origin: _headerText(m, const ['origin', 'Origin']),
+          userAgent: _headerText(m, const ['userAgent', 'user_agent', 'User-Agent']),
         ),
       );
     }

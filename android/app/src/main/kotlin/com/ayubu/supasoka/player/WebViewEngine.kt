@@ -1,5 +1,7 @@
 package com.ayubu.supasoka.player
 
+import com.ayubu.supasoka.safeUrlForLogs
+
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -95,7 +97,7 @@ class WebViewEngine(
         val headers = buildLoadHeaders(streamSession, preferredAudioLanguage)
         val isExternalWebPage = shouldUseWebView(url)
 
-        Log.d(TAG, "initialize url=${url.take(60)} audio=$preferredAudioLanguage " +
+        Log.d(TAG, "initialize url=${safeUrlForLogs(url)} audio=$preferredAudioLanguage " +
             "Accept-Language=${headers["Accept-Language"]}")
 
         try {

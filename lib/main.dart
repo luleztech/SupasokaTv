@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/main_shell.dart';
 import 'package:supasoka/screens/force_update_screen.dart';
 import 'package:supasoka/screens/loader_screen.dart';
+import 'package:supasoka/screens/capture_guard_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/push_notification_service.dart';
 import 'package:supasoka/services/user_identity.dart';
@@ -28,6 +29,39 @@ class _NoScrollbarScrollBehavior extends MaterialScrollBehavior {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    final captureApps = await _findCaptureApps();
+    if (captureApps.isNotEmpty) {
+      runApp(CaptureGuardScreen(
+        initialApps: captureApps,
+        onAllowed: _startSupasoka,
+      ));
+      return;
+    }
+  }
+  await _startSupasoka();
+}
+
+Future<List<Map<String, String>>> _findCaptureApps() async {
+  try {
+    const channel = MethodChannel('com.ayubu.supasoka/security_guard');
+    final result = await channel.invokeMethod<List<dynamic>>('findCaptureApps');
+    return (result ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((app) => <String, String>{
+              'packageName': app['packageName']?.toString() ?? '',
+              'label': app['label']?.toString() ?? 'Unknown app',
+            })
+        .where((app) => app['packageName']!.isNotEmpty)
+        .toList(growable: false);
+  } on MissingPluginException {
+    return const [];
+  } on PlatformException {
+    return const [];
+  }
+}
+
+Future<void> _startSupasoka() async {
   if (!kIsWeb) {
     MediaKit.ensureInitialized();
   }
@@ -166,23 +200,42 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _loaded && mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        unawaited(() async {
-          await context.read<ContentStore>().checkUpdateFromServer();
-          if (!mounted) return;
-          await context.read<ContentStore>().refresh();
-        }());
-        unawaited(
-          UserIdentity.registerWithBackend().then((_) async {
-            if (!PushNotificationService.isReady) return;
-            final pid = await UserIdentity.getOrCreatePublicId();
-            return PushNotificationService.syncDirectUserTopic(pid);
-          }),
-        );
-        unawaited(_syncPremiumAndTopics());
-      });
+      unawaited(_handleAppResume());
     }
+  }
+
+  Future<void> _handleAppResume() async {
+    final captureApps = await _findCaptureApps();
+    if (!mounted) return;
+    if (captureApps.isNotEmpty) {
+      final themeController = context.read<ThemeController>();
+      final contentStore = context.read<ContentStore>();
+      runApp(CaptureGuardScreen(
+        initialApps: captureApps,
+        onAllowed: () async => runApp(SupasokaApp(
+          themeController: themeController,
+          contentStore: contentStore,
+        )),
+      ));
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(() async {
+        await context.read<ContentStore>().checkUpdateFromServer();
+        if (!mounted) return;
+        await context.read<ContentStore>().refresh();
+      }());
+      unawaited(
+        UserIdentity.registerWithBackend().then((_) async {
+          if (!PushNotificationService.isReady) return;
+          final pid = await UserIdentity.getOrCreatePublicId();
+          return PushNotificationService.syncDirectUserTopic(pid);
+        }),
+      );
+      unawaited(_syncPremiumAndTopics());
+    });
   }
 
   Future<void> _syncPremiumAndTopics() async {

@@ -1,30 +1,49 @@
 import type { Request, Response } from 'express';
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
-import { isTokenizedCdnUrl, playbackHeadersForStreamUrl } from '../lib/cdnTokenHeaders';
+import { ensureChannelPlaybackHeaderColumns } from '../db/channelPlaybackHeaders';
+import { isTokenizedCdnUrl, playbackHeadersForStreamUrl, withChannelRequestHeaders } from '../lib/cdnTokenHeaders';
+import { normalizeStreamUrl } from '../lib/streamUrl';
 
 const RELAY_TIMEOUT_MS = 25_000;
 
 function normalizeUpstreamUrl(raw: string): string {
-  const u = String(raw ?? '').trim();
+  const u = normalizeStreamUrl(raw);
   if (!u) throw new HttpError(404, 'Channel stream URL is not configured', 'NO_STREAM_URL');
   return u;
 }
 
-async function loadChannelStreamUrl(channelId: number): Promise<string> {
+async function loadChannelStream(channelId: number): Promise<{
+  url: string;
+  referer: string;
+  origin: string;
+  userAgent: string;
+}> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
-  const res = await pool.query<{ stream_url: string; enabled: boolean }>(
-    `SELECT stream_url, enabled FROM channels WHERE id = $1`,
+  await ensureChannelPlaybackHeaderColumns(pool);
+  const res = await pool.query<{
+    stream_url: string;
+    enabled: boolean;
+    referer: string;
+    origin: string;
+    user_agent: string;
+  }>(
+    `SELECT stream_url, enabled, referer, origin, user_agent FROM channels WHERE id = $1`,
     [channelId],
   );
   const row = res.rows[0];
   if (!row?.enabled) {
     throw new HttpError(404, 'Channel not found or disabled', 'CHANNEL_NOT_FOUND');
   }
-  return normalizeUpstreamUrl(row.stream_url);
+  return {
+    url: normalizeUpstreamUrl(row.stream_url),
+    referer: String(row.referer ?? ''),
+    origin: String(row.origin ?? ''),
+    userAgent: String(row.user_agent ?? ''),
+  };
 }
 
 function upstreamBaseForManifest(upstream: string): string {
@@ -65,9 +84,10 @@ export async function proxyRelayRequest(
   req: Request,
   res: Response,
 ): Promise<void> {
-  const upstream = await loadChannelStreamUrl(channelId);
+  const channel = await loadChannelStream(channelId);
+  const upstream = channel.url;
   const target = resolveRelayTarget(upstream, suffix);
-  const headers = playbackHeadersForStreamUrl(upstream);
+  const headers = withChannelRequestHeaders(playbackHeadersForStreamUrl(upstream), channel);
   const range = req.header('range');
   if (range) headers.Range = range;
 

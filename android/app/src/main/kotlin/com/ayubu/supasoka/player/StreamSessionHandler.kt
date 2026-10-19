@@ -1,6 +1,7 @@
 package com.ayubu.supasoka.player
 
 import android.util.Log
+import com.ayubu.supasoka.safeUrlForLogs
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -57,7 +58,7 @@ class StreamSessionHandler(
     ): MediaSource {
         Log.d(TAG, "=".repeat(70))
         Log.d(TAG, "CREATING MEDIA SOURCE FOR SESSION: ${streamSession.sessionId}")
-        Log.d(TAG, "URL: ${streamSession.mpdUrl}")
+        Log.d(TAG, "URL: ${safeUrlForLogs(streamSession.mpdUrl)}")
         Log.d(TAG, "=".repeat(70))
 
         val streamType = detectStreamType(streamSession.mpdUrl)
@@ -246,7 +247,7 @@ class StreamSessionHandler(
         dataSourceFactory: HttpDataSource.Factory
     ): DefaultDrmSessionManager {
         Log.d(TAG, "🔑 Creating DRM session manager")
-        Log.d(TAG, "  License URL: ${streamSession.licenseUrl}")
+            Log.d(TAG, "  License URL: ${safeUrlForLogs(streamSession.licenseUrl)}")
         Log.d(TAG, "  DRM Type: ${streamSession.drmType}")
 
         val headers = buildDrmHeaders(streamSession)
@@ -305,8 +306,9 @@ class StreamSessionHandler(
             putIfAbsent("Accept", "*/*")
         }
 
-        Log.d(TAG, "📋 DRM headers prepared: ${headers.size} header(s)")
-        return headers
+        val finalHeaders = PlaybackHttpHeaders.merge(headers, streamSession.mpdUrl)
+        Log.d(TAG, "📋 DRM headers prepared: ${finalHeaders.size} header(s)")
+        return finalHeaders
     }
 
     /**

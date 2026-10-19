@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.webkit.WebView
+import com.ayubu.supasoka.safeUrlForLogs
 import androidx.media3.common.Tracks
 import com.ayubu.supasoka.domain.model.DrmType
 import com.ayubu.supasoka.domain.model.PlaybackState
@@ -53,7 +54,7 @@ class PlayerManager(
     fun isWebViewPlayback(): Boolean = activeEngine == ActiveEngine.WEBVIEW
 
     fun initialize(streamSession: StreamSession) {
-        Log.d(TAG, "Initializing player: ${streamSession.sessionId} url=${streamSession.mpdUrl.take(80)}")
+        Log.d(TAG, "Initializing player: ${streamSession.sessionId} url=${safeUrlForLogs(streamSession.mpdUrl)}")
         if (isInitialized) release()
         userPaused = false
 

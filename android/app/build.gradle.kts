@@ -86,6 +86,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-smoothstreaming:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.webkit:webkit:1.12.1")
 }

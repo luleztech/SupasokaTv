@@ -36,11 +36,16 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
   late final TextEditingController _imgCtrl;
   late final TextEditingController _viewersCtrl;
   late final TextEditingController _clearKeyCtrl;
+  late final TextEditingController _refererCtrl;
+  late final TextEditingController _originCtrl;
+  late final TextEditingController _userAgentCtrl;
   late String _cat;
   late String _drm;
   late String _audioLanguage;
   late bool _premiumOnly;
   late bool _enabled;
+  bool _urlTouched = false;
+  late final String _initialUrl;
 
   @override
   void initState() {
@@ -48,10 +53,19 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     final e = widget.existing;
     _idCtrl = TextEditingController(text: e?.id.toString() ?? '${widget.store.nextChannelId()}');
     _nameCtrl = TextEditingController(text: e?.name ?? '');
-    _urlCtrl = TextEditingController(text: e?.url ?? '');
+    _initialUrl = normalizeStreamUrl(e?.url);
+    _urlCtrl = TextEditingController(text: _initialUrl);
+    _urlCtrl.addListener(() {
+      if (normalizeStreamUrl(_urlCtrl.text) != _initialUrl) {
+        _urlTouched = true;
+      }
+    });
     _imgCtrl = TextEditingController(text: e?.img ?? '');
     _viewersCtrl = TextEditingController(text: e?.viewers ?? '0');
     _clearKeyCtrl = TextEditingController(text: e?.clearKeyKidKey ?? '');
+    _refererCtrl = TextEditingController(text: e?.referer ?? '');
+    _originCtrl = TextEditingController(text: e?.origin ?? '');
+    _userAgentCtrl = TextEditingController(text: e?.userAgent ?? '');
     _cat = normalizeChannelCategory(e?.cat ?? 'movies');
     _drm = normalizeChannelDrm(e?.drm);
     _audioLanguage = normalizeChannelAudioLanguage(e?.audioLanguage);
@@ -68,6 +82,9 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     _imgCtrl.dispose();
     _viewersCtrl.dispose();
     _clearKeyCtrl.dispose();
+    _refererCtrl.dispose();
+    _originCtrl.dispose();
+    _userAgentCtrl.dispose();
     super.dispose();
   }
 
@@ -95,6 +112,21 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
     }
     HapticFeedback.mediumImpact();
     final clearKey = _drm == 'clearkey' ? _clearKeyCtrl.text.trim() : '';
+    final typedUrl = normalizeStreamUrl(_urlCtrl.text);
+    final previousUrl = normalizeStreamUrl(widget.existing?.url);
+    final String effectiveUrl;
+    final bool clearStreamUrl;
+    if (!_urlTouched) {
+      effectiveUrl = typedUrl.isNotEmpty ? typedUrl : previousUrl;
+      clearStreamUrl = false;
+    } else if (typedUrl.isEmpty) {
+      effectiveUrl = '';
+      clearStreamUrl = previousUrl.isNotEmpty;
+    } else {
+      effectiveUrl = typedUrl;
+      clearStreamUrl = false;
+    }
+
     widget.store.upsertChannel(
       ChannelDto(
         id: id,
@@ -103,11 +135,15 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
         img: _imgCtrl.text.trim(),
         free: !_premiumOnly,
         viewers: _viewersCtrl.text.trim().isEmpty ? '0' : _viewersCtrl.text.trim(),
-        url: _urlCtrl.text.trim(),
+        url: effectiveUrl,
+        clearStreamUrl: clearStreamUrl,
         enabled: _enabled,
         drm: _drm,
         clearKeyKidKey: clearKey,
         audioLanguage: _audioLanguage,
+        referer: _refererCtrl.text.trim(),
+        origin: _originCtrl.text.trim(),
+        userAgent: _userAgentCtrl.text.trim(),
       ),
     );
     if (mounted) Navigator.of(context).pop();
@@ -179,7 +215,7 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                               ),
                         ),
                         Text(
-                          'Stream · DRM · Language · Mpira/Movies/Habari · Premium · Active',
+                          'Stream · Headers · DRM · Language · Mpira/Movies/Habari · Premium · Active',
                           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
                         ),
                       ],
@@ -226,11 +262,54 @@ class _ChannelEditorBodyState extends State<_ChannelEditorBody> {
                     TextField(spellCheckConfiguration: SpellCheckConfiguration.disabled(),
                       controller: _urlCtrl,
                       maxLines: 2,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Playback / stream URL',
                         hintText: 'https://…',
                         alignLabelWithHint: true,
-                        prefixIcon: Icon(Icons.movie_filter_rounded),
+                        prefixIcon: const Icon(Icons.movie_filter_rounded),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    _SectionLabel(icon: Icons.http_rounded, title: 'Custom headers'),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Sent with the playlist and every segment when this URL needs them. Leave a field empty to use the player default.',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                      controller: _refererCtrl,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: 'Referer',
+                        hintText: 'https://www.example.com/',
+                        prefixIcon: Icon(Icons.link_rounded),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                      controller: _originCtrl,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: 'Origin',
+                        hintText: 'https://www.example.com',
+                        prefixIcon: Icon(Icons.public_rounded),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      spellCheckConfiguration: SpellCheckConfiguration.disabled(),
+                      controller: _userAgentCtrl,
+                      minLines: 2,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'User-Agent',
+                        hintText:
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        alignLabelWithHint: true,
+                        prefixIcon: Icon(Icons.person_outline_rounded),
                       ),
                     ),
                     const SizedBox(height: 20),

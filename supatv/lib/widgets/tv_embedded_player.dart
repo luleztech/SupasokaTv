@@ -164,7 +164,7 @@ class _TvEmbeddedPlayerState extends State<TvEmbeddedPlayer> {
   }
 
   Future<void> _startPlayback(ApiPlaybackSession session, int gen) async {
-    final url = session.streamUrl.trim();
+    final url = normalizeStreamUrl(session.streamUrl);
     if (url.isEmpty) {
       if (!mounted || gen != _bootGen) return;
       setState(() {

@@ -7,6 +7,7 @@ import {
   redactPlaybackSecretsFromConfig,
   stripCatalogForForcedUpdate,
 } from '../../services/appUpdatePolicy';
+import { isPlayableChannelId } from '../../lib/streamUrl';
 import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../services/playbackAccess';
 import { proxyRelayRequest } from '../../services/streamRelay';
 import { registerPublicUser, getUserPremiumRecord, getUserPremiumStatus } from '../../services/userDirectory';
@@ -110,7 +111,7 @@ publicRouter.get('/app-update', async (req, res, next) => {
 publicRouter.get('/playback/:channelId', async (req, res, next) => {
   try {
     const channelId = Number(req.params.channelId);
-    if (!Number.isFinite(channelId) || channelId <= 0) {
+    if (!isPlayableChannelId(channelId)) {
       res.status(400).json({ ok: false, error: 'Invalid channel id' });
       return;
     }
@@ -144,7 +145,7 @@ publicRouter.get('/playback/:channelId', async (req, res, next) => {
 publicRouter.get('/relay/:channelId/*', async (req, res, next) => {
   try {
     const channelId = Number(req.params.channelId);
-    if (!Number.isFinite(channelId) || channelId <= 0) {
+    if (!isPlayableChannelId(channelId)) {
       res.status(400).json({ ok: false, error: 'Invalid channel id' });
       return;
     }

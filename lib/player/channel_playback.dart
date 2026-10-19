@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/player/playback_helpers.dart';
 import 'package:supasoka/player/playback_http_headers.dart';
+import 'package:supasoka/player/stream_url_utils.dart';
 import 'package:supasoka/screens/payment_screen.dart';
 import 'package:supasoka/services/content_store.dart';
 import 'package:supasoka/services/playback_service.dart';
@@ -41,12 +42,33 @@ Map<String, dynamic> _channelDataForSession(ApiPlaybackSession session, Channel?
   };
 }
 
+void _showNoStream(BuildContext context) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+    const SnackBar(content: Text('This channel has no stream link yet.')),
+  );
+}
+
 Future<void> _openResolvedPlayback(
   BuildContext context,
   ApiPlaybackSession session, {
   Channel? channel,
 }) async {
-  final resolved = sessionWithResolvedAudioLanguage(session, channel);
+  final url = normalizeStreamUrl(session.streamUrl);
+  if (url.isEmpty) {
+    _showNoStream(context);
+    return;
+  }
+  final cleaned = ApiPlaybackSession(
+    streamUrl: url,
+    drm: session.drm,
+    clearKeyKidKey: session.clearKeyKidKey,
+    licenseUrl: session.licenseUrl,
+    free: session.free,
+    audioLanguage: session.audioLanguage,
+    playbackHeaders: session.playbackHeaders,
+  );
+  final resolved = sessionWithResolvedAudioLanguage(cleaned, channel);
   final channelData = _channelDataForSession(resolved, channel);
   final headers = mergePlaybackHeaders(resolved.streamUrl, resolved.playbackHeaders);
   if (headers.isNotEmpty) {
@@ -135,11 +157,12 @@ Future<void> _handlePlaybackResolve(
         await _openResolvedPlayback(context, retry.session!, channel: channel);
         return;
       }
-      if (channel.streamUrl.trim().isNotEmpty &&
+      if (normalizeStreamUrl(channel.streamUrl).isNotEmpty &&
           !channelRequiresPlaybackResolve(channel)) {
         await _openQuickFromChannel(context, channel);
         return;
       }
+      _showNoStream(context);
       return;
     case PlaybackResolveCode.ok:
       await _openResolvedPlayback(context, resolved.session!, channel: channel);
@@ -169,7 +192,7 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
 
   final cached = peekCachedPlayback(channel.id);
   if (cached != null &&
-      cached.streamUrl.trim().isNotEmpty &&
+      normalizeStreamUrl(cached.streamUrl).isNotEmpty &&
       (!needsSecrets || !_sessionNeedsFreshPlaybackResolve(cached))) {
     await _openResolvedPlayback(context, cached, channel: channel);
     unawaited(resolveChannelPlayback(channel.id, bypassCache: !channel.free));
@@ -187,7 +210,7 @@ Future<void> openChannelPlaybackForChannel(BuildContext context, Channel channel
     return;
   }
 
-  final listUrl = channel.streamUrl.trim();
+  final listUrl = normalizeStreamUrl(channel.streamUrl);
   if (listUrl.isNotEmpty) {
     await _openQuickFromChannel(context, channel);
     unawaited(_refreshPlaybackAfterQuickOpen(channel));

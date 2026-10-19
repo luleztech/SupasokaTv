@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS channels (
   drm TEXT NOT NULL DEFAULT 'none',
   clear_key_kid_key TEXT NOT NULL DEFAULT '',
   audio_language TEXT NOT NULL DEFAULT 'sw',
+  referer TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

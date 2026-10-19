@@ -318,6 +318,18 @@ class _ChannelCard extends StatelessWidget {
                         color: enabled ? null : Colors.white54,
                       ),
                     ),
+                    if (channel.url.trim().isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'No stream link',
+                          style: TextStyle(
+                            color: cs.error,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 6,

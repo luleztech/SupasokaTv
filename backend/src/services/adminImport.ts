@@ -1,7 +1,9 @@
 import { DatabaseError } from 'pg';
 
+import { ensureChannelPlaybackHeaderColumns } from '../db/channelPlaybackHeaders';
 import { getPool } from '../db/pool';
 import { logger } from '../lib/logger';
+import { resolveStoredStreamUrl } from '../lib/streamUrl';
 import { HttpError } from '../middleware/errorHandler';
 import {
   accentRgbFromDartColor,
@@ -21,10 +23,15 @@ type ChannelIn = {
   viewers: string;
   url?: string;
   streamUrl?: string;
+  stream_url?: string;
   enabled?: boolean;
   drm?: string;
   clearKeyKidKey?: string;
   audioLanguage?: string;
+  referer?: string;
+  origin?: string;
+  userAgent?: string;
+  user_agent?: string;
 };
 
 function importErrorMessage(e: unknown): string {
@@ -48,14 +55,49 @@ export async function importAppConfig(body: unknown): Promise<void> {
   }
   const b = body as Record<string, unknown>;
 
+  await ensureChannelPlaybackHeaderColumns(pool);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Pre-load existing channels' stream URLs so catalog imports never drop URLs
+    const existingChannels = await client.query<{
+      id: number;
+      stream_url: string | null;
+      referer: string | null;
+      origin: string | null;
+      user_agent: string | null;
+    }>(
+      `SELECT id, stream_url, referer, origin, user_agent FROM channels`,
+    );
+    const existingChannelsById = new Map<number, {
+      streamUrl: string;
+      referer: string;
+      origin: string;
+      userAgent: string;
+    }>();
+    for (const r of existingChannels.rows) {
+      existingChannelsById.set(Number(r.id), {
+        streamUrl: resolveStoredStreamUrl([r.stream_url], '', false),
+        referer: String(r.referer ?? '').trim(),
+        origin: String(r.origin ?? '').trim(),
+        userAgent: String(r.user_agent ?? '').trim(),
+      });
+    }
+
+    const channels = (b.channels as unknown[]) ?? [];
+    if (channels.length === 0 && existingChannelsById.size > 0) {
+      throw new HttpError(
+        400,
+        'Refusing to replace the catalog with zero channels',
+        'EMPTY_CATALOG',
+      );
+    }
+
     await client.query(
       `TRUNCATE carousel_slides, live_matches, malipo_plans, premium_packages, channels RESTART IDENTITY CASCADE`,
     );
 
-    const channels = (b.channels as unknown[]) ?? [];
     const channelIds = new Set<number>();
     let sort = 0;
     for (const c of channels) {
@@ -65,13 +107,26 @@ export async function importAppConfig(body: unknown): Promise<void> {
         throw new HttpError(400, 'Channel id must be a number', 'BAD_CHANNEL_ID');
       }
       channelIds.add(channelId);
-      const streamUrl =
-        [ch.streamUrl, ch.url]
-          .map((v) => asString(v, '').trim())
-          .find((s) => s.length > 0) ?? '';
+      const rawC = (c && typeof c === 'object') ? (c as Record<string, unknown>) : {};
+      const existingChannel = existingChannelsById.get(channelId);
+      const clearRequested = rawC.clearStreamUrl === true || rawC.clear_stream_url === true;
+      const streamUrl = resolveStoredStreamUrl(
+        [ch.streamUrl, ch.url, ch.stream_url, rawC.stream_url],
+        existingChannel?.streamUrl,
+        clearRequested,
+      );
+      const referer = [ch.referer, rawC.referer, rawC.Referer]
+        .map((v) => asString(v, '').trim())
+        .find((s) => s.length > 0) ?? existingChannel?.referer ?? '';
+      const origin = [ch.origin, rawC.origin, rawC.Origin]
+        .map((v) => asString(v, '').trim())
+        .find((s) => s.length > 0) ?? existingChannel?.origin ?? '';
+      const userAgent = [ch.userAgent, ch.user_agent, rawC.userAgent, rawC.user_agent, rawC['User-Agent']]
+        .map((v) => asString(v, '').trim())
+        .find((s) => s.length > 0) ?? existingChannel?.userAgent ?? '';
       await client.query(
-        `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        `INSERT INTO channels (id, name, cat, img, free, viewers, stream_url, enabled, drm, clear_key_kid_key, audio_language, referer, origin, user_agent, sort_order, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
         [
           channelId,
           asString(ch.name, ''),
@@ -84,6 +139,9 @@ export async function importAppConfig(body: unknown): Promise<void> {
           asString(ch.drm, 'none'),
           asString(ch.clearKeyKidKey, ''),
           normalizeChannelAudioLanguage(ch.audioLanguage),
+          referer,
+          origin,
+          userAgent,
           sort,
         ],
       );

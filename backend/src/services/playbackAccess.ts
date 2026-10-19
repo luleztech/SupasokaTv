@@ -1,6 +1,8 @@
+import { ensureChannelPlaybackHeaderColumns } from '../db/channelPlaybackHeaders';
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
-import { playbackHeadersForStreamUrl } from '../lib/cdnTokenHeaders';
+import { playbackHeadersForStreamUrl, withChannelRequestHeaders } from '../lib/cdnTokenHeaders';
+import { normalizeStreamUrl } from '../lib/streamUrl';
 import {
   buildAppUpdatePayload,
   fetchAppUpdateSettings,
@@ -56,6 +58,7 @@ export async function resolvePlaybackForChannel(
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
+  await ensureChannelPlaybackHeaderColumns(pool);
 
   const chRes = await pool.query<{
     id: number;
@@ -65,8 +68,12 @@ export async function resolvePlaybackForChannel(
     drm: string;
     clear_key_kid_key: string;
     audio_language: string;
+    referer: string;
+    origin: string;
+    user_agent: string;
   }>(
-    `SELECT id, free, enabled, stream_url, drm, clear_key_kid_key, audio_language
+    `SELECT id, free, enabled, stream_url, drm, clear_key_kid_key, audio_language,
+            referer, origin, user_agent
      FROM channels WHERE id = $1`,
     [channelId],
   );
@@ -78,7 +85,7 @@ export async function resolvePlaybackForChannel(
     return { ok: false, code: 'CHANNEL_DISABLED' };
   }
 
-  const streamUrl = String(row.stream_url ?? '').trim();
+  const streamUrl = normalizeStreamUrl(row.stream_url);
   if (!streamUrl) {
     return { ok: false, code: 'CHANNEL_DISABLED' };
   }
@@ -114,7 +121,11 @@ export async function resolvePlaybackForChannel(
       licenseUrl: '',
       free: row.free === true,
       audioLanguage: normalizeChannelAudioLanguage(row.audio_language),
-      playbackHeaders: playbackHeadersForStreamUrl(streamUrl),
+      playbackHeaders: withChannelRequestHeaders(playbackHeadersForStreamUrl(streamUrl), {
+        referer: row.referer,
+        origin: row.origin,
+        userAgent: row.user_agent,
+      }),
     },
   };
 }

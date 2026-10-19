@@ -30,4 +30,9 @@
     <string name="player_buffering">Inapakia…</string>
     <string name="player_retry">Jaribu tena</string>
     <string name="player_error_title">Video haikuweza kuchezwa</string>
+    <string name="zoom_button">Badili ukubwa</string>
+    <string name="zoom_normal">Kawaida</string>
+    <string name="zoom_fill">Jaza</string>
+    <string name="zoom_stretched">Panua</string>
+    <string name="zoom_contain">Kamili</string>
 </resources>

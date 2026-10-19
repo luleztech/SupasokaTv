@@ -12,8 +12,16 @@ export async function fetchAdminExportConfig(): Promise<Record<string, unknown>>
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
   }
 
-  const [base, users, notifRes, updateSettings] = await Promise.all([
+  const [base, liveMatchesRes, users, notifRes, updateSettings] = await Promise.all([
     fetchPublicConfig(),
+    pool.query(
+      `SELECT lm.id, lm.title, lm.sport, lm.sport_icon AS "sportIcon", lm.img,
+              lm.channel_id AS "channelId", lm.live_badge AS "liveBadge",
+              lm.match_time AS "matchTime",
+              lm.sort_order AS "sortOrder"
+       FROM live_matches lm
+       ORDER BY lm.sort_order, lm.id`,
+    ),
     listUsersForAdmin(),
     pool.query(
       `SELECT id, title, body, target, created_at, scheduled_for
@@ -54,6 +62,7 @@ export async function fetchAdminExportConfig(): Promise<Record<string, unknown>>
 
   return jsonSafe({
     ...base,
+    liveMatches: liveMatchesRes.rows,
     forceUpdateEnabled,
     minAndroidBuild: appUpdate.minBuild,
     minAndroidVersion: appUpdate.minVersion,

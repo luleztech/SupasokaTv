@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/data/app_data.dart';
+import 'package:supasoka/player/stream_url_utils.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/user_identity.dart';
 
@@ -180,13 +181,25 @@ Map<String, String> _playbackHeadersFromJson(Object? raw) {
 
 ApiPlaybackSession apiSessionFromChannel(Channel channel) {
   return ApiPlaybackSession(
-    streamUrl: channel.streamUrl.trim(),
+    streamUrl: normalizeStreamUrl(channel.streamUrl),
     drm: channel.drm,
     clearKeyKidKey: channel.clearKeyKidKey.trim(),
     licenseUrl: channel.licenseUrl.trim(),
     free: channel.free,
     audioLanguage: normalizePlaybackAudioLanguage(channel.audioLanguage),
+    playbackHeaders: _channelRequestHeaders(channel),
   );
+}
+
+Map<String, String> _channelRequestHeaders(Channel channel) {
+  final headers = <String, String>{};
+  final referer = channel.referer.trim();
+  final origin = channel.origin.trim();
+  final userAgent = channel.userAgent.trim();
+  if (referer.isNotEmpty) headers['Referer'] = referer;
+  if (origin.isNotEmpty) headers['Origin'] = origin;
+  if (userAgent.isNotEmpty) headers['User-Agent'] = userAgent;
+  return headers;
 }
 
 void invalidatePlaybackCache([int? channelId]) {
@@ -235,7 +248,11 @@ Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
       return PlaybackResolveResult.unavailable();
     }
 
-    final streamUrl = (j['streamUrl'] as String?)?.trim() ?? '';
+    final streamUrl = firstStreamUrl([
+      j['streamUrl'],
+      j['url'],
+      j['stream_url'],
+    ]);
     if (streamUrl.isEmpty) return PlaybackResolveResult.unavailable();
 
     return PlaybackResolveResult.ok(
@@ -244,7 +261,7 @@ Future<PlaybackResolveResult> _fetchChannelPlayback(int channelId) async {
         drm: (j['drm'] ?? 'none').toString(),
         clearKeyKidKey: (j['clearKeyKidKey'] ?? '').toString(),
         licenseUrl: (j['licenseUrl'] ?? '').toString(),
-        free: j['free'] as bool? ?? true,
+        free: j['free'] is bool ? j['free'] as bool : true,
         audioLanguage: normalizePlaybackAudioLanguage(j['audioLanguage']?.toString()),
         playbackHeaders: _playbackHeadersFromJson(j['playbackHeaders']),
       ),

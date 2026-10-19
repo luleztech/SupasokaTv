@@ -72,10 +72,7 @@ class PushNotificationService {
       sound: true,
     );
 
-    final token = await messaging.getToken();
-    if (kDebugMode) {
-      debugPrint('FCM token: $token');
-    }
+    await messaging.getToken();
 
     await messaging.subscribeToTopic('all_users');
 
@@ -110,8 +107,7 @@ class PushNotificationService {
         settings.authorizationStatus == AuthorizationStatus.provisional;
     if (allowed) {
       final messaging = FirebaseMessaging.instance;
-      final token = await messaging.getToken();
-      if (kDebugMode) debugPrint('FCM token (after prompt): $token');
+      await messaging.getToken();
       await messaging.subscribeToTopic('all_users');
     }
     return allowed;
@@ -147,9 +143,7 @@ class PushNotificationService {
   }
 
   static void _logOpenedNotification(RemoteMessage message) {
-    if (kDebugMode) {
-      debugPrint('Notification opened: ${message.data}');
-    }
+    if (kDebugMode) debugPrint('Notification opened');
   }
 
   static Future<void> syncAudienceTopics({required bool isPremium}) async {

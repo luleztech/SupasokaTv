@@ -1,6 +1,54 @@
 /// Stream URL classification aligned with native [StreamUrlClassifier] / RN VideoPlayer.
 enum StreamFormat { dash, hls, progressive, gateway, unknown }
 
+final _streamUrlNoise = RegExp(
+  r'''[\s\u00A0\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u2069\uFEFF\u3000]''',
+);
+
+String _unwrapStreamUrlOnce(String value) {
+  const pairs = <(String, String)>[
+    ('"', '"'),
+    ("'", "'"),
+    ('`', '`'),
+    ('“', '”'),
+    ('‘', '’'),
+    ('<', '>'),
+  ];
+  for (final pair in pairs) {
+    final open = pair.$1;
+    final close = pair.$2;
+    if (value.length >= open.length + close.length &&
+        value.startsWith(open) &&
+        value.endsWith(close)) {
+      return value.substring(open.length, value.length - close.length);
+    }
+  }
+  return value;
+}
+
+/// Same rules as the API: drop paste noise so a stored link is actually playable.
+String normalizeStreamUrl(Object? raw) {
+  if (raw is! String) return '';
+  var s = _unwrapStreamUrlOnce(raw.trim());
+  s = _unwrapStreamUrlOnce(s).replaceAll(_streamUrlNoise, '');
+  final at = s.toLowerCase().indexOf('https://');
+  final httpAt = s.toLowerCase().indexOf('http://');
+  final start = at >= 0 && (httpAt < 0 || at <= httpAt)
+      ? at
+      : httpAt;
+  if (start > 0) s = s.substring(start);
+  return s;
+}
+
+/// First alias that is a real link. An empty `streamUrl` must not hide `url`.
+String firstStreamUrl(Iterable<Object?> values) {
+  for (final value in values) {
+    final url = normalizeStreamUrl(value);
+    if (url.isNotEmpty) return url;
+  }
+  return '';
+}
+
 bool _hasObviousM3u8(String url) =>
     RegExp(r'\.m3u8?(\?|#|$)', caseSensitive: false).hasMatch(url) ||
     RegExp(r'[?&](format|type)=m3u8?(\b|&|$)', caseSensitive: false).hasMatch(url);

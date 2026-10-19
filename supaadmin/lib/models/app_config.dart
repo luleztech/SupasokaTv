@@ -16,6 +16,68 @@ int parseIntLoose(dynamic v) {
   return int.parse(v.toString());
 }
 
+String looseText(dynamic v, [String fallback = '']) {
+  if (v == null) return fallback;
+  if (v is String) return v;
+  if (v is num || v is bool) return v.toString();
+  return fallback;
+}
+
+bool looseBool(dynamic v, bool fallback) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  final s = v?.toString().trim().toLowerCase() ?? '';
+  if (s == 'true' || s == '1' || s == 'yes') return true;
+  if (s == 'false' || s == '0' || s == 'no') return false;
+  return fallback;
+}
+
+final _streamUrlNoise = RegExp(
+  r'''[\s\u00A0\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u2069\uFEFF\u3000]''',
+);
+
+String _unwrapStreamUrlOnce(String value) {
+  const pairs = <(String, String)>[
+    ('"', '"'),
+    ("'", "'"),
+    ('`', '`'),
+    ('“', '”'),
+    ('‘', '’'),
+    ('<', '>'),
+  ];
+  for (final pair in pairs) {
+    final open = pair.$1;
+    final close = pair.$2;
+    if (value.length >= open.length + close.length &&
+        value.startsWith(open) &&
+        value.endsWith(close)) {
+      return value.substring(open.length, value.length - close.length);
+    }
+  }
+  return value;
+}
+
+/// Drop newlines, wrapping quotes, and invisible characters from a pasted link.
+String normalizeStreamUrl(Object? raw) {
+  if (raw is! String) return '';
+  var s = _unwrapStreamUrlOnce(raw.trim());
+  s = _unwrapStreamUrlOnce(s).replaceAll(_streamUrlNoise, '');
+  final at = s.toLowerCase().indexOf('https://');
+  final httpAt = s.toLowerCase().indexOf('http://');
+  final start = at >= 0 && (httpAt < 0 || at <= httpAt) ? at : httpAt;
+  if (start > 0) s = s.substring(start);
+  return s;
+}
+
+/// First alias that is a real link. An empty `streamUrl` must not hide `url`.
+String firstStreamUrl(Iterable<Object?> values) {
+  for (final value in values) {
+    final url = normalizeStreamUrl(value);
+    if (url.isNotEmpty) return url;
+  }
+  return '';
+}
+
 /// `malipoPlans.accent1` / `accent2` may be [num] or hex-ish [String] (`0xff…`, `959977`, etc.).
 int malipoAccentFromJson(dynamic value, int fallback) {
   if (value == null) return fallback;
@@ -98,9 +160,18 @@ class AppConfig {
       };
 
   factory AppConfig.fromJson(Map<String, dynamic> j) {
+    final channels = <ChannelDto>[];
+    for (final e in (j['channels'] as List<dynamic>? ?? [])) {
+      if (e is! Map) continue;
+      try {
+        channels.add(ChannelDto.fromJson(Map<String, dynamic>.from(e)));
+      } catch (_) {
+        // One bad row must not drop every other channel's stream link.
+      }
+    }
     return AppConfig(
       configVersion: (j['configVersion'] as num?)?.toInt() ?? 1,
-      channels: (j['channels'] as List<dynamic>? ?? []).map((e) => ChannelDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
+      channels: channels,
       carousel: (j['carousel'] as List<dynamic>? ?? []).map((e) => CarouselDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       premiumPackages: (j['premiumPackages'] as List<dynamic>? ?? []).map((e) => PackageDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
       malipoPlans: (j['malipoPlans'] as List<dynamic>? ?? []).map((e) => MalipoPlanDto.fromJson(Map<String, dynamic>.from(e as Map))).toList(),
@@ -144,6 +215,10 @@ class ChannelDto {
     this.drm = 'none',
     this.clearKeyKidKey = '',
     this.audioLanguage = 'sw',
+    this.referer = '',
+    this.origin = '',
+    this.userAgent = '',
+    this.clearStreamUrl = false,
   });
 
   int id;
@@ -164,6 +239,14 @@ class ChannelDto {
   String clearKeyKidKey;
   /// Preferred playback audio: `sw` (Swahili, default) | `en` (English).
   String audioLanguage;
+  /// Optional Referer sent with the stream request. Empty uses the player default.
+  String referer;
+  /// Optional Origin sent with the stream request. Empty uses the player default.
+  String origin;
+  /// Optional User-Agent sent with the stream request. Empty uses the player default.
+  String userAgent;
+  /// Write instruction: the editor cleared the link. Not stored in the database.
+  bool clearStreamUrl;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -173,31 +256,41 @@ class ChannelDto {
         'free': free,
         'viewers': viewers,
         'url': url,
-        // Backend stores stream_url; send both keys so upsert never drops the URL.
+        // Backend stores stream_url; send all alias keys so upsert never drops the URL.
         'streamUrl': url,
+        'stream_url': url,
+        'clearStreamUrl': clearStreamUrl,
         'enabled': enabled,
         'drm': drm,
         'clearKeyKidKey': clearKeyKidKey,
         'audioLanguage': audioLanguage,
+        'referer': referer,
+        'origin': origin,
+        'userAgent': userAgent,
       };
 
-  factory ChannelDto.fromJson(Map<String, dynamic> j) => ChannelDto(
-        id: parseIntLoose(j['id']),
-        name: j['name'] as String,
-        cat: normalizeChannelCategory(j['cat'] as String?),
-        img: j['img'] as String,
-        free: j['free'] as bool,
-        viewers: j['viewers'] as String,
-        url: () {
-          final u = (j['url'] as String?)?.trim() ?? '';
-          if (u.isNotEmpty) return u;
-          return (j['streamUrl'] as String?)?.trim() ?? '';
-        }(),
-        enabled: j['enabled'] as bool? ?? true,
-        drm: normalizeChannelDrm(j['drm'] as String?),
-        clearKeyKidKey: j['clearKeyKidKey'] as String? ?? '',
-        audioLanguage: normalizeChannelAudioLanguage(j['audioLanguage'] as String?),
+  factory ChannelDto.fromJson(Map<String, dynamic> j) {
+    final id = parseIntNullable(j['id']);
+    if (id == null) {
+      throw const FormatException('Channel id');
+    }
+    return ChannelDto(
+        id: id,
+        name: looseText(j['name']),
+        cat: normalizeChannelCategory(looseText(j['cat'], 'movies')),
+        img: looseText(j['img']),
+        free: looseBool(j['free'], true),
+        viewers: looseText(j['viewers']),
+        url: firstStreamUrl([j['url'], j['streamUrl'], j['stream_url']]),
+        enabled: looseBool(j['enabled'], true),
+        drm: normalizeChannelDrm(looseText(j['drm'], 'none')),
+        clearKeyKidKey: looseText(j['clearKeyKidKey']),
+        audioLanguage: normalizeChannelAudioLanguage(looseText(j['audioLanguage'], 'sw')),
+        referer: _headerField(j, const ['referer', 'Referer']),
+        origin: _headerField(j, const ['origin', 'Origin']),
+        userAgent: _headerField(j, const ['userAgent', 'user_agent', 'User-Agent']),
       );
+  }
 
   ChannelDto copy() => ChannelDto(
         id: id,
@@ -211,6 +304,10 @@ class ChannelDto {
         drm: drm,
         clearKeyKidKey: clearKeyKidKey,
         audioLanguage: audioLanguage,
+        referer: referer,
+        origin: origin,
+        userAgent: userAgent,
+        clearStreamUrl: clearStreamUrl,
       );
 
   ChannelDto copyWith({
@@ -225,6 +322,10 @@ class ChannelDto {
     String? drm,
     String? clearKeyKidKey,
     String? audioLanguage,
+    String? referer,
+    String? origin,
+    String? userAgent,
+    bool? clearStreamUrl,
   }) {
     return ChannelDto(
       id: id ?? this.id,
@@ -238,8 +339,21 @@ class ChannelDto {
       drm: drm ?? this.drm,
       clearKeyKidKey: clearKeyKidKey ?? this.clearKeyKidKey,
       audioLanguage: audioLanguage ?? this.audioLanguage,
+      referer: referer ?? this.referer,
+      origin: origin ?? this.origin,
+      userAgent: userAgent ?? this.userAgent,
+      clearStreamUrl: clearStreamUrl ?? false,
     );
   }
+}
+
+String _headerField(Map<String, dynamic> j, List<String> keys) {
+  for (final key in keys) {
+    final raw = j[key];
+    if (raw == null) continue;
+    return raw.toString().trim();
+  }
+  return '';
 }
 
 /// Selectable categories in SupaAdmin (key → label). Mpira, Movies, Habari.

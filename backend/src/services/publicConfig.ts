@@ -1,7 +1,9 @@
 import type { QueryResult } from 'pg';
 
+import { ensureChannelPlaybackHeaderColumns } from '../db/channelPlaybackHeaders';
 import { getPool } from '../db/pool';
 import { jsonSafe } from '../lib/jsonSafe';
+import { firstStreamUrl } from '../lib/streamUrl';
 import { logger } from '../lib/logger';
 import { HttpError } from '../middleware/errorHandler';
 
@@ -29,6 +31,8 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
     throw new HttpError(503, 'DATABASE_URL is not configured on the API service', 'NO_DATABASE');
   }
 
+  await ensureChannelPlaybackHeaderColumns(pool);
+
   let chRes, carRes, malRes, liveRes, pkgRes, setRes;
   try {
     [chRes, carRes, malRes, liveRes, pkgRes, setRes] = await Promise.all([
@@ -39,6 +43,9 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
                   enabled, drm,
                   clear_key_kid_key AS "clearKeyKidKey",
                   audio_language AS "audioLanguage",
+                  referer,
+                  origin,
+                  user_agent AS "userAgent",
                   sort_order AS "sortOrder"
            FROM channels ORDER BY sort_order, id`,
         ),
@@ -68,7 +75,7 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
            FROM live_matches lm
            INNER JOIN channels c ON c.id = lm.channel_id
            WHERE c.enabled = TRUE
-             AND NULLIF(TRIM(c.stream_url), '') IS NOT NULL
+             AND length(regexp_replace(COALESCE(c.stream_url, ''), '[[:space:]]', '', 'g')) > 0
            ORDER BY lm.sort_order, lm.id`,
         ),
       ),
@@ -91,10 +98,12 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
   }
 
   const channels = (chRes.rows as Record<string, unknown>[]).map((row) => {
-    const streamUrl = String(row.streamUrl ?? '');
+    const streamUrl = firstStreamUrl([row.streamUrl, row.url, row.stream_url]);
     return {
       ...row,
       url: streamUrl,
+      streamUrl,
+      stream_url: streamUrl,
     };
   });
 
