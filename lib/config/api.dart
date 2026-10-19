@@ -8,14 +8,13 @@ import 'package:supasoka/services/tanzania_phone.dart';
 class _PaymentsApi {
   static const _startPaymentTimeout = Duration(seconds: 95);
 
-  /// Only retry true transport/server blips. Do not re-hit Sonic on wallet/STK failures —
-  /// especially Airtel — or the per-number rate limit shows "Subiri dakika 2–5".
-  /// One POST per tap — backend owns Sonic retries; client must not double-hit checkout.
-  static const _maxStartRounds = 1;
+  /// At most two POSTs: first tap, then one soft retry only for transport blips
+  /// or gateway-busy (backend may switch Sonic→Aurax). Never retry per-number quotas.
+  static const _maxStartRounds = 2;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
-    if (round >= _maxStartRounds) return false;
-    return _isTransientStartPaymentError(e);
+    if (round >= _maxStartRounds - 1) return false;
+    return _isTransientStartPaymentError(e) || _isGatewayBusyStartPaymentError(e);
   }
 
   static bool _isTransientStartPaymentError(Object e) {
@@ -29,6 +28,20 @@ class _PaymentsApi {
         lower.contains('502') ||
         lower.contains('503') ||
         lower.contains('504');
+  }
+
+  static bool _isGatewayBusyStartPaymentError(Object e) {
+    final lower = e.toString().toLowerCase();
+    if (lower.contains('majaribio mengi') ||
+        lower.contains('umefanya majaribio') ||
+        lower.contains('umejaribu mara nyingi') ||
+        lower.contains('limetumwa kwenye simu')) {
+      return false;
+    }
+    return lower.contains('huduma ina shughuli') ||
+        lower.contains('payment_busy') ||
+        RegExp(r'^.*too many attempts\.?$', caseSensitive: false).hasMatch(lower.trim()) ||
+        lower.contains('too many requests');
   }
 
   Future<Map<String, dynamic>> _postStartPayment({
@@ -163,7 +176,10 @@ class _PaymentsApi {
       } catch (e) {
         lastErr = e;
         if (round < _maxStartRounds - 1 && _isRetryableStartPaymentError(e, round)) {
-          await Future<void>.delayed(Duration(milliseconds: 800 * (round + 1)));
+          final busy = _isGatewayBusyStartPaymentError(e);
+          await Future<void>.delayed(
+            Duration(milliseconds: busy ? 1600 * (round + 1) : 800 * (round + 1)),
+          );
           continue;
         }
         rethrow;

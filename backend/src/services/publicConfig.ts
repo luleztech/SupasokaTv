@@ -98,12 +98,17 @@ export async function fetchPublicConfig(): Promise<Record<string, unknown>> {
   }
 
   const channels = (chRes.rows as Record<string, unknown>[]).map((row) => {
-    const streamUrl = firstStreamUrl([row.streamUrl, row.url, row.stream_url]);
+    const isFree = row.free === true || row.free === 't' || row.free === 1 || row.free === '1';
+    // Paid channels must not expose stream URLs in public config — only /playback after premium check.
+    const streamUrl = isFree ? firstStreamUrl([row.streamUrl, row.url, row.stream_url]) : '';
     return {
       ...row,
-      url: streamUrl,
+      free: Boolean(isFree),
       streamUrl,
+      url: streamUrl,
       stream_url: streamUrl,
+      // Never ship ClearKey material for locked channels via public config.
+      clearKeyKidKey: isFree ? row.clearKeyKidKey : null,
     };
   });
 

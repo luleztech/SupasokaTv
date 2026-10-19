@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:supasoka/config/api_config.dart';
-import 'package:supasoka/services/premium_recovery.dart';
 import 'package:supasoka/services/playback_service.dart';
 import 'package:supasoka/services/user_identity.dart';
 
@@ -177,11 +176,8 @@ class SubscriptionStore {
         return;
       }
 
-      final hasPending = await PremiumRecovery.hasRecentPendingPayment();
-      if (hasPending) {
-        return;
-      }
-
+      // Server says expired / null — always clear local. Pending payment recovery
+      // must confirm unlock explicitly; it must not keep a stale premium window.
       invalidatePlaybackCache();
       await clearLocalPremium();
     } catch (e) {

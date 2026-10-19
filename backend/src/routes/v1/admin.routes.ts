@@ -30,7 +30,7 @@ import {
   setPaymentProvider,
 } from '../../services/paymentProviderSettings';
 import { providerHealthSnapshot } from '../../services/unifiedPayments';
-import { revokeAllActivePremium, revokePremiumWithoutVerifiedPayment } from '../../services/premiumCleanup';
+import { revokeAllActivePremium, revokePremiumWithoutVerifiedPayment, capOverlongPremiumFromPayments } from '../../services/premiumCleanup';
 import { fetchPaymentHealth } from '../../services/paymentHealth';
 
 export const adminRouter = Router();
@@ -298,6 +298,20 @@ adminRouter.post('/maintenance/revoke-mistaken-premium', requireAdmin, async (_r
   try {
     const out = await revokePremiumWithoutVerifiedPayment();
     res.json({ ok: true, ...out });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Cap active premium to stacked windows from verified payments and backfill
+ * one-shot grant markers (fixes "pay once, watch forever" re-grants).
+ */
+adminRouter.post('/maintenance/cap-overlong-premium', requireAdmin, async (req, res, next) => {
+  try {
+    const dryRun = Boolean((req.body as { dryRun?: unknown } | undefined)?.dryRun);
+    const out = await capOverlongPremiumFromPayments({ dryRun, limit: 5000 });
+    res.json({ ok: true, dryRun, ...out });
   } catch (e) {
     next(e);
   }

@@ -49,8 +49,8 @@ export function auraxChannelCandidates(local0: string): string[] {
       // Halopesa 061 / 062 / 063
       return ['HALOPESA'];
     case 'tigo_yas':
-      // Mixx by Yas / Tigo including 070 and 071
-      return ['TIGO_PESA'];
+      // Mixx by Yas / Tigo including 070 and 071 — try both enums Aurax accepts.
+      return ['TIGO_PESA', 'MIXX'];
     case 'vodacom':
     case 'mo_mobile':
       return ['MPESA'];
@@ -161,7 +161,7 @@ export async function tryCreateAuraxOrder(args: {
   if (tryList.length === 0) {
     pushCombo(resolveAuraxChannelFromPhone(args.localPhone), preferredPhone);
   }
-  const limitedTryList = tryList.slice(0, 2);
+  const limitedTryList = tryList.slice(0, 3);
 
   let lastFailResult: {
     ok: false;
@@ -242,10 +242,19 @@ export async function tryCreateAuraxOrder(args: {
         raw: data,
       };
     } catch (e) {
-      if (i === limitedTryList.length - 1) {
-        throw e;
-      }
-      logger.warn({ err: e, channel: combo.channel, phone: combo.phone }, 'aurax_create_error_retry');
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn({ err: msg, channel: combo.channel, phone: combo.phone }, 'aurax_create_error_retry');
+      lastFailResult = {
+        ok: false,
+        orderId: '',
+        message: msg,
+        raw: { status: 'error', message: msg },
+        errorMessage:
+          /abort|timeout|timed out/i.test(msg)
+            ? 'Huduma ya malipo inachukua muda. Tunajaribu njia nyingine…'
+            : 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, kisha jaribu tena.',
+      };
+      // Never throw — callers must be able to fall through to SonicPesa.
     }
   }
   return lastFailResult;

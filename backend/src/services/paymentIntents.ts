@@ -20,6 +20,8 @@ export type PaymentIntentRow = {
   status: PaymentIntentStatus;
   provider_status: string | null;
   activated_at_ms: string | null;
+  /** Epoch ms when this order's premium window was written — one-shot; never re-grant after set. */
+  premium_granted_until_ms: string | null;
   provider_payload: unknown;
 };
 
@@ -78,6 +80,9 @@ export async function ensurePaymentIntentsTable(): Promise<void> {
     )`,
   );
   await pool.query(`ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS payment_provider TEXT`);
+  await pool.query(
+    `ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS premium_granted_until_ms BIGINT`,
+  );
 }
 
 export async function upsertPendingIntent(args: {
@@ -161,12 +166,34 @@ export async function markIntentActivated(orderId: string): Promise<void> {
   );
 }
 
+/** Record that this paid order already consumed its premium window (prevents forever re-grants). */
+export async function markIntentPremiumGranted(
+  orderId: string,
+  premiumGrantedUntilMs: number,
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await ensurePaymentIntentsTable();
+  const until = Math.trunc(premiumGrantedUntilMs);
+  if (!Number.isFinite(until) || until <= 0) return;
+  await pool.query(
+    `UPDATE payment_intents
+     SET status = 'COMPLETED',
+         activated_at_ms = COALESCE(activated_at_ms, $2),
+         premium_granted_until_ms = COALESCE(premium_granted_until_ms, $3),
+         updated_at = now()
+     WHERE order_id = $1`,
+    [orderId, Date.now(), until],
+  );
+}
+
 export async function getIntent(orderId: string): Promise<PaymentIntentRow | null> {
   const pool = getPool();
   if (!pool) return null;
   await ensurePaymentIntentsTable();
   const res = await pool.query<PaymentIntentRow>(
-    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider, status, provider_status, activated_at_ms, provider_payload
+    `SELECT order_id, public_id, plan_id, amount_tzs, buyer_phone, payment_provider,
+            status, provider_status, activated_at_ms, premium_granted_until_ms, provider_payload
      FROM payment_intents
      WHERE order_id = $1
      LIMIT 1`,
