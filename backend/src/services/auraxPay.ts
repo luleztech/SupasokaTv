@@ -135,6 +135,8 @@ export async function tryCreateAuraxOrder(args: {
   message: string;
   raw: Record<string, unknown>;
   errorMessage?: string;
+  /** True when the HTTP call aborted. The PIN may already be on the phone. */
+  timedOut?: boolean;
 }> {
   ensureAuraxConfigured();
   const amount = Math.max(AURAX_MIN_AMOUNT, Math.trunc(Number(args.amountTzs) || 0));
@@ -243,18 +245,24 @@ export async function tryCreateAuraxOrder(args: {
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      logger.warn({ err: msg, channel: combo.channel, phone: combo.phone }, 'aurax_create_error_retry');
+      const timedOut = /abort|timeout|timed out/i.test(msg);
+      logger.warn(
+        { err: msg, channel: combo.channel, phone: combo.phone, timedOut },
+        'aurax_create_error_retry',
+      );
       lastFailResult = {
         ok: false,
         orderId: '',
         message: msg,
         raw: { status: 'error', message: msg },
-        errorMessage:
-          /abort|timeout|timed out/i.test(msg)
-            ? 'Huduma ya malipo inachukua muda. Tunajaribu njia nyingine…'
-            : 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, kisha jaribu tena.',
+        timedOut,
+        errorMessage: timedOut
+          ? 'Ombi la PIN linaweza kuwa limetumwa kwenye simu yako. Angalia dirisha la PIN.'
+          : 'Hatukuweza kutuma ombi la malipo kwenye simu yako. Hakikisha nambari ni sahihi, una salio, kisha jaribu tena.',
       };
-      // Never throw — callers must be able to fall through to SonicPesa.
+      // A timeout means the push may already be on the handset. Do not try another
+      // channel — that can send a second PIN or a second charge.
+      if (timedOut) return lastFailResult;
     }
   }
   return lastFailResult;

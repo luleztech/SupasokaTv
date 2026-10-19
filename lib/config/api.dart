@@ -32,13 +32,14 @@ class _PaymentsApi {
 
   static bool _isGatewayBusyStartPaymentError(Object e) {
     final lower = e.toString().toLowerCase();
-    if (lower.contains('majaribio mengi') ||
-        lower.contains('umefanya majaribio') ||
-        lower.contains('umejaribu mara nyingi') ||
-        lower.contains('limetumwa kwenye simu')) {
+    if (lower.contains('limetumwa kwenye simu') ||
+        lower.contains('angalia pin') ||
+        lower.contains('dirisha la pin') ||
+        lower.contains('payment_cooldown')) {
       return false;
     }
     return lower.contains('huduma ina shughuli') ||
+        lower.contains('watu wengi wanalipa') ||
         lower.contains('payment_busy') ||
         RegExp(r'^.*too many attempts\.?$', caseSensitive: false).hasMatch(lower.trim()) ||
         lower.contains('too many requests');

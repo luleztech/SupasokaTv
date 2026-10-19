@@ -368,7 +368,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   }
 
   Future<void> _adaptivePaymentPollLoop(String orderId, int gen) async {
-    const warmDelaysMs = <int>[0, 500, 800, 1100, 1400, 1800, 2200];
+    const warmDelaysMs = <int>[3000, 2500, 3500, 4000];
     var warmIdx = 0;
     var confirmProbeTick = 0;
     final deadline = DateTime.now().add(Duration(seconds: _kPaymentWaitSeconds));
@@ -381,7 +381,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         return;
       }
 
-      final delayMs = warmIdx < warmDelaysMs.length ? warmDelaysMs[warmIdx] : 1500;
+      final delayMs = warmIdx < warmDelaysMs.length ? warmDelaysMs[warmIdx] : 4500;
       warmIdx++;
       if (delayMs > 0) {
         await Future<void>.delayed(Duration(milliseconds: delayMs));
@@ -629,6 +629,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   bool _isPaymentCooldownDetail(String lower) {
     return lower.contains('limetumwa kwenye simu') ||
         lower.contains('angalia pin') ||
+        lower.contains('dirisha la pin') ||
         lower.contains('payment_cooldown');
   }
 
@@ -667,7 +668,11 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (RegExp(r'too many attempts?', caseSensitive: false).hasMatch(lower) ||
         lower.contains('too many requests') ||
         lower == 'rate limited' ||
+        lower.contains('watu wengi wanalipa') ||
         lower.contains('huduma ina shughuli')) {
+      if (lower.contains('watu wengi wanalipa') && raw.length > 20 && raw.length < 240) {
+        return raw;
+      }
       return 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
     }
     if (lower.contains('401') || lower.contains('403')) {
@@ -891,17 +896,18 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     _submitStageTimer?.cancel();
     setState(() {
       _submitting = true;
-      _submitStatus = 'Inathibitisha taarifa zako…';
+      _submitStatus = 'Inatuma ombi la PIN kwenye simu yako…';
     });
     var step = 0;
-    _submitStageTimer = Timer.periodic(const Duration(milliseconds: 850), (_) {
+    _submitStageTimer = Timer.periodic(const Duration(milliseconds: 2200), (_) {
       if (!mounted || !_submitting) return;
       step++;
       setState(() {
-        _submitStatus = switch (step % 3) {
-          0 => 'Inathibitisha taarifa zako…',
-          1 => 'Inaunganisha na huduma ya malipo…',
-          _ => 'Inatumia ombi la malipo…',
+        _submitStatus = switch (step % 4) {
+          0 => 'Inatuma ombi la PIN kwenye simu yako…',
+          1 => 'Inasubiri huduma ya malipo ikuthibitishie…',
+          2 => 'Watu wengi wakiwa wanalipa, PIN bado inakuja. Usifunge.',
+          _ => 'Angalia simu — dirisha la PIN linaweza kuonekana sasa.',
         };
       });
     });
@@ -1989,6 +1995,16 @@ class _PaymentWaitingModal extends StatelessWidget {
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: Colors.white.withValues(alpha: 0.75),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Usibonyeze Lipia sasa tena. PIN kwenye simu ndiyo inayothibitisha malipo.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.35,
+                  color: Colors.white.withValues(alpha: 0.62),
                 ),
               ),
               const SizedBox(height: 14),

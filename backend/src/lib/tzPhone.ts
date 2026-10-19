@@ -203,15 +203,24 @@ export function sonicChannelHintsForNetwork(local0: string): string[] {
 }
 
 /**
- * Wallet Sonic must be told explicitly. Auto-detect from `255…` creates an order
- * for HaloPesa and Mixx/Yas but does not send the USSD prompt.
- * Vodacom and Airtel stay on auto-detect.
+ * Wallet Sonic must be told explicitly. Without `channel`, HaloPesa, Mixx/Yas,
+ * Airtel Money, and some M-Pesa numbers get an order id and never a PIN prompt.
+ * One canonical value per network — extra guesses burn the per-number quota.
  */
 export function sonicDispatchChannel(local0: string): string | undefined {
-  const network = detectTzMobileNetwork(toLocal0Digits(local0));
-  if (network !== 'halotel' && network !== 'tigo_yas') return undefined;
-  const hint = sonicChannelHintsForNetwork(local0)[0];
-  return hint || undefined;
+  switch (detectTzMobileNetwork(toLocal0Digits(local0))) {
+    case 'halotel':
+      return 'HALOPESA';
+    case 'tigo_yas':
+      return 'TIGOPESATZ';
+    case 'airtel':
+      return 'AIRTELMONEY';
+    case 'vodacom':
+    case 'mo_mobile':
+      return 'MPESA';
+    default:
+      return undefined;
+  }
 }
 
 export function isHalotelLocalPhone(local0: string): boolean {

@@ -21,6 +21,8 @@ class SubscriptionStore {
   static Timer? _localExpiryTimer;
   static Future<void>? _inflightSync;
   static DateTime? _lastSyncAttemptAt;
+  /// Keeps a just-confirmed unlock if the premium read is a moment behind the payment.
+  static DateTime? _trustedGrantAt;
   static const _minSyncInterval = Duration(seconds: 45);
   static const _syncTimeout = Duration(seconds: 12);
 
@@ -49,6 +51,7 @@ class SubscriptionStore {
 
   static Future<void> clearLocalPremium() async {
     _cancelLocalExpiryTimer();
+    _trustedGrantAt = null;
     invalidatePlaybackCache();
     final p = await SharedPreferences.getInstance();
     await p.remove(_kUntilMs);
@@ -104,7 +107,10 @@ class SubscriptionStore {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kUntilMs, premiumUntilMs);
     premiumUntilNotifier.value = end;
+    _trustedGrantAt = DateTime.now();
     _scheduleLocalExpiry(premiumUntilMs);
+    // Drop every cached "lipia kwanza" result so all paid channels open.
+    invalidatePlaybackCache();
   }
 
   static bool isPremiumActiveLocal() {
@@ -169,15 +175,26 @@ class SubscriptionStore {
               : null;
 
       if (premiumUntilMs != null && _isActiveMs(premiumUntilMs)) {
+        final justUnlocked = !isPremiumActiveLocal();
         final p = await SharedPreferences.getInstance();
         await p.setInt(_kUntilMs, premiumUntilMs);
         premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
         _scheduleLocalExpiry(premiumUntilMs);
+        _trustedGrantAt = null;
+        if (justUnlocked) invalidatePlaybackCache();
+        return;
+      }
+
+      final grantAt = _trustedGrantAt;
+      if (grantAt != null &&
+          DateTime.now().difference(grantAt) < const Duration(minutes: 3) &&
+          isPremiumActiveLocal()) {
         return;
       }
 
       // Server says expired / null — always clear local. Pending payment recovery
       // must confirm unlock explicitly; it must not keep a stale premium window.
+      _trustedGrantAt = null;
       invalidatePlaybackCache();
       await clearLocalPremium();
     } catch (e) {

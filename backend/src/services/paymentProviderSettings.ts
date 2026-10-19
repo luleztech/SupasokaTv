@@ -22,7 +22,19 @@ export function isProviderConfigured(_provider?: PaymentProviderId): boolean {
   return isSonicPesaConfigured();
 }
 
-async function ensureAppSettingsTable(): Promise<void> {
+let appSettingsReady: Promise<void> | null = null;
+
+function ensureAppSettingsTable(): Promise<void> {
+  if (!appSettingsReady) {
+    appSettingsReady = ensureAppSettingsTableOnce().catch((err) => {
+      appSettingsReady = null;
+      throw err;
+    });
+  }
+  return appSettingsReady;
+}
+
+async function ensureAppSettingsTableOnce(): Promise<void> {
   const pool = getPool();
   if (!pool) return;
   await pool.query(
@@ -33,13 +45,25 @@ async function ensureAppSettingsTable(): Promise<void> {
   );
 }
 
-export async function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
+let selectedProviderReady: Promise<PaymentProviderId> | null = null;
+
+export function getSelectedPaymentProvider(): Promise<PaymentProviderId> {
+  if (!selectedProviderReady) {
+    selectedProviderReady = loadSelectedPaymentProvider().catch((err) => {
+      selectedProviderReady = null;
+      throw err;
+    });
+  }
+  return selectedProviderReady;
+}
+
+async function loadSelectedPaymentProvider(): Promise<PaymentProviderId> {
   const pool = getPool();
   if (pool) {
     await ensureAppSettingsTable();
     await pool.query(
       `INSERT INTO app_settings (key, value) VALUES ($1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = $2`,
+       ON CONFLICT (key) DO NOTHING`,
       [PAYMENT_PROVIDER_SETTING_KEY, PAYMENT_PROVIDERS.SONICPESA],
     );
   }

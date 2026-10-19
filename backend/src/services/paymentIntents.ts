@@ -60,7 +60,19 @@ function normalizeStatus(raw: string): PaymentIntentStatus {
   return 'PENDING';
 }
 
-export async function ensurePaymentIntentsTable(): Promise<void> {
+let paymentIntentsSchemaReady: Promise<void> | null = null;
+
+export function ensurePaymentIntentsTable(): Promise<void> {
+  if (!paymentIntentsSchemaReady) {
+    paymentIntentsSchemaReady = ensurePaymentIntentsTableOnce().catch((err) => {
+      paymentIntentsSchemaReady = null;
+      throw err;
+    });
+  }
+  return paymentIntentsSchemaReady;
+}
+
+async function ensurePaymentIntentsTableOnce(): Promise<void> {
   const pool = getPool();
   if (!pool) return;
   await pool.query(

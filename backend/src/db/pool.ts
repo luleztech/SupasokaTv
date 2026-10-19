@@ -16,7 +16,10 @@ export function getPool(): Pool | null {
       conn.includes('sslmode=require');
     pool = new Pool({
       connectionString: conn,
-      max: 10,
+      // A burst of checkouts used to queue behind 10 connections and stall PIN dispatch.
+      max: 20,
+      connectionTimeoutMillis: 8_000,
+      idleTimeoutMillis: 30_000,
       ssl: useSsl ? { rejectUnauthorized: false } : undefined,
     });
     pool.on('error', (err) => {

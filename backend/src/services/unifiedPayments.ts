@@ -42,7 +42,14 @@ import {
   isMobileMoneyStkSendFailure,
   isPaymentApiThrottleError,
   isPaymentRateLimitError,
+  paymentPinUncertainUserMessage,
 } from '../lib/paymentProviderErrors';
+import {
+  PaymentDispatchBusyError,
+  PAYMENT_STATUS_CACHE_MS,
+  coalescePaymentCreate,
+  fetchPaymentStatusCached,
+} from './paymentDispatchLane';
 import {
   detectTzMobileNetwork,
   isAirtelLocalPhone,
@@ -184,6 +191,7 @@ export function startPaymentSuccessJson(out: {
   orderId: string;
   message: string;
   provider: PaymentProviderId;
+  reused?: boolean;
 }) {
   return {
     ok: true,
@@ -194,7 +202,22 @@ export function startPaymentSuccessJson(out: {
     message: out.message,
     provider: out.provider,
     paymentProvider: out.provider,
+    pinPrompt: 'sent' as const,
+    ...(out.reused ? { reused: true } : {}),
   };
+}
+
+const PIN_ALREADY_SENT_MESSAGE =
+  'Ombi la PIN tayari limetumwa kwenye simu yako. Angalia simu na uweke PIN ili kuthibitisha malipo. Usibonyeze tena.';
+
+function providerIdFromRaw(raw: string | undefined): PaymentProviderId {
+  return String(raw ?? '').toLowerCase() === PAYMENT_PROVIDERS.AURAX
+    ? PAYMENT_PROVIDERS.AURAX
+    : PAYMENT_PROVIDERS.SONICPESA;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
@@ -209,28 +232,20 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
   }
 
   if (!entry.orderId) {
-    // Legacy entry without order id — expire with the normal window only.
+    // Uncertain dispatch (no order id). Keep the short hold so we do not open a second PIN.
     return;
   }
 
   try {
+    // Local ledger only. A provider status call here stampedes the gateway during a burst
+    // and delays the PIN for everyone still waiting to pay.
     const intent = await getIntent(entry.orderId);
-    const provider = String(intent?.payment_provider ?? entry.provider ?? '').toLowerCase();
-    let ok = false;
-    let paymentStatus = '';
-    if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
-      const aurax = await fetchAuraxOrderStatus(entry.orderId);
-      ok = aurax.ok;
-      paymentStatus = aurax.paymentStatus;
-    } else {
-      const sonic = await fetchSonicOrderStatus(entry.orderId);
-      ok = sonic.ok;
-      paymentStatus = sonic.paymentStatus;
-    }
-    const ps = String(paymentStatus ?? '').trim().toUpperCase();
-    if (!ok && !ps) {
-      clearPaymentStartCooldown(localPhone);
-      logger.info({ phone: localPhone, orderId: entry.orderId }, 'payment_cooldown_cleared_missing_order');
+    const ps = String(intent?.provider_status || intent?.status || '').trim().toUpperCase();
+    if (!intent) {
+      if (isPaymentStartPendingRetryWindow(localPhone)) {
+        clearPaymentStartCooldown(localPhone);
+        logger.info({ phone: localPhone, orderId: entry.orderId }, 'payment_cooldown_cleared_missing_order');
+      }
       return;
     }
     if (isPaymentTerminalFailure(ps) || isPaymentCompletedStatus(ps)) {
@@ -300,14 +315,16 @@ function shouldFallbackSonicToAurax(args: {
   ) {
     return false;
   }
+  // The request was already in flight. Opening Aurax can put a second PIN on the phone.
+  if (args.errorCode === 'GATEWAY_TIMEOUT' || args.errorCode === 'PAYMENT_PIN_UNCERTAIN') {
+    return false;
+  }
   return (
     args.errorCode === 'PAYMENT_BUSY' ||
-    args.errorCode === 'GATEWAY_TIMEOUT' ||
-    args.errorCode === 'GATEWAY_ERROR' ||
+    args.errorCode === 'GATEWAY_UNREACHABLE' ||
     isPaymentApiThrottleError(args.rawMsg, args.rawCode) ||
     isMobileMoneyStkSendFailure(args.rawMsg, args.rawCode) ||
     /huduma ina shughuli|too many attempts|too many requests|rate limited/i.test(args.rawMsg) ||
-    /gateway timeout|timed out|abort|fetch failed|network|econnreset/i.test(args.rawMsg) ||
     /hayajatumika|could not send|push failed|upstream|9012|9009|999/i.test(
       `${args.rawMsg} ${args.rawCode}`,
     )
@@ -329,6 +346,7 @@ async function startAuraxPaymentIntent(args: {
   status: string;
 } | null> {
   if (!isAuraxConfigured()) return null;
+  let pinMayBeOnPhone = false;
   try {
     const clientOrderId = `ax_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const aurax = await tryCreateAuraxOrder({
@@ -341,6 +359,15 @@ async function startAuraxPaymentIntent(args: {
       clientOrderId,
     });
     if (!aurax.ok || !aurax.orderId) {
+      if (aurax.timedOut) {
+        pinMayBeOnPhone = true;
+        markPaymentStartSent(args.localPhone);
+        logger.warn(
+          { phone: args.localPhone, network: detectTzMobileNetwork(args.localPhone) },
+          'payment_aurax_timeout_pin_uncertain',
+        );
+        throw new HttpError(429, paymentPinUncertainUserMessage(), 'PAYMENT_PIN_UNCERTAIN');
+      }
       logger.warn(
         {
           phone: args.localPhone,
@@ -351,6 +378,7 @@ async function startAuraxPaymentIntent(args: {
       );
       return null;
     }
+    pinMayBeOnPhone = true;
     await upsertPendingIntent({
       orderId: aurax.orderId,
       publicId: args.publicId,
@@ -372,6 +400,19 @@ async function startAuraxPaymentIntent(args: {
       status: 'pending',
     };
   } catch (e) {
+    if (e instanceof HttpError) throw e;
+    if (pinMayBeOnPhone) {
+      markPaymentStartSent(args.localPhone);
+      logger.warn(
+        {
+          phone: args.localPhone,
+          network: detectTzMobileNetwork(args.localPhone),
+          err: e instanceof Error ? e.message : String(e),
+        },
+        'payment_aurax_pin_sent_followup_failed',
+      );
+      throw new HttpError(429, paymentPinUncertainUserMessage(), 'PAYMENT_PIN_UNCERTAIN');
+    }
     logger.warn(
       {
         phone: args.localPhone,
@@ -389,6 +430,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   message: string;
   provider: PaymentProviderId;
   status: string;
+  reused?: boolean;
 }> {
   const phoneNorm = normalizePhoneToLocal0(input.phone);
   if (phoneNorm.error || !phoneNorm.local) {
@@ -443,7 +485,57 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   const buyerName = (input.buyerName ?? publicId).trim() || 'Mteja';
   const buyerEmail = (input.buyerEmail ?? `${publicId}@supasoka.app`).trim();
 
+  try {
+    return await coalescePaymentCreate(localPhone, () =>
+      dispatchPinPrompt({
+        localPhone,
+        amountTzs,
+        buyerName,
+        buyerEmail,
+        publicId,
+        planId: input.planId,
+      }),
+    );
+  } catch (e) {
+    if (e instanceof PaymentDispatchBusyError) {
+      throw new HttpError(429, e.message, 'PAYMENT_BUSY');
+    }
+    throw e;
+  }
+}
+
+async function dispatchPinPrompt(args: {
+  localPhone: string;
+  amountTzs: number;
+  buyerName: string;
+  buyerEmail: string;
+  publicId: string;
+  planId: string;
+}): Promise<{
+  orderId: string;
+  message: string;
+  provider: PaymentProviderId;
+  status: string;
+  reused?: boolean;
+}> {
+  const { localPhone, amountTzs, buyerName, buyerEmail, publicId } = args;
+
   await refreshPaymentStartCooldownForPhone(localPhone);
+  const recent =
+    getPaymentStartCooldownEntry(localPhone) ?? getRecentPaymentStartEntry(localPhone);
+  if (recent?.orderId && !isPaymentStartPendingRetryWindow(localPhone)) {
+    logger.info(
+      { phone: localPhone, orderId: recent.orderId, provider: recent.provider },
+      'payment_start_reused_pending_pin',
+    );
+    return {
+      orderId: recent.orderId,
+      message: PIN_ALREADY_SENT_MESSAGE,
+      provider: providerIdFromRaw(recent.provider),
+      status: 'pending',
+      reused: true,
+    };
+  }
   const cooldownMsg = paymentStartCooldownMessage(localPhone);
   if (cooldownMsg) {
     throw new HttpError(429, cooldownMsg, 'PAYMENT_COOLDOWN');
@@ -469,7 +561,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
       buyerName,
       buyerEmail,
       publicId,
-      planId: input.planId,
+      planId: args.planId,
     });
     auraxAlreadyTried = true;
     if (auraxFirst) return auraxFirst;
@@ -497,14 +589,32 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
     );
   }
 
-  const sonic = await tryCreateSonicOrder({
+  let sonic = await tryCreateSonicOrder({
     buyerEmail,
     buyerName,
     localPhone,
     amountTzs,
     publicId,
-    planId: input.planId,
+    planId: args.planId,
   });
+  // Gateway said "busy" and did not accept an order. One paced retry inside this
+  // lane slot — not a second phone tap, and not a parallel stampede.
+  if (!sonic.ok && sonic.errorCode === 'PAYMENT_BUSY') {
+    await sleep(700 + Math.floor(Math.random() * 600));
+    sonic = await tryCreateSonicOrder({
+      buyerEmail,
+      buyerName,
+      localPhone,
+      amountTzs,
+      publicId,
+      planId: args.planId,
+    });
+  }
+  if (!sonic.ok && sonic.errorCode === 'GATEWAY_TIMEOUT') {
+    markPaymentStartSent(localPhone);
+    logger.warn({ phone: localPhone, network: detectTzMobileNetwork(localPhone) }, 'payment_sonic_timeout_pin_uncertain');
+    throw new HttpError(429, paymentPinUncertainUserMessage(), 'PAYMENT_PIN_UNCERTAIN');
+  }
   if (!sonic.ok || !sonic.orderId) {
     const rawMsg = sonic.message || sonic.errorMessage || '';
     const rawCode = sonic.errorCode ?? '';
@@ -526,10 +636,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
           rawCode,
           errorCode: sonic.errorCode,
           stkFailure: isMobileMoneyStkSendFailure(rawMsg, rawCode),
-          busy:
-            sonic.errorCode === 'PAYMENT_BUSY' ||
-            sonic.errorCode === 'GATEWAY_TIMEOUT' ||
-            isPaymentApiThrottleError(rawMsg, rawCode),
+          busy: sonic.errorCode === 'PAYMENT_BUSY' || isPaymentApiThrottleError(rawMsg, rawCode),
         },
         'payment_sonic_failed_trying_aurax',
       );
@@ -539,7 +646,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
         buyerName,
         buyerEmail,
         publicId,
-        planId: input.planId,
+        planId: args.planId,
         fallbackFrom: 'sonicpesa',
       });
       if (aurax) return aurax;
@@ -555,7 +662,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
       userMsg.includes('umejaribu mara nyingi');
     const busy =
       sonic.errorCode === 'PAYMENT_BUSY' ||
-      sonic.errorCode === 'GATEWAY_TIMEOUT' ||
+      sonic.errorCode === 'GATEWAY_UNREACHABLE' ||
       userMsg.includes('huduma ina shughuli');
     throw new HttpError(
       rateLimited || busy ? 429 : 400,
@@ -567,26 +674,12 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   await upsertPendingIntent({
     orderId: sonic.orderId,
     publicId,
-    planId: input.planId,
+    planId: args.planId,
     amountTzs,
     buyerPhone: localPhone,
     provider: PAYMENT_PROVIDERS.SONICPESA,
     providerPayload: sonic.raw,
   });
-
-  // User may already have paid while create_order was in flight. Activate if Sonic already shows paid.
-  try {
-    await ensurePremiumActivatedForPaidOrder(
-      sonic.orderId,
-      { publicId, planId: input.planId, phone: localPhone },
-      { trustPaid: false },
-    );
-  } catch (e) {
-    logger.warn(
-      { orderId: sonic.orderId, err: e instanceof Error ? e.message : String(e) },
-      'payment_start_early_activate_failed',
-    );
-  }
 
   return {
     orderId: sonic.orderId,
@@ -596,15 +689,40 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   };
 }
 
+type ProviderStatusRead = { ok: boolean; paymentStatus: string; raw: Record<string, unknown> };
+
+function deferredProviderStatus(): ProviderStatusRead {
+  return { ok: true, paymentStatus: 'PENDING', raw: { deferred: true } };
+}
+
+function isDeferredProviderStatus(raw: unknown): boolean {
+  return !!raw && typeof raw === 'object' && (raw as { deferred?: boolean }).deferred === true;
+}
+
+async function readProviderPaymentStatus(orderId: string, provider: string): Promise<ProviderStatusRead> {
+  const key = `${provider || PAYMENT_PROVIDERS.SONICPESA}:${orderId}`;
+  return fetchPaymentStatusCached(
+    key,
+    PAYMENT_STATUS_CACHE_MS,
+    async () => {
+      if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
+        return fetchAuraxOrderStatus(orderId);
+      }
+      return fetchSonicOrderStatus(orderId);
+    },
+    deferredProviderStatus(),
+  );
+}
+
 async function resolvePaidStatusForOrder(orderId: string): Promise<string> {
   const intent = await getIntent(orderId);
   const provider = String(intent?.payment_provider ?? '').toLowerCase();
+  const { paymentStatus, raw } = await readProviderPaymentStatus(orderId, provider);
+  if (isDeferredProviderStatus(raw)) return paymentStatus || 'PENDING';
   if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
-    const { paymentStatus } = await fetchAuraxOrderStatus(orderId);
     if (isAuraxPaymentCompleted(paymentStatus)) return paymentStatus || 'COMPLETED';
     return paymentStatus;
   }
-  const { paymentStatus, raw } = await fetchSonicOrderStatus(orderId);
   if (isPaymentCompletedStatus(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
     return paymentStatus || 'COMPLETED';
   }
@@ -628,6 +746,41 @@ function intentOverrides(
   };
 }
 
+/**
+ * The SIM already has an active subscription on another User id (reinstall /
+ * second install). Copy that same end time onto this id so every channel
+ * unlocks. The window is not extended.
+ */
+async function mirrorPremiumFromSamePhone(publicId: string): Promise<number | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const phoneRow = await pool.query<{ legacy_user_id: string | null }>(
+    `SELECT legacy_user_id FROM users WHERE id = $1 LIMIT 1`,
+    [publicId],
+  );
+  const phone = String(phoneRow.rows[0]?.legacy_user_id ?? '').trim();
+  if (!phone) return null;
+
+  const { findCanonicalUserByPhone, isPremiumUntilActive } = await import('./userDirectory.js');
+  const canonical = await findCanonicalUserByPhone(phone);
+  if (!canonical || !isPremiumUntilActive(canonical.premiumUntilMs)) return null;
+  if (canonical.id === publicId) return canonical.premiumUntilMs;
+
+  await pool.query(
+    `UPDATE users
+     SET premium_until_ms = $2,
+         updated_at = now()
+     WHERE id = $1
+       AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+    [publicId, canonical.premiumUntilMs],
+  );
+  logger.info(
+    { publicId, from: canonical.id, premiumUntilMs: canonical.premiumUntilMs },
+    'payment_premium_mirrored_from_phone',
+  );
+  return canonical.premiumUntilMs;
+}
+
 export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
@@ -635,6 +788,9 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   const { getUserPremiumStatus } = await import('./userDirectory.js');
   const existing = await getUserPremiumStatus(trimmed);
   if (isPremiumUntilActiveLocal(existing)) return existing;
+
+  const mirrored = await mirrorPremiumFromSamePhone(trimmed);
+  if (isPremiumUntilActiveLocal(mirrored)) return mirrored;
 
   const pool = getPool();
   if (!pool) return null;
@@ -987,37 +1143,17 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
   }
 
   const provider = String(local?.payment_provider ?? '').toLowerCase();
-  if (provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured()) {
-    const { ok, paymentStatus, raw } = await fetchAuraxOrderStatus(trimmed);
-    if (paymentStatus) {
-      await updateIntentStatus({
-        orderId: trimmed,
-        providerStatus: paymentStatus,
-        providerPayload: raw,
-      });
-    }
-    if (isAuraxPaymentCompleted(paymentStatus)) {
-      const intentAfter = (await getIntent(trimmed)) ?? local;
-      const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter), {
-        trustPaid: true,
-      });
-      return {
-        status: 'COMPLETED',
-        resultcode: '000',
-        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
-        activated: act.activated,
-        premiumUntilMs: act.premiumUntilMs,
-        intentPublicId: intentAfter?.public_id ?? local?.public_id ?? undefined,
-        intentPlanId: intentAfter?.plan_id ?? local?.plan_id ?? undefined,
-      };
-    }
-    return { status: paymentStatus || (ok ? 'PENDING' : 'PENDING'), raw, ...intentMeta };
+  const useAurax = provider === PAYMENT_PROVIDERS.AURAX && isAuraxConfigured();
+  const { ok, paymentStatus, raw } = await readProviderPaymentStatus(
+    trimmed,
+    useAurax ? PAYMENT_PROVIDERS.AURAX : PAYMENT_PROVIDERS.SONICPESA,
+  );
+  if (isDeferredProviderStatus(raw)) {
+    return { status: 'PENDING', raw, ...intentMeta };
   }
-
-  const { ok, paymentStatus, raw } = await fetchSonicOrderStatus(trimmed);
   const msg = String(raw.message ?? raw.error ?? '').toLowerCase();
-  if (!ok && (msg.includes('not found') || msg.includes('no order'))) {
-    return { status: 'PENDING', raw };
+  if (!useAurax && !ok && (msg.includes('not found') || msg.includes('no order'))) {
+    return { status: 'PENDING', raw, ...intentMeta };
   }
   if (paymentStatus) {
     await updateIntentStatus({
@@ -1026,7 +1162,10 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
       providerPayload: raw,
     });
   }
-  if (isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw)) {
+  const paid = useAurax
+    ? isAuraxPaymentCompleted(paymentStatus)
+    : isSonicPaymentCompleted(paymentStatus) || isSonicRawPaymentCompleted(raw);
+  if (paid) {
     const intentAfter = (await getIntent(trimmed)) ?? local;
     const act = await ensurePremiumActivatedForPaidOrder(trimmed, intentOverrides(intentAfter), {
       trustPaid: true,

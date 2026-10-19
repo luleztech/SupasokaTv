@@ -7,6 +7,7 @@ import {
   isMobileMoneyStkSendFailure,
   isPaymentApiThrottleError,
   isPaymentRateLimitError,
+  isWalletRoutingPaymentError,
   paymentBusyUserMessage,
   paymentRateLimitUserMessage,
 } from '../lib/paymentProviderErrors';
@@ -265,12 +266,12 @@ type SonicCreateStep = {
 };
 
 /**
- * One SonicPesa create_order per Lipia sasa tap.
- * Vodacom / Airtel: international `255…`, wallet auto-detected.
- * HaloPesa and Mixx/Yas: national `0…` plus the wallet channel. Without that
- * channel Sonic accepts the order and never sends the USSD prompt.
- * A second step exists only as an invalid-phone fallback and is not called
- * unless Sonic rejects the national number.
+ * One SonicPesa create_order per Lipia sasa tap, with the wallet channel set so
+ * the PIN prompt is actually pushed.
+ * HaloPesa and Mixx/Yas: national `0…` + channel. A second step (international
+ * `255…`, same channel) runs only when Sonic rejects that national number.
+ * Vodacom and Airtel: international `255…` + MPESA / AIRTELMONEY. A second step
+ * without a channel runs only when Sonic rejects the channel name.
  */
 function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
   const local0 = toLocal0Digits(localPhone);
@@ -282,22 +283,35 @@ function buildSonicCreateSteps(localPhone: string): SonicCreateStep[] {
     endpoint: 'payment/create_order',
     buyer_phone: buyerPhone,
     timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-    label: channel ? `local/${network}/${channel}` : `intl/${network}/auto`,
+    label: channel ? `${network}/${channel}` : `${network}/auto`,
     ...(channel ? { channel } : {}),
   };
-  if (!channel) return [primary];
-  const intl = sonicIntlPhoneFallback(local0);
-  if (!intl || intl === buyerPhone) return [primary];
-  return [
-    primary,
-    {
-      endpoint: 'payment/create_order',
-      buyer_phone: intl,
-      timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
-      label: `intl/${network}/${channel}`,
-      channel,
-    },
-  ];
+  if (network === 'halotel' || network === 'tigo_yas') {
+    const intl = sonicIntlPhoneFallback(local0);
+    if (!channel || !intl || intl === buyerPhone) return [primary];
+    return [
+      primary,
+      {
+        endpoint: 'payment/create_order',
+        buyer_phone: intl,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `intl/${network}/${channel}`,
+        channel,
+      },
+    ];
+  }
+  if (channel && (network === 'vodacom' || network === 'mo_mobile' || network === 'airtel')) {
+    return [
+      primary,
+      {
+        endpoint: 'payment/create_order',
+        buyer_phone: buyerPhone,
+        timeoutMs: SONIC_CREATE_ORDER_TIMEOUT_MS,
+        label: `${network}/auto`,
+      },
+    ];
+  }
+  return [primary];
 }
 
 /** Test hook — mirrors production step builder without hitting SonicPesa API. */
@@ -509,36 +523,46 @@ export async function tryCreateSonicOrder(args: {
           errorCode: 'PAYMENT_BUSY',
         };
       }
-      // HaloPesa / Yas: retry once with 255… + the same channel only when Sonic
-      // rejected the national number. Any other failure stops here (no quota burn).
+      // Second step only when the number or the wallet name was rejected.
+      // An STK/PIN failure stops here so we do not open a second charge.
       if (
         i === 0 &&
         i < steps.length - 1 &&
-        isInvalidPhonePaymentError(errorMessage, errorCode)
+        (isInvalidPhonePaymentError(errorMessage, errorCode) ||
+          isWalletRoutingPaymentError(errorMessage, errorCode))
       ) {
         continue;
       }
       break;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const timedOut = /abort|timeout|timed out|network|fetch failed|econnreset|enotfound/i.test(msg);
+      // Abort means the request was already in flight — the PIN may be on the phone.
+      const aborted = /abort|timeout|timed out/i.test(msg);
+      // Connect/DNS failures happen before the gateway accepts the order.
+      const unreachable = /fetch failed|econnreset|econnrefused|enotfound|network/i.test(msg);
+      const code = aborted ? 'GATEWAY_TIMEOUT' : unreachable ? 'GATEWAY_UNREACHABLE' : 'GATEWAY_ERROR';
       last = {
-        response: new Response(null, { status: timedOut ? 504 : 502 }),
+        response: new Response(null, { status: aborted || unreachable ? 504 : 502 }),
         data: {
           status: 'error',
-          message: timedOut ? 'SonicPesa gateway timeout' : msg,
-          code: timedOut ? 'GATEWAY_TIMEOUT' : 'GATEWAY_ERROR',
+          message: aborted ? 'SonicPesa gateway timeout' : msg,
+          code,
         },
       };
-      logger.warn({ network, step: step.label, err: msg, timedOut }, 'sonic_create_step_exception');
-      if (timedOut) {
+      logger.warn(
+        { network, step: step.label, err: msg, aborted, unreachable },
+        'sonic_create_step_exception',
+      );
+      if (aborted || unreachable) {
         return {
           ok: false,
           orderId: '',
-          message: 'SonicPesa gateway timeout',
+          message: aborted ? 'SonicPesa gateway timeout' : msg,
           raw: last.data,
-          errorMessage: paymentBusyUserMessage(),
-          errorCode: 'GATEWAY_TIMEOUT',
+          errorMessage: aborted
+            ? 'Ombi la PIN linaweza kuwa limetumwa kwenye simu yako. Angalia dirisha la PIN.'
+            : paymentBusyUserMessage(),
+          errorCode: code,
         };
       }
       break;

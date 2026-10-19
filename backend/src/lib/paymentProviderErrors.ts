@@ -104,6 +104,14 @@ export function paymentBusyUserMessage(): string {
   return 'Huduma ina shughuli nyingi sasa. Subiri sekunde chache, kisha jaribu tena.';
 }
 
+/**
+ * The gateway timed out after we sent the PIN request. It may already be on the
+ * phone. Do not start a second charge — ask the user to look for the PIN.
+ */
+export function paymentPinUncertainUserMessage(): string {
+  return 'Ombi la PIN linaweza kuwa limetumwa kwenye simu yako. Angalia dirisha la PIN na uweke namba ili kuthibitisha malipo. Usibonyeze "Lipia sasa" tena kwa sekunde 45.';
+}
+
 const STK_FAILURE_CODES = new Set([
   '9012', '999', '103', '9009', '90009', '500', '502', '503', '504', '408',
 ]);
