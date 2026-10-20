@@ -14,8 +14,8 @@ function readPositiveInt(name: string, fallback: number, min: number, max: numbe
   return Math.max(min, Math.min(max, n));
 }
 
-const CREATE_LIMIT = readPositiveInt('PAYMENT_CREATE_CONCURRENCY', 6, 2, 12);
-const CREATE_WAIT_MS = readPositiveInt('PAYMENT_CREATE_QUEUE_WAIT_MS', 70_000, 5_000, 90_000);
+const CREATE_LIMIT = readPositiveInt('PAYMENT_CREATE_CONCURRENCY', 4, 2, 8);
+const CREATE_WAIT_MS = readPositiveInt('PAYMENT_CREATE_QUEUE_WAIT_MS', 180_000, 5_000, 240_000);
 const STATUS_LIMIT = readPositiveInt('PAYMENT_STATUS_CONCURRENCY', 8, 2, 24);
 const STATUS_WAIT_MS = readPositiveInt('PAYMENT_STATUS_QUEUE_WAIT_MS', 8_000, 500, 20_000);
 

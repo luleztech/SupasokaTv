@@ -220,6 +220,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Gateway "too many requests" under a crowd. The order was not accepted, so a paced retry is safe. */
+const SONIC_BUSY_BACKOFF_MS = [1500, 3000, 5000, 8000, 12000];
+
+async function createSonicUntilAccepted(args: {
+  buyerEmail: string;
+  buyerName: string;
+  localPhone: string;
+  amountTzs: number;
+  publicId: string;
+  planId: string;
+}): Promise<Awaited<ReturnType<typeof tryCreateSonicOrder>>> {
+  let sonic = await tryCreateSonicOrder(args);
+  for (let attempt = 0; attempt < SONIC_BUSY_BACKOFF_MS.length; attempt++) {
+    const retryable = sonic.errorCode === 'PAYMENT_BUSY' || sonic.errorCode === 'GATEWAY_UNREACHABLE';
+    if (sonic.ok || !retryable) return sonic;
+    const wait = SONIC_BUSY_BACKOFF_MS[attempt]! + Math.floor(Math.random() * 500);
+    logger.info(
+      { phone: args.localPhone, attempt: attempt + 1, wait, errorCode: sonic.errorCode },
+      'payment_sonic_busy_retry',
+    );
+    await sleep(wait);
+    sonic = await tryCreateSonicOrder(args);
+  }
+  return sonic;
+}
+
 /** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
 async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<void> {
   const entry = getRecentPaymentStartEntry(localPhone) ?? getPaymentStartCooldownEntry(localPhone);
@@ -589,7 +615,7 @@ async function dispatchPinPrompt(args: {
     );
   }
 
-  let sonic = await tryCreateSonicOrder({
+  let sonic = await createSonicUntilAccepted({
     buyerEmail,
     buyerName,
     localPhone,
@@ -597,19 +623,6 @@ async function dispatchPinPrompt(args: {
     publicId,
     planId: args.planId,
   });
-  // Gateway said "busy" and did not accept an order. One paced retry inside this
-  // lane slot — not a second phone tap, and not a parallel stampede.
-  if (!sonic.ok && sonic.errorCode === 'PAYMENT_BUSY') {
-    await sleep(700 + Math.floor(Math.random() * 600));
-    sonic = await tryCreateSonicOrder({
-      buyerEmail,
-      buyerName,
-      localPhone,
-      amountTzs,
-      publicId,
-      planId: args.planId,
-    });
-  }
   if (!sonic.ok && sonic.errorCode === 'GATEWAY_TIMEOUT') {
     markPaymentStartSent(localPhone);
     logger.warn({ phone: localPhone, network: detectTzMobileNetwork(localPhone) }, 'payment_sonic_timeout_pin_uncertain');

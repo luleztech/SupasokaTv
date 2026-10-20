@@ -6,11 +6,11 @@ import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
 
 class _PaymentsApi {
-  static const _startPaymentTimeout = Duration(seconds: 95);
+  static const _startPaymentTimeout = Duration(seconds: 120);
 
-  /// At most two POSTs: first tap, then one soft retry only for transport blips
-  /// or gateway-busy (backend may switch Sonic→Aurax). Never retry per-number quotas.
-  static const _maxStartRounds = 2;
+  /// Keep asking while a crowd is still being served. Never retry a per-number quota
+  /// or a PIN that may already be on the phone.
+  static const _maxStartRounds = 4;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
     if (round >= _maxStartRounds - 1) return false;
@@ -179,7 +179,7 @@ class _PaymentsApi {
         if (round < _maxStartRounds - 1 && _isRetryableStartPaymentError(e, round)) {
           final busy = _isGatewayBusyStartPaymentError(e);
           await Future<void>.delayed(
-            Duration(milliseconds: busy ? 1600 * (round + 1) : 800 * (round + 1)),
+            Duration(milliseconds: busy ? 2000 * (round + 1) : 800 * (round + 1)),
           );
           continue;
         }
