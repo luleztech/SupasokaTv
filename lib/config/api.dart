@@ -12,9 +12,13 @@ class _PaymentsApi {
   /// or a PIN that may already be on the phone.
   static const _maxStartRounds = 6;
 
-  static bool _isRetryableStartPaymentError(Object e, int round) {
+  static bool _isRetryableStartPaymentError(Object e, int round, {required bool serverAlreadyWaited}) {
     if (round >= _maxStartRounds - 1) return false;
-    return _isTransientStartPaymentError(e) || _isGatewayBusyStartPaymentError(e);
+    // The server already held this tap and retried the gateway. Another round
+    // would open a second charge instead of delivering the first PIN.
+    if (serverAlreadyWaited && _isGatewayBusyStartPaymentError(e)) return false;
+    if (_isGatewayBusyStartPaymentError(e)) return round < 2;
+    return _isTransientStartPaymentError(e);
   }
 
   static bool _isTransientStartPaymentError(Object e) {
@@ -171,12 +175,14 @@ class _PaymentsApi {
     Object? lastErr;
     for (var round = 0; round < _maxStartRounds; round++) {
       onAttempt?.call(round + 1, _maxStartRounds);
+      final started = DateTime.now();
       try {
         final out = await _postStartPayment(uri: uri, headers: headers, bodyJson: bodyJson);
         return out;
       } catch (e) {
         lastErr = e;
-        if (round < _maxStartRounds - 1 && _isRetryableStartPaymentError(e, round)) {
+        final serverAlreadyWaited = DateTime.now().difference(started).inSeconds >= 20;
+        if (_isRetryableStartPaymentError(e, round, serverAlreadyWaited: serverAlreadyWaited)) {
           final busy = _isGatewayBusyStartPaymentError(e);
           await Future<void>.delayed(
             Duration(milliseconds: busy ? 2000 * (round + 1) : 800 * (round + 1)),

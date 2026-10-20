@@ -42,6 +42,7 @@ import {
   isMobileMoneyStkSendFailure,
   isPaymentApiThrottleError,
   isPaymentRateLimitError,
+  paymentBusyUserMessage,
   paymentPinUncertainUserMessage,
 } from '../lib/paymentProviderErrors';
 import {
@@ -220,31 +221,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Gateway "too many requests" under a crowd. The order was not accepted, so a paced retry is safe. */
-const SONIC_BUSY_BACKOFF_MS = [1500, 3000, 5000, 8000, 12000];
-
-async function createSonicUntilAccepted(args: {
-  buyerEmail: string;
-  buyerName: string;
-  localPhone: string;
-  amountTzs: number;
-  publicId: string;
-  planId: string;
-}): Promise<Awaited<ReturnType<typeof tryCreateSonicOrder>>> {
-  let sonic = await tryCreateSonicOrder(args);
-  for (let attempt = 0; attempt < SONIC_BUSY_BACKOFF_MS.length; attempt++) {
-    const retryable = sonic.errorCode === 'PAYMENT_BUSY' || sonic.errorCode === 'GATEWAY_UNREACHABLE';
-    if (sonic.ok || !retryable) return sonic;
-    const wait = SONIC_BUSY_BACKOFF_MS[attempt]! + Math.floor(Math.random() * 500);
-    logger.info(
-      { phone: args.localPhone, attempt: attempt + 1, wait, errorCode: sonic.errorCode },
-      'payment_sonic_busy_retry',
-    );
-    await sleep(wait);
-    sonic = await tryCreateSonicOrder(args);
-  }
-  return sonic;
-}
+/**
+ * One Lipia sasa stays open until a provider accepts the PIN request.
+ * Must finish before the app's 180s start timeout, so a disconnect does not
+ * look like failure after the PIN was already sent.
+ */
+const PIN_DISPATCH_BUDGET_MS = 120_000;
+const BUSY_BACKOFF_MS = [3000, 6000, 10_000, 15_000, 20_000];
 
 /** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
 async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<void> {
@@ -615,22 +598,67 @@ async function dispatchPinPrompt(args: {
     );
   }
 
-  let sonic = await createSonicUntilAccepted({
-    buyerEmail,
-    buyerName,
-    localPhone,
-    amountTzs,
-    publicId,
-    planId: args.planId,
-  });
-  if (!sonic.ok && sonic.errorCode === 'GATEWAY_TIMEOUT') {
-    markPaymentStartSent(localPhone);
-    logger.warn({ phone: localPhone, network: detectTzMobileNetwork(localPhone) }, 'payment_sonic_timeout_pin_uncertain');
-    throw new HttpError(429, paymentPinUncertainUserMessage(), 'PAYMENT_PIN_UNCERTAIN');
-  }
-  if (!sonic.ok || !sonic.orderId) {
+  const deadline = Date.now() + PIN_DISPATCH_BUDGET_MS;
+  let busyAttempt = 0;
+  let lastSonic: Awaited<ReturnType<typeof tryCreateSonicOrder>> | null = null;
+
+  while (Date.now() < deadline) {
+    const sonic = await tryCreateSonicOrder({
+      buyerEmail,
+      buyerName,
+      localPhone,
+      amountTzs,
+      publicId,
+      planId: args.planId,
+    });
+    lastSonic = sonic;
+
+    if (sonic.ok && sonic.orderId) {
+      await upsertPendingIntent({
+        orderId: sonic.orderId,
+        publicId,
+        planId: args.planId,
+        amountTzs,
+        buyerPhone: localPhone,
+        provider: PAYMENT_PROVIDERS.SONICPESA,
+        providerPayload: sonic.raw,
+      });
+      return {
+        orderId: sonic.orderId,
+        message: sonic.message,
+        provider: PAYMENT_PROVIDERS.SONICPESA,
+        status: 'pending',
+      };
+    }
+
+    if (sonic.errorCode === 'GATEWAY_TIMEOUT') {
+      markPaymentStartSent(localPhone);
+      logger.warn(
+        { phone: localPhone, network: detectTzMobileNetwork(localPhone) },
+        'payment_sonic_timeout_pin_uncertain',
+      );
+      throw new HttpError(429, paymentPinUncertainUserMessage(), 'PAYMENT_PIN_UNCERTAIN');
+    }
+
     const rawMsg = sonic.message || sonic.errorMessage || '';
     const rawCode = sonic.errorCode ?? '';
+    const userMsg =
+      (sonic.errorMessage && sonic.errorMessage.trim()) ||
+      mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
+    const rateLimited =
+      sonic.errorCode === 'PAYMENT_RATE_LIMIT' ||
+      userMsg.includes('majaribio mengi') ||
+      userMsg.includes('umefanya majaribio') ||
+      userMsg.includes('umejaribu mara nyingi');
+    if (rateLimited) {
+      throw new HttpError(429, userMsg, 'PAYMENT_RATE_LIMIT');
+    }
+
+    const busy =
+      sonic.errorCode === 'PAYMENT_BUSY' ||
+      sonic.errorCode === 'GATEWAY_UNREACHABLE' ||
+      userMsg.includes('huduma ina shughuli');
+
     const canFallback =
       !auraxAlreadyTried &&
       shouldFallbackSonicToAurax({
@@ -649,7 +677,7 @@ async function dispatchPinPrompt(args: {
           rawCode,
           errorCode: sonic.errorCode,
           stkFailure: isMobileMoneyStkSendFailure(rawMsg, rawCode),
-          busy: sonic.errorCode === 'PAYMENT_BUSY' || isPaymentApiThrottleError(rawMsg, rawCode),
+          busy,
         },
         'payment_sonic_failed_trying_aurax',
       );
@@ -662,44 +690,29 @@ async function dispatchPinPrompt(args: {
         planId: args.planId,
         fallbackFrom: 'sonicpesa',
       });
+      auraxAlreadyTried = true;
       if (aurax) return aurax;
     }
 
-    const userMsg =
-      (sonic.errorMessage && sonic.errorMessage.trim()) ||
-      mapSonicInitiateUserError(localPhone, sonic.message, sonic.errorCode ?? '');
-    const rateLimited =
-      sonic.errorCode === 'PAYMENT_RATE_LIMIT' ||
-      userMsg.includes('majaribio mengi') ||
-      userMsg.includes('umefanya majaribio') ||
-      userMsg.includes('umejaribu mara nyingi');
-    const busy =
-      sonic.errorCode === 'PAYMENT_BUSY' ||
-      sonic.errorCode === 'GATEWAY_UNREACHABLE' ||
-      userMsg.includes('huduma ina shughuli');
-    throw new HttpError(
-      rateLimited || busy ? 429 : 400,
-      userMsg,
-      rateLimited ? 'PAYMENT_RATE_LIMIT' : busy ? 'PAYMENT_BUSY' : 'SONIC_CREATE_FAILED',
+    if (!busy) {
+      throw new HttpError(400, userMsg, 'SONIC_CREATE_FAILED');
+    }
+
+    const wait = BUSY_BACKOFF_MS[Math.min(busyAttempt, BUSY_BACKOFF_MS.length - 1)]!;
+    busyAttempt += 1;
+    if (Date.now() + wait >= deadline) break;
+    logger.info(
+      { phone: localPhone, attempt: busyAttempt, wait, errorCode: sonic.errorCode },
+      'payment_sonic_busy_retry',
     );
+    await sleep(wait);
   }
 
-  await upsertPendingIntent({
-    orderId: sonic.orderId,
-    publicId,
-    planId: args.planId,
-    amountTzs,
-    buyerPhone: localPhone,
-    provider: PAYMENT_PROVIDERS.SONICPESA,
-    providerPayload: sonic.raw,
-  });
-
-  return {
-    orderId: sonic.orderId,
-    message: sonic.message,
-    provider: PAYMENT_PROVIDERS.SONICPESA,
-    status: 'pending',
-  };
+  const sonic = lastSonic;
+  const userMsg =
+    (sonic?.errorMessage && sonic.errorMessage.trim()) ||
+    mapSonicInitiateUserError(localPhone, sonic?.message ?? '', sonic?.errorCode ?? '');
+  throw new HttpError(429, userMsg || paymentBusyUserMessage(), 'PAYMENT_BUSY');
 }
 
 type ProviderStatusRead = { ok: boolean; paymentStatus: string; raw: Record<string, unknown> };

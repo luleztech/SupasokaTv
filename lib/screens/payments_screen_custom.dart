@@ -1658,7 +1658,7 @@ class _PaymentProcessingOverlay extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Usifunge programu — hatua hii inachukua sekunde chache',
+                    'Usifunge programu. Ombi la PIN linatumwa kwenye simu yako.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 13,
