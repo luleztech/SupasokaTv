@@ -171,6 +171,7 @@ export async function tryCreateAuraxOrder(args: {
     message: string;
     raw: Record<string, unknown>;
     errorMessage?: string;
+    timedOut?: boolean;
   } = {
     ok: false,
     orderId: '',

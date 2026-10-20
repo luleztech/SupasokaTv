@@ -49,7 +49,7 @@ export class PaymentDispatchBusyError extends Error {
 
 type Waiter = {
   resolve: (admitted: boolean) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 export class PaymentLane {
@@ -86,7 +86,7 @@ export class PaymentLane {
                 if (index >= 0) this.waiters.splice(index, 1);
                 resolve(false);
               }, this.waitMs)
-            : (0 as ReturnType<typeof setTimeout>),
+            : undefined,
       };
       this.waiters.push(waiter);
     });
@@ -99,7 +99,7 @@ export class PaymentLane {
   release(): void {
     const next = this.waiters.shift();
     if (next) {
-      clearTimeout(next.timer);
+      if (next.timer !== undefined) clearTimeout(next.timer);
       next.resolve(true);
       return;
     }
