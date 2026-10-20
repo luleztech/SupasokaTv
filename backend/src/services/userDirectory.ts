@@ -298,11 +298,16 @@ export async function applyAdminPremiumUpdate(
     const res = await pool.query(
       `UPDATE users
        SET premium_until_ms = $2,
-           note = CASE
-             WHEN COALESCE(note, '') = '' THEN 'premium_revoked:admin'
-             WHEN note LIKE '%premium_revoked:%' THEN note
-             ELSE note || ' | premium_revoked:admin'
-           END,
+           note = trim(both ' |' from regexp_replace(
+             CASE
+               WHEN COALESCE(note, '') = '' THEN 'premium_revoked:admin'
+               WHEN note LIKE '%premium_revoked:%' THEN note
+               ELSE note || ' | premium_revoked:admin'
+             END,
+             '(\\s*\\|\\s*)?premium_admin_grant:\\d+',
+             '',
+             'g'
+           )),
            updated_at = now()
        WHERE id = $1`,
       [trimmed, effectiveMs],
@@ -313,11 +318,19 @@ export async function applyAdminPremiumUpdate(
   const res = await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
-         note = trim(both ' |' from regexp_replace(
-           COALESCE(note, ''),
-           '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
-           '',
-           'g'
+         note = trim(both ' |' from concat_ws(' | ',
+           NULLIF(trim(both ' |' from regexp_replace(
+             regexp_replace(
+               COALESCE(note, ''),
+               '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
+               '',
+               'g'
+             ),
+             '(\\s*\\|\\s*)?premium_admin_grant:\\d+',
+             '',
+             'g'
+           )), ''),
+           'premium_admin_grant:' || $2::text
          )),
          updated_at = now()
      WHERE id = $1`,

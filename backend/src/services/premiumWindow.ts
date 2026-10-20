@@ -4,6 +4,14 @@ import { ensurePaymentIntentsTable } from './paymentIntents';
 
 const GRACE_MS = 2 * 60 * 60 * 1000;
 
+/** Admin save writes this so a paid-period cap cannot undo the grant. */
+function adminGrantMs(note: string | null | undefined): number {
+  const match = String(note ?? '').match(/premium_admin_grant:(\d{10,})/);
+  if (!match) return 0;
+  const n = Number(match[1]);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 /**
  * Shrink an active subscription to the periods that were actually paid.
  * A week selection stays a week. A later paid month stacks on what is left.
@@ -17,14 +25,21 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   await ensurePaymentIntentsTable();
   const { durationMsForPaidOrder, stackPaidPremiumEndMs } = await import('./premiumActivation.js');
 
-  const user = await pool.query<{ premium_until_ms: string | null; legacy_user_id: string | null }>(
-    `SELECT premium_until_ms, legacy_user_id FROM users WHERE id = $1`,
+  const user = await pool.query<{
+    premium_until_ms: string | null;
+    legacy_user_id: string | null;
+    note: string | null;
+  }>(
+    `SELECT premium_until_ms, legacy_user_id, note FROM users WHERE id = $1`,
     [trimmed],
   );
   const row = user.rows[0];
-  if (!row?.premium_until_ms) return;
-  const wasUntil = Number(row.premium_until_ms);
+  if (!row) return;
+  const wasUntil = row.premium_until_ms != null ? Number(row.premium_until_ms) : 0;
   if (!Number.isFinite(wasUntil)) return;
+  const now = Date.now();
+  const grantMs = adminGrantMs(row.note);
+  const adminFloor = grantMs > now ? grantMs : 0;
 
   const phone = String(row.legacy_user_id ?? '').trim();
   const phoneKey = phone.length >= 9 ? phone : '';
@@ -46,7 +61,17 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
      ORDER BY order_id, activated_at_ms ASC`,
     [trimmed, phoneKey],
   );
-  if (pays.rows.length === 0) return;
+  if (pays.rows.length === 0) {
+    if (adminFloor > wasUntil) {
+      await pool.query(
+        `UPDATE users
+         SET premium_until_ms = $2, updated_at = now()
+         WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+        [trimmed, adminFloor],
+      );
+    }
+    return;
+  }
 
   const stacked: Array<{ activatedAtMs: number; durationMs: number }> = [];
   for (const pay of pays.rows) {
@@ -57,11 +82,28 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   }
   stacked.sort((a, b) => a.activatedAtMs - b.activatedAtMs);
   const expected = stackPaidPremiumEndMs(stacked);
-  if (!Number.isFinite(expected) || expected <= 0) return;
-  if (wasUntil <= expected + GRACE_MS) return;
+  if (!Number.isFinite(expected) || expected <= 0) {
+    if (adminFloor > wasUntil) {
+      await pool.query(
+        `UPDATE users SET premium_until_ms = $2, updated_at = now() WHERE id = $1`,
+        [trimmed, adminFloor],
+      );
+    }
+    return;
+  }
+  const ceiling = Math.max(expected, adminFloor);
+  if (adminFloor > wasUntil && wasUntil <= ceiling + GRACE_MS) {
+    await pool.query(
+      `UPDATE users
+       SET premium_until_ms = $2, updated_at = now()
+       WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+      [trimmed, adminFloor],
+    );
+    return;
+  }
+  if (wasUntil <= ceiling + GRACE_MS) return;
 
-  const now = Date.now();
-  const nextUntil = expected <= now ? now : Math.trunc(expected);
+  const nextUntil = ceiling <= now ? now : Math.trunc(ceiling);
   await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
@@ -74,7 +116,7 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
      WHERE id = $1
        AND premium_until_ms IS NOT NULL
        AND premium_until_ms > $3`,
-    [trimmed, nextUntil, expected + GRACE_MS],
+    [trimmed, nextUntil, ceiling + GRACE_MS],
   );
   logger.info(
     {

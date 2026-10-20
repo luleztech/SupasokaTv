@@ -233,12 +233,12 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
           return PushNotificationService.syncDirectUserTopic(pid);
         }),
       );
-      unawaited(_syncPremiumAndTopics());
+      unawaited(_syncPremiumAndTopics(force: true));
     });
   }
 
-  Future<void> _syncPremiumAndTopics() async {
-    await SubscriptionStore.syncPremiumFromBackend();
+  Future<void> _syncPremiumAndTopics({bool force = false}) async {
+    await SubscriptionStore.syncPremiumFromBackend(force: force);
     if (!PushNotificationService.isReady) return;
     final isPremium = SubscriptionStore.isPremiumActiveLocal();
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
