@@ -4,7 +4,7 @@ import {
   ensurePaymentIntentsTable,
   markIntentPremiumGranted,
 } from './paymentIntents';
-import { resolvePlanDurationMsForPlanId } from './premiumActivation';
+import { durationMsForPaidOrder, stackPaidPremiumEndMs } from './premiumActivation';
 import { clearAllExpiredPremiumInDatabase } from './userDirectory';
 import { logger } from '../lib/logger';
 
@@ -190,10 +190,11 @@ export async function capOverlongPremiumFromPayments(
     const pays = await pool.query<{
       order_id: string;
       plan_id: string | null;
+      amount_tzs: string | null;
       activated_at_ms: string;
       premium_granted_until_ms: string | null;
     }>(
-      `SELECT order_id, plan_id, activated_at_ms, premium_granted_until_ms
+      `SELECT order_id, plan_id, amount_tzs, activated_at_ms, premium_granted_until_ms
        FROM payment_intents
        WHERE public_id = $1
          AND activated_at_ms IS NOT NULL
@@ -205,19 +206,26 @@ export async function capOverlongPremiumFromPayments(
       continue;
     }
 
-    let expected = 0;
+    const stacked: Array<{ activatedAtMs: number; durationMs: number }> = [];
     for (const pay of pays.rows) {
       const activatedAt = Number(pay.activated_at_ms);
-      if (!Number.isFinite(activatedAt) || activatedAt <= 0) continue;
-      const planId = String(pay.plan_id ?? '').trim() || 'monthly';
-      const dur = await resolvePlanDurationMsForPlanId(planId);
-      const start = Math.max(expected, activatedAt);
-      expected = start + dur;
-
+      const amount = pay.amount_tzs != null ? Number(pay.amount_tzs) : null;
+      const dur = await durationMsForPaidOrder(String(pay.plan_id ?? ''), amount);
+      stacked.push({ activatedAtMs: activatedAt, durationMs: dur });
+    }
+    const expected = stackPaidPremiumEndMs(stacked);
+    let cursor = 0;
+    for (let i = 0; i < pays.rows.length; i++) {
+      const pay = pays.rows[i]!;
+      const activatedAt = stacked[i]?.activatedAtMs ?? 0;
+      const dur = stacked[i]?.durationMs ?? 0;
+      if (!Number.isFinite(activatedAt) || activatedAt <= 0 || dur <= 0) continue;
+      const start = Math.max(cursor, activatedAt);
+      cursor = start + dur;
       if (pay.premium_granted_until_ms == null) {
         grantsBackfilled += 1;
         if (!dryRun) {
-          await markIntentPremiumGranted(pay.order_id, start + dur);
+          await markIntentPremiumGranted(pay.order_id, cursor);
         }
       }
     }

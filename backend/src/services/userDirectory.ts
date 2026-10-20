@@ -1,6 +1,7 @@
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
 import { normalizePhoneToLocal0, toLocal0Digits } from '../lib/tzPhone';
+import { enforcePaidPremiumWindow } from './premiumWindow';
 
 const publicIdRe = /^User-[A-Za-z2-9]{5}$/;
 
@@ -152,7 +153,6 @@ export async function registerPublicUser(body: unknown): Promise<RegisterPublicU
       }
       publicId = canonical.id;
       profileUsername = canonical.profileUsername || publicId;
-      premiumUntilMs = canonical.premiumUntilMs;
     }
   }
 
@@ -170,10 +170,8 @@ export async function registerPublicUser(body: unknown): Promise<RegisterPublicU
     [publicId, profileUsername, legacyUserId],
   );
 
-  if (premiumUntilMs == null) {
-    const row = await getUserPremiumRecord(publicId);
-    premiumUntilMs = isPremiumUntilActive(row.premiumUntilMs) ? row.premiumUntilMs : null;
-  }
+  const row = await getUserPremiumRecord(publicId);
+  premiumUntilMs = isPremiumUntilActive(row.premiumUntilMs) ? row.premiumUntilMs : null;
 
   return {
     publicId,
@@ -364,6 +362,7 @@ export async function getUserPremiumRecord(userId: string): Promise<{
   }
   const trimmed = userId.trim();
   if (!trimmed) return { userExists: false, premiumUntilMs: null, note: '' };
+  await enforcePaidPremiumWindow(trimmed);
   const res = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
     `SELECT premium_until_ms, note FROM users WHERE id = $1`,
     [trimmed],

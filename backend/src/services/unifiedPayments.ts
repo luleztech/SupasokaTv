@@ -877,14 +877,22 @@ async function writePremiumForOrder(
     planId: identity.planId,
     phone: identity.phone,
     note: `${notePrefix}:${orderId}`,
+    orderId,
+    amountTzs: intent?.amount_tzs ?? null,
   });
   await markIntentActivated(orderId);
   await markIntentPremiumGranted(orderId, activated.premiumUntilMs);
+  const { getUserPremiumRecord } = await import('./userDirectory.js');
+  const saved = await getUserPremiumRecord(identity.publicId);
+  const premiumUntilMs =
+    saved.premiumUntilMs != null && Number.isFinite(saved.premiumUntilMs)
+      ? saved.premiumUntilMs
+      : activated.premiumUntilMs;
   logger.info(
-    { orderId, publicId: identity.publicId, planId: identity.planId, premiumUntilMs: activated.premiumUntilMs },
+    { orderId, publicId: identity.publicId, planId: identity.planId, premiumUntilMs },
     'payment_activated_premium',
   );
-  return { premiumUntilMs: activated.premiumUntilMs };
+  return { premiumUntilMs };
 }
 
 /** Fresh activation race: stamp set but premium write failed — only repair within this window. */

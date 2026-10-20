@@ -95,9 +95,8 @@ Future<void> _initializeDeferredServices() async {
     if (reg.premiumUntilMs != null &&
         reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
       await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
-    } else {
-      await SubscriptionStore.syncPremiumFromBackend(force: true);
     }
+    await SubscriptionStore.syncPremiumFromBackend(force: true);
     final isPremium =
         SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
     await PushNotificationService.syncAudienceTopics(isPremium: isPremium);

@@ -131,10 +131,9 @@ class _LoaderScreenState extends State<LoaderScreen> with TickerProviderStateMix
       if (reg.premiumUntilMs != null &&
           reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
         await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
-        await SubscriptionStore.refreshNotifierFromPrefs();
-      } else if (reg.recovered) {
-        await SubscriptionStore.syncPremiumFromBackend(force: true);
       }
+      await SubscriptionStore.syncPremiumFromBackend(force: true);
+      await SubscriptionStore.refreshNotifierFromPrefs();
     } catch (e, st) {
       if (kDebugMode) {
         debugPrint('Deferred user registration failed: $e\n$st');

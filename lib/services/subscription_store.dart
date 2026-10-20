@@ -175,13 +175,14 @@ class SubscriptionStore {
               : null;
 
       if (premiumUntilMs != null && _isActiveMs(premiumUntilMs)) {
+        final previousMs = premiumUntilNotifier.value?.millisecondsSinceEpoch;
         final justUnlocked = !isPremiumActiveLocal();
         final p = await SharedPreferences.getInstance();
         await p.setInt(_kUntilMs, premiumUntilMs);
         premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
         _scheduleLocalExpiry(premiumUntilMs);
         _trustedGrantAt = null;
-        if (justUnlocked) invalidatePlaybackCache();
+        if (justUnlocked || previousMs != premiumUntilMs) invalidatePlaybackCache();
         return;
       }
 

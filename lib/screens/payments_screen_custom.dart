@@ -1005,6 +1005,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (reg.premiumUntilMs != null &&
           reg.premiumUntilMs! > DateTime.now().millisecondsSinceEpoch) {
         await SubscriptionStore.setPremiumUntilMs(reg.premiumUntilMs!);
+        await SubscriptionStore.syncPremiumFromBackend(force: true);
         await SubscriptionStore.refreshNotifierFromPrefs();
         if (mounted) {
           _showStatus(

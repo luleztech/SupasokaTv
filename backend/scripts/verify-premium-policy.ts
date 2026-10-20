@@ -8,6 +8,7 @@ import {
   computePremiumEndMs,
   inferDurationMsFromMalipoRow,
   planDurationMsFromSlug,
+  stackPaidPremiumEndMs,
 } from '../src/services/premiumActivation';
 import { isPremiumUntilActive } from '../src/services/userDirectory';
 
@@ -73,6 +74,42 @@ function main() {
   });
   assertEq(mobileQuarter, 90 * MS_DAY, 'mobile quarterly 10000');
 
+  const weekDespiteOtherTiers = inferDurationMsFromMalipoRow({
+    id: 'weekly',
+    period: 'Wiki Moja · siku 7',
+    label: 'Wiki 1',
+    amount: 'TSh 2,000',
+    price_lines: 'Miezi 2\nTSh 5,000',
+  });
+  assertEq(weekDespiteOtherTiers, 7 * MS_DAY, 'weekly selection ignores other tiers in the price box');
+
+  const monthSelection = inferDurationMsFromMalipoRow({
+    id: 'monthly',
+    period: 'Mwezi Moja · siku 30',
+    label: 'Mwezi',
+    amount: 'TSh 5,000',
+    price_lines: 'Wiki 1',
+  });
+  assertEq(monthSelection, 30 * MS_DAY, 'monthly selection is 30 days');
+
+  const customWeek = inferDurationMsFromMalipoRow({
+    id: 'bundle_a',
+    period: 'Wiki Moja · siku 7',
+    label: 'Ofa',
+    amount: 'TSh 2,000',
+    price_lines: 'Miezi 2',
+  });
+  assertEq(customWeek, 7 * MS_DAY, 'custom id uses the week written on the plan');
+
+  const paidAt = 1_700_000_000_000;
+  const oneWeek = stackPaidPremiumEndMs([{ activatedAtMs: paidAt, durationMs: 7 * MS_DAY }]);
+  assertEq(oneWeek, paidAt + 7 * MS_DAY, 'one paid week ends after 7 days');
+  const renewedWeek = stackPaidPremiumEndMs([
+    { activatedAtMs: paidAt, durationMs: 7 * MS_DAY },
+    { activatedAtMs: paidAt + 5 * MS_DAY, durationMs: 7 * MS_DAY },
+  ]);
+  assertEq(renewedWeek, paidAt + 14 * MS_DAY, 'a second paid week keeps the days still left');
+
   const activatedAt = 1_700_000_000_000;
   const end = computePremiumEndMs(activatedAt, 7 * MS_DAY);
   assertEq(end, activatedAt + 7 * MS_DAY, 'exact weekly window');
@@ -88,7 +125,7 @@ function main() {
   assert(!isPremiumUntilActive(past), 'past premium is locked');
   assert(!isPremiumUntilActive(null), 'null premium is locked');
 
-  console.log(JSON.stringify({ ok: true, checks: 15 }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: 20 }, null, 2));
 }
 
 main();
