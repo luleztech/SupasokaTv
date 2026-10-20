@@ -87,12 +87,18 @@ Map<String, String> playbackHttpHeaders(String rawUrl) {
   if (parsed.scheme != 'http' && parsed.scheme != 'https') return const {};
 
   if (isDirectMediaUrl(u)) {
-    return const {
+    final headers = <String, String>{
       'User-Agent': _chromeMobileUa,
       'Accept': '*/*',
       'Accept-Language': 'en-US,en;q=0.9,sw;q=0.8',
       'Connection': 'keep-alive',
     };
+    // Plain HTTP bridges (beIN-style) reject the playlist unless the request
+    // names this app. Same-host Referer/Origin stay off; those still 403.
+    if (parsed.scheme == 'http') {
+      headers['X-Requested-With'] = 'com.ayubu.supasoka';
+    }
+    return headers;
   }
 
   final cdnOrigin = '${parsed.scheme}://${parsed.authority}';

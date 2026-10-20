@@ -28,7 +28,12 @@ object OrizonStreamClient {
             .followRedirects(true)
             .followSslRedirects(true)
             .addInterceptor { chain ->
-                HlsPlaylistStitcher.maybeRewrite(chain.proceed(chain.request()))
+                val response = HlsPlaylistStitcher.maybeRewrite(chain.proceed(chain.request()))
+                if (response.code != 404 && response.code != 410) return@addInterceptor response
+                val replacement = HlsPlaylistStitcher.replacementForMissingSegment(chain.request())
+                if (replacement == null) return@addInterceptor response
+                response.close()
+                replacement
             }
             .addNetworkInterceptor { chain ->
                 val request = chain.request()
@@ -43,10 +48,11 @@ object OrizonStreamClient {
                 ).mapNotNull { name ->
                     response.header(name)?.let { value -> "$name=$value" }
                 }.joinToString(" ")
+                val tail = request.url.pathSegments.lastOrNull()?.take(40).orEmpty().ifEmpty { "/" }
                 Log.i(
                     TAG,
                     "${request.method} ${request.url.scheme}://${request.url.host} " +
-                        "-> ${response.code} " +
+                        "tail=$tail -> ${response.code} " +
                         "refererHost=${headerHost(request.header("Referer"))} " +
                         "originHost=${headerHost(request.header("Origin"))} " +
                         diagnosticHeaders,

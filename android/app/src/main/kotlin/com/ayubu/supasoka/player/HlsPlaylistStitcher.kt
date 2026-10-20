@@ -2,8 +2,11 @@ package com.ayubu.supasoka.player
 
 import android.net.Uri
 import android.util.Log
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import java.util.concurrent.TimeUnit
 
 /**
  * Live bridges often restart `#EXT-X-MEDIA-SEQUENCE` when they rotate CDN hosts.
@@ -28,6 +31,19 @@ object HlsPlaylistStitcher {
 
     private val lock = Any()
     private val lastByPlaylist = HashMap<String, Snapshot>()
+    private val segmentUrlPattern = Regex("""(?m)^https?://\S+""")
+
+    @Volatile
+    private var playlistRequest: Request? = null
+
+    private val fetchClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
 
     fun reset() {
         synchronized(lock) {
@@ -50,18 +66,103 @@ object HlsPlaylistStitcher {
         }
         if (!prefix.contains("#EXTM3U")) return response
 
+        playlistRequest = response.request
         val mediaType = body.contentType()
         val raw = try {
             body.string()
         } catch (_: Exception) {
             return response
         }
-        val rewritten = rewrite(response.request.url.toString(), raw)
+        val rewritten = rewrite(
+            response.request.url.toString(),
+            dropUnreadyLiveEdge(normalizePlaylist(raw)),
+        )
         val bytes = rewritten.toByteArray(Charsets.UTF_8)
         return response.newBuilder()
             .body(bytes.toResponseBody(mediaType))
             .header("Content-Length", bytes.size.toString())
+            .removeHeader("Content-Encoding")
+            .removeHeader("Transfer-Encoding")
             .build()
+    }
+
+    /**
+     * The CDN host named in the playlist often answers 404 for the exact URL
+     * ExoPlayer opens (nginx HTML). A freshly listed file on that same bridge
+     * still plays, so hand that file back instead of failing the channel.
+     */
+    fun replacementForMissingSegment(failed: Request): Response? {
+        val path = failed.url.encodedPath.lowercase()
+        if (path.endsWith(".m3u8") || path.endsWith(".m3u")) return null
+        val original = playlistRequest ?: return null
+        repeat(3) { attempt ->
+            val playlistUrl = cacheBust(original.url.toString(), attempt)
+            val playlistText = getText(playlistUrl, original) ?: return@repeat
+            val urls = segmentUrlPattern.findAll(dropUnreadyLiveEdge(normalizePlaylist(playlistText)))
+                .map { it.value.trim() }
+                .toList()
+            for (url in urls.asReversed().take(4)) {
+                val segment = getResponse(url, original) ?: continue
+                if (segment.isSuccessful && (segment.body?.contentLength() ?: 1L) != 0L) {
+                    Log.i(TAG, "replaced 404 segment with a live file from the refreshed playlist")
+                    return segment.newBuilder().request(failed).build()
+                }
+                segment.close()
+            }
+        }
+        return null
+    }
+
+    private fun normalizePlaylist(raw: String): String {
+        return raw.replace("\r\n", "\n").replace('\r', '\n')
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("\n") + "\n"
+    }
+
+    private fun cacheBust(url: String, attempt: Int): String {
+        val joiner = if (url.contains("?")) "&" else "?"
+        return "$url${joiner}_r=$attempt${System.currentTimeMillis()}"
+    }
+
+    private fun getText(url: String, template: Request): String? {
+        val response = getResponse(url, template) ?: return null
+        return try {
+            if (!response.isSuccessful) {
+                response.close()
+                null
+            } else {
+                response.body?.string()
+            }
+        } catch (_: Exception) {
+            response.close()
+            null
+        }
+    }
+
+    private fun getResponse(url: String, template: Request): Response? {
+        val builder = Request.Builder().url(url).get()
+        for (name in listOf("User-Agent", "Accept", "Accept-Language", "X-Requested-With")) {
+            template.header(name)?.let { builder.header(name, it) }
+        }
+        return try {
+            fetchClient.newCall(builder.build()).execute()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * The last live segment is often listed before the CDN can serve it, so the
+     * first read is a 404 and playback stops. Drop that one edge file when older
+     * segments are still in the playlist. Finished playlists are left alone.
+     */
+    internal fun dropUnreadyLiveEdge(playlist: String): String {
+        if (!playlist.contains("#EXTM3U") || playlist.contains("#EXT-X-ENDLIST")) return playlist
+        val matches = extInfPattern.findAll(playlist).toList()
+        if (matches.size < 4) return playlist
+        return playlist.substring(0, matches.last().range.first).trimEnd() + "\n"
     }
 
     internal fun rewrite(rawUrl: String, playlist: String): String {

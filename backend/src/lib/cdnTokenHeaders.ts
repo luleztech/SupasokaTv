@@ -120,12 +120,17 @@ export function playbackHeadersForStreamUrl(rawUrl: string): Record<string, stri
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return {};
 
   if (isDirectMediaUrl(u)) {
-    return {
+    const headers: Record<string, string> = {
       'User-Agent': CHROME_MOBILE_UA,
       Accept: '*/*',
       'Accept-Language': 'en-US,en;q=0.9,sw;q=0.8',
       Connection: 'keep-alive',
     };
+    // Plain HTTP bridges reject the playlist unless the request names this app.
+    if (parsed.protocol === 'http:') {
+      headers['X-Requested-With'] = 'com.ayubu.supasoka';
+    }
+    return headers;
   }
 
   const origin = `${parsed.protocol}//${parsed.host}`;

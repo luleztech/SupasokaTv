@@ -55,12 +55,17 @@ object PlaybackHttpHeaders {
         ) return emptyMap()
 
         if (isDirectMediaUrl(trimmed)) {
-            return linkedMapOf(
+            val headers = linkedMapOf(
                 "User-Agent" to OrizonStreamClient.USER_AGENT,
                 "Accept" to "*/*",
                 "Accept-Language" to "en-US,en;q=0.9,sw;q=0.8",
                 "Connection" to "keep-alive",
             )
+            // Plain HTTP bridges reject the playlist unless the request names this app.
+            if (uri.scheme.equals("http", ignoreCase = true)) {
+                headers["X-Requested-With"] = "com.ayubu.supasoka"
+            }
+            return headers
         }
 
         val port = when (uri.port) {

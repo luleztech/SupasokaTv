@@ -325,11 +325,13 @@ class OrizonPlayerFactory(private val context: Context) {
         private const val BUFFER_FOR_PLAYBACK_MS = 1_800
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 3_500
         private const val BACK_BUFFER_MS = 0
-        // This bridge publishes about six segments. A 30s target sits on the oldest
-        // one, so the next playlist update drops it and ExoPlayer stops.
-        private const val HLS_LIVE_TARGET_OFFSET_MS = 4_000L
-        private const val HLS_LIVE_MIN_OFFSET_MS = 1_000L
-        private const val HLS_LIVE_MAX_OFFSET_MS = 8_000L
+        // These bridges list about six 6s segments and publish the newest file
+        // before the CDN can serve it (404). Four seconds from the edge sits inside
+        // that missing file. Twelve seconds starts on the previous segment, which
+        // is already stored, and still leaves the oldest ones unused.
+        private const val HLS_LIVE_TARGET_OFFSET_MS = 12_000L
+        private const val HLS_LIVE_MIN_OFFSET_MS = 8_000L
+        private const val HLS_LIVE_MAX_OFFSET_MS = 24_000L
         private const val HLS_LIVE_MIN_PLAYBACK_SPEED = 1f
         private const val HLS_LIVE_MAX_PLAYBACK_SPEED = 1.05f
         private const val LOAD_ERROR_RETRY_COUNT = 6
@@ -337,15 +339,19 @@ class OrizonPlayerFactory(private val context: Context) {
 }
 
 /**
- * A 404 on a live segment means that CDN host already rotated.
- * Retrying the same URL only delays the playlist refresh that publishes the next host.
+ * A 404 on the newest live file usually means the playlist listed it before the
+ * CDN stored it. Retry that URL briefly. After that, fail so the player reloads
+ * the playlist instead of hammering a host that has already rotated.
  */
 @OptIn(UnstableApi::class)
 private class HlsLiveLoadErrorPolicy : DefaultLoadErrorHandlingPolicy(6) {
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
         val code = (loadErrorInfo.exception as? HttpDataSource.InvalidResponseCodeException)
             ?.responseCode
-        if (code == 404 || code == 410) return C.TIME_UNSET
+        if (code == 404 || code == 410) {
+            if (loadErrorInfo.errorCount <= 2) return 500L
+            return C.TIME_UNSET
+        }
         return super.getRetryDelayMsFor(loadErrorInfo)
     }
 }
