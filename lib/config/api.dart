@@ -6,11 +6,11 @@ import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/tanzania_phone.dart';
 
 class _PaymentsApi {
-  static const _startPaymentTimeout = Duration(seconds: 120);
+  static const _startPaymentTimeout = Duration(seconds: 180);
 
   /// Keep asking while a crowd is still being served. Never retry a per-number quota
   /// or a PIN that may already be on the phone.
-  static const _maxStartRounds = 4;
+  static const _maxStartRounds = 6;
 
   static bool _isRetryableStartPaymentError(Object e, int round) {
     if (round >= _maxStartRounds - 1) return false;

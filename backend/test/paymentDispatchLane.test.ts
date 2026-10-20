@@ -50,6 +50,23 @@ describe('payment dispatch lane', () => {
     assert.equal(calls, 1);
   });
 
+  it('keeps every payer in line when the queue has no time limit', async () => {
+    const lanes = createDispatchLanes({ createLimit: 1, createWaitMs: 0 });
+    let release: () => void = () => {};
+    const holding = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = lanes.coalesceCreate('0610000011', () => holding.then(() => 'held'));
+    await delay(80);
+    const second = lanes.coalesceCreate('0610000012', async () => 'next');
+    assert.equal(lanes.snapshot().createQueued, 1);
+    release();
+    assert.equal(await first, 'held');
+    assert.equal(await second, 'next');
+    assert.equal(lanes.snapshot().createActive, 0);
+    assert.equal(lanes.snapshot().createQueued, 0);
+  });
+
   it('fails fast when the create queue cannot admit another payer in time', async () => {
     const lanes = createDispatchLanes({ createLimit: 1, createWaitMs: 40 });
     let release: () => void = () => {};

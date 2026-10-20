@@ -3,9 +3,10 @@
  *
  * PIN prompts are sent by SonicPesa / Aurax. Firing every "Lipia sasa" at the
  * gateway at once makes the gateway time out, and the handset never shows a PIN.
- * Creates run through a small FIFO lane. Extra payers wait their turn instead of
- * all failing together. Status checks use a separate lane and a short cache so
- * polling cannot take the slots needed to send PINs.
+ * Creates run through a FIFO lane. Every payer waits until a slot opens — the
+ * line does not turn anyone away. A few PIN requests go out at once so the
+ * gateway is not flooded (that flood is what dropped prompts). Status checks
+ * use a separate lane and a short cache so polling cannot take the PIN slots.
  */
 
 function readPositiveInt(name: string, fallback: number, min: number, max: number): number {
@@ -14,8 +15,17 @@ function readPositiveInt(name: string, fallback: number, min: number, max: numbe
   return Math.max(min, Math.min(max, n));
 }
 
-const CREATE_LIMIT = readPositiveInt('PAYMENT_CREATE_CONCURRENCY', 4, 2, 8);
-const CREATE_WAIT_MS = readPositiveInt('PAYMENT_CREATE_QUEUE_WAIT_MS', 180_000, 5_000, 240_000);
+/** 0 means wait until admitted. A positive value is an optional give-up. */
+function readCreateWaitMs(): number {
+  const raw = (process.env.PAYMENT_CREATE_QUEUE_WAIT_MS ?? '').trim();
+  if (raw === '' || raw === '0') return 0;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, 600_000);
+}
+
+const CREATE_LIMIT = readPositiveInt('PAYMENT_CREATE_CONCURRENCY', 8, 2, 16);
+const CREATE_WAIT_MS = readCreateWaitMs();
 const STATUS_LIMIT = readPositiveInt('PAYMENT_STATUS_CONCURRENCY', 8, 2, 24);
 const STATUS_WAIT_MS = readPositiveInt('PAYMENT_STATUS_QUEUE_WAIT_MS', 8_000, 500, 20_000);
 
@@ -69,11 +79,14 @@ export class PaymentLane {
     return new Promise<boolean>((resolve) => {
       const waiter: Waiter = {
         resolve,
-        timer: setTimeout(() => {
-          const index = this.waiters.indexOf(waiter);
-          if (index >= 0) this.waiters.splice(index, 1);
-          resolve(false);
-        }, this.waitMs),
+        timer:
+          this.waitMs > 0
+            ? setTimeout(() => {
+                const index = this.waiters.indexOf(waiter);
+                if (index >= 0) this.waiters.splice(index, 1);
+                resolve(false);
+              }, this.waitMs)
+            : (0 as ReturnType<typeof setTimeout>),
       };
       this.waiters.push(waiter);
     });
