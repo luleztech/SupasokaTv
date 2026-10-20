@@ -1,7 +1,7 @@
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
 import { normalizePhoneToLocal0, toLocal0Digits } from '../lib/tzPhone';
-import { enforcePaidPremiumWindow } from './premiumWindow';
+import { enforcePaidPremiumWindow, noteWithAdminGrant, noteWithoutAdminGrant } from './premiumWindow';
 
 const publicIdRe = /^User-[A-Za-z2-9]{5}$/;
 
@@ -293,48 +293,22 @@ export async function applyAdminPremiumUpdate(
   const now = Date.now();
   const revoke = premiumUntilMs == null || premiumUntilMs <= now;
   const effectiveMs = premiumUntilMs == null ? now : Math.trunc(premiumUntilMs);
-
-  if (revoke) {
-    const res = await pool.query(
-      `UPDATE users
-       SET premium_until_ms = $2,
-           note = trim(both ' |' from regexp_replace(
-             CASE
-               WHEN COALESCE(note, '') = '' THEN 'premium_revoked:admin'
-               WHEN note LIKE '%premium_revoked:%' THEN note
-               ELSE note || ' | premium_revoked:admin'
-             END,
-             '(\\s*\\|\\s*)?premium_admin_grant:\\d+',
-             '',
-             'g'
-           )),
-           updated_at = now()
-       WHERE id = $1`,
-      [trimmed, effectiveMs],
-    );
-    return (res.rowCount ?? 0) > 0;
-  }
+  const current = await pool.query<{ note: string | null }>(
+    `SELECT note FROM users WHERE id = $1`,
+    [trimmed],
+  );
+  if (current.rows.length === 0) return false;
+  const nextNote = revoke
+    ? noteWithoutAdminGrant(current.rows[0]?.note)
+    : noteWithAdminGrant(current.rows[0]?.note, effectiveMs);
 
   const res = await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
-         note = trim(both ' |' from concat_ws(' | ',
-           NULLIF(trim(both ' |' from regexp_replace(
-             regexp_replace(
-               COALESCE(note, ''),
-               '(\\s*\\|\\s*)?premium_revoked:(admin|no_verified_payment)',
-               '',
-               'g'
-             ),
-             '(\\s*\\|\\s*)?premium_admin_grant:\\d+',
-             '',
-             'g'
-           )), ''),
-           'premium_admin_grant:' || $2::text
-         )),
+         note = $3,
          updated_at = now()
      WHERE id = $1`,
-    [trimmed, effectiveMs],
+    [trimmed, effectiveMs, nextNote],
   );
   return (res.rowCount ?? 0) > 0;
 }

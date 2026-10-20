@@ -5,6 +5,7 @@ import { getPool } from '../db/pool';
 import { logger } from '../lib/logger';
 import { resolveStoredStreamUrl } from '../lib/streamUrl';
 import { HttpError } from '../middleware/errorHandler';
+import { adminGrantMs, noteWithAdminGrant } from './premiumWindow';
 import {
   accentRgbFromDartColor,
   asBool,
@@ -337,6 +338,22 @@ export async function importAppConfig(body: unknown): Promise<void> {
         : x.legacyUserId != null
           ? String(x.legacyUserId)
           : null;
+      const existing = await client.query<{ premium_until_ms: string | null; note: string | null }>(
+        `SELECT premium_until_ms, note FROM users WHERE id = $1`,
+        [uid],
+      );
+      const prevNote = String(existing.rows[0]?.note ?? '');
+      const prevGrant = adminGrantMs(prevNote);
+      const now = Date.now();
+      let nextUntil =
+        premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null;
+      let nextNote = String(x.note ?? '');
+      if (nextUntil != null && nextUntil > now) {
+        nextNote = noteWithAdminGrant(nextNote, nextUntil);
+      } else if (prevGrant > now) {
+        nextNote = noteWithAdminGrant(nextNote, prevGrant);
+        if (nextUntil == null || nextUntil < prevGrant) nextUntil = prevGrant;
+      }
       await client.query(
         `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
          VALUES ($1, $2, $3, $4, $5, now())
@@ -350,8 +367,8 @@ export async function importAppConfig(body: unknown): Promise<void> {
           uid,
           displayName,
           legacyUserId,
-          premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null,
-          String(x.note ?? ''),
+          nextUntil,
+          nextNote,
         ],
       );
     }

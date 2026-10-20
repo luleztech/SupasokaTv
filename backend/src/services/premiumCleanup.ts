@@ -5,6 +5,7 @@ import {
   markIntentPremiumGranted,
 } from './paymentIntents';
 import { durationMsForPaidOrder, stackPaidPremiumEndMs } from './premiumActivation';
+import { adminGrantMs } from './premiumWindow';
 import { clearAllExpiredPremiumInDatabase } from './userDirectory';
 import { logger } from '../lib/logger';
 
@@ -169,8 +170,8 @@ export async function capOverlongPremiumFromPayments(
   const limit = Math.max(1, Math.min(5000, opts?.limit ?? 2000));
   const now = Date.now();
 
-  const users = await pool.query<{ id: string; premium_until_ms: string }>(
-    `SELECT id, premium_until_ms
+  const users = await pool.query<{ id: string; premium_until_ms: string; note: string | null }>(
+    `SELECT id, premium_until_ms, note
      FROM users
      WHERE premium_until_ms IS NOT NULL
        AND premium_until_ms > $1
@@ -187,6 +188,8 @@ export async function capOverlongPremiumFromPayments(
   for (const u of users.rows) {
     const userId = u.id;
     const wasUntil = Number(u.premium_until_ms);
+    const grantMs = adminGrantMs(u.note);
+    const adminFloor = grantMs > now ? grantMs : 0;
     const pays = await pool.query<{
       order_id: string;
       plan_id: string | null;
@@ -231,22 +234,23 @@ export async function capOverlongPremiumFromPayments(
     }
 
     if (!Number.isFinite(expected) || expected <= 0) continue;
+    const ceiling = Math.max(expected, adminFloor);
 
     // Small clock/grace skew (2 hours) before treating as overlong.
-    if (wasUntil <= expected + 2 * 60 * 60 * 1000) continue;
+    if (wasUntil <= ceiling + 2 * 60 * 60 * 1000) continue;
 
-    const daysOver = Math.round((wasUntil - expected) / (24 * 60 * 60 * 1000));
+    const daysOver = Math.round((wasUntil - ceiling) / (24 * 60 * 60 * 1000));
     if (samples.length < 40) {
       samples.push({
         userId,
         wasUntilMs: wasUntil,
-        expectedUntilMs: expected,
+        expectedUntilMs: ceiling,
         daysOver,
       });
     }
 
     if (!dryRun) {
-      const nextUntil = expected <= now ? now : Math.trunc(expected);
+      const nextUntil = ceiling <= now ? now : Math.trunc(ceiling);
       await pool.query(
         `UPDATE users
          SET premium_until_ms = $2,
@@ -263,7 +267,7 @@ export async function capOverlongPremiumFromPayments(
     }
     capped += 1;
     logger.info(
-      { userId, wasUntil, expected, daysOver, dryRun },
+      { userId, wasUntil, expected: ceiling, daysOver, dryRun },
       'premium_capped_to_payments',
     );
   }

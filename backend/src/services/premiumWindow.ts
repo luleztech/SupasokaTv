@@ -4,12 +4,38 @@ import { ensurePaymentIntentsTable } from './paymentIntents';
 
 const GRACE_MS = 2 * 60 * 60 * 1000;
 
-/** Admin save writes this so a paid-period cap cannot undo the grant. */
-function adminGrantMs(note: string | null | undefined): number {
-  const match = String(note ?? '').match(/premium_admin_grant:(\d{10,})/);
-  if (!match) return 0;
-  const n = Number(match[1]);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+/** Latest admin grant in the note. A newer save wins over an older one. */
+export function adminGrantMs(note: string | null | undefined): number {
+  const text = String(note ?? '');
+  let best = 0;
+  for (const match of text.matchAll(/premium_admin_grant:(\d{10,})/g)) {
+    const n = Number(match[1]);
+    if (Number.isFinite(n) && n > best) best = n;
+  }
+  return best;
+}
+
+export function noteWithAdminGrant(note: string | null | undefined, grantMs: number): string {
+  const stripped = String(note ?? '')
+    .replace(/(\s*\|\s*)?premium_revoked:(admin|no_verified_payment)/gi, '')
+    .replace(/(\s*\|\s*)?premium_admin_grant:\d+/gi, '')
+    .replace(/\s*\|\s*/g, ' | ')
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
+    .trim();
+  const marker = `premium_admin_grant:${Math.trunc(grantMs)}`;
+  return stripped ? `${stripped} | ${marker}` : marker;
+}
+
+export function noteWithoutAdminGrant(note: string | null | undefined): string {
+  let text = String(note ?? '')
+    .replace(/(\s*\|\s*)?premium_admin_grant:\d+/gi, '')
+    .replace(/\s*\|\s*/g, ' | ')
+    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
+    .trim();
+  if (!text.includes('premium_revoked:')) {
+    text = text ? `${text} | premium_revoked:admin` : 'premium_revoked:admin';
+  }
+  return text;
 }
 
 /**
@@ -40,6 +66,17 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   const now = Date.now();
   const grantMs = adminGrantMs(row.note);
   const adminFloor = grantMs > now ? grantMs : 0;
+  if (adminFloor > 0) {
+    if (wasUntil < adminFloor) {
+      await pool.query(
+        `UPDATE users
+         SET premium_until_ms = $2, updated_at = now()
+         WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+        [trimmed, adminFloor],
+      );
+    }
+    return;
+  }
 
   const phone = String(row.legacy_user_id ?? '').trim();
   const phoneKey = phone.length >= 9 ? phone : '';
@@ -61,17 +98,7 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
      ORDER BY order_id, activated_at_ms ASC`,
     [trimmed, phoneKey],
   );
-  if (pays.rows.length === 0) {
-    if (adminFloor > wasUntil) {
-      await pool.query(
-        `UPDATE users
-         SET premium_until_ms = $2, updated_at = now()
-         WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
-        [trimmed, adminFloor],
-      );
-    }
-    return;
-  }
+  if (pays.rows.length === 0) return;
 
   const stacked: Array<{ activatedAtMs: number; durationMs: number }> = [];
   for (const pay of pays.rows) {
@@ -82,28 +109,10 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   }
   stacked.sort((a, b) => a.activatedAtMs - b.activatedAtMs);
   const expected = stackPaidPremiumEndMs(stacked);
-  if (!Number.isFinite(expected) || expected <= 0) {
-    if (adminFloor > wasUntil) {
-      await pool.query(
-        `UPDATE users SET premium_until_ms = $2, updated_at = now() WHERE id = $1`,
-        [trimmed, adminFloor],
-      );
-    }
-    return;
-  }
-  const ceiling = Math.max(expected, adminFloor);
-  if (adminFloor > wasUntil && wasUntil <= ceiling + GRACE_MS) {
-    await pool.query(
-      `UPDATE users
-       SET premium_until_ms = $2, updated_at = now()
-       WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
-      [trimmed, adminFloor],
-    );
-    return;
-  }
-  if (wasUntil <= ceiling + GRACE_MS) return;
+  if (!Number.isFinite(expected) || expected <= 0) return;
+  if (wasUntil <= expected + GRACE_MS) return;
 
-  const nextUntil = ceiling <= now ? now : Math.trunc(ceiling);
+  const nextUntil = expected <= now ? now : Math.trunc(expected);
   await pool.query(
     `UPDATE users
      SET premium_until_ms = $2,
@@ -116,7 +125,7 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
      WHERE id = $1
        AND premium_until_ms IS NOT NULL
        AND premium_until_ms > $3`,
-    [trimmed, nextUntil, ceiling + GRACE_MS],
+    [trimmed, nextUntil, expected + GRACE_MS],
   );
   logger.info(
     {
