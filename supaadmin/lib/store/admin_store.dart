@@ -80,6 +80,7 @@ class AdminStore extends ChangeNotifier {
   String? _lastSyncError;
   bool _syncing = false;
   bool _needsServerPush = false;
+  Future<void>? _pullInflight;
   bool _savingAppUpdatePolicy = false;
   Timer? _syncRetryTimer;
   Map<String, int> _paymentHealthSummary = const {};
@@ -473,24 +474,51 @@ class AdminStore extends ChangeNotifier {
     _config.carousel.removeWhere((s) => !validChannelIds.contains(s.channelId));
   }
 
-  Future<void> pullConfigFromServer() async {
-    if (!hasAdminSession) {
-      return;
-    }
+  Future<void> pullConfigFromServer() {
+    if (!hasAdminSession) return Future<void>.value();
+    final existing = _pullInflight;
+    if (existing != null) return existing;
+    final run = _pullConfigFromServerBody();
+    _pullInflight = run;
+    return run.whenComplete(() {
+      if (identical(_pullInflight, run)) _pullInflight = null;
+    });
+  }
+
+  Future<void> _pullConfigFromServerBody() async {
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/admin/export').replace(
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch.toString()},
     );
     try {
-      final res = await http
-          .get(
-            uri,
-            headers: {
-              ..._authHeaders(),
-              'Cache-Control': 'no-cache',
-            },
-          )
-          .timeout(const Duration(seconds: 40));
+      http.Response? res;
+      Object? netError;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          res = await http
+              .get(
+                uri,
+                headers: {
+                  ..._authHeaders(),
+                  'Cache-Control': 'no-cache',
+                },
+              )
+              .timeout(const Duration(seconds: 20));
+          if (res.statusCode < 500) break;
+          netError = 'HTTP ${res.statusCode}';
+        } catch (e) {
+          netError = e;
+          res = null;
+        }
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+      }
+      if (res == null) {
+        _lastSyncError = 'Load failed: ${adminFormatError(netError ?? 'timeout')}';
+        notifyListeners();
+        return;
+      }
       if (res.statusCode == 401 || res.statusCode == 403) {
         _lastSyncError =
             'Unauthorized — password si sahihi; ingia tena.';

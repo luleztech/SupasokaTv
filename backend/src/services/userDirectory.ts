@@ -9,6 +9,18 @@ export function isValidPublicUserId(id: string): boolean {
   return publicIdRe.test(id);
 }
 
+function timeMs(value: Date | string | null | undefined): number {
+  if (value instanceof Date) {
+    const n = value.getTime();
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const n = Date.parse(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
 export type RegisterPublicUserResult = {
   publicId: string;
   recovered: boolean;
@@ -216,7 +228,7 @@ export async function listUsersForAdmin(): Promise<
     userNumber: r.legacy_user_id ?? null,
     premiumUntilMs: r.premium_until_ms != null ? Number(r.premium_until_ms) : null,
     note: r.note ?? '',
-    createdAtMs: r.created_at.getTime(),
+    createdAtMs: timeMs(r.created_at),
   }));
 }
 
@@ -435,17 +447,51 @@ export async function getUserPremiumRecord(userId: string): Promise<{
   }
   const trimmed = userId.trim();
   if (!trimmed) return { userExists: false, premiumUntilMs: null, note: '' };
-  await shareAdminGrantWithPhone(trimmed);
-  const peek = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
-    `SELECT premium_until_ms, note FROM users WHERE id = $1`,
+  const peek = await pool.query<{ premium_until_ms: string | null; note: string | null; legacy_user_id: string | null }>(
+    `SELECT premium_until_ms, note, legacy_user_id FROM users WHERE id = $1`,
     [trimmed],
   );
   const peeked = peek.rows[0];
   if (!peeked) return { userExists: false, premiumUntilMs: null, note: '' };
-  const grant = adminGrantMs(peeked.note);
-  if (grant > Date.now()) {
-    const raw = peeked.premium_until_ms != null ? Number(peeked.premium_until_ms) : null;
+  const now = Date.now();
+  let grant = adminGrantMs(peeked.note);
+  let raw = peeked.premium_until_ms != null ? Number(peeked.premium_until_ms) : null;
+  if (!(grant > now) && !isPremiumRevokeLocked(peeked.note) && String(peeked.legacy_user_id ?? '').trim()) {
+    await shareAdminGrantWithPhone(trimmed);
+    const again = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
+      `SELECT premium_until_ms, note FROM users WHERE id = $1`,
+      [trimmed],
+    );
+    const row = again.rows[0];
+    if (!row) return { userExists: false, premiumUntilMs: null, note: '' };
+    grant = adminGrantMs(row.note);
+    raw = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
+    if (grant > now) {
+      const until = raw != null && Number.isFinite(raw) ? Math.max(raw, grant) : grant;
+      return { userExists: true, premiumUntilMs: until, note: String(row.note ?? '') };
+    }
+    await enforcePaidPremiumWindow(trimmed);
+    const after = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
+      `SELECT premium_until_ms, note FROM users WHERE id = $1`,
+      [trimmed],
+    );
+    const saved = after.rows[0];
+    if (!saved) return { userExists: false, premiumUntilMs: null, note: '' };
+    const savedRaw = saved.premium_until_ms != null ? Number(saved.premium_until_ms) : null;
+    return {
+      userExists: true,
+      premiumUntilMs: savedRaw != null && Number.isFinite(savedRaw) ? savedRaw : null,
+      note: String(saved.note ?? ''),
+    };
+  }
+  if (grant > now) {
     const until = raw != null && Number.isFinite(raw) ? Math.max(raw, grant) : grant;
+    if (raw == null || !Number.isFinite(raw) || raw < grant) {
+      await pool.query(
+        `UPDATE users SET premium_until_ms = $2, updated_at = now() WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+        [trimmed, until],
+      );
+    }
     return { userExists: true, premiumUntilMs: until, note: String(peeked.note ?? '') };
   }
   await enforcePaidPremiumWindow(trimmed);
@@ -456,10 +502,10 @@ export async function getUserPremiumRecord(userId: string): Promise<{
   const row = res.rows[0];
   if (!row) return { userExists: false, premiumUntilMs: null, note: '' };
 
-  const raw = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
+  const savedUntil = row.premium_until_ms != null ? Number(row.premium_until_ms) : null;
   return {
     userExists: true,
-    premiumUntilMs: raw,
+    premiumUntilMs: savedUntil != null && Number.isFinite(savedUntil) ? savedUntil : null,
     note: String(row.note ?? ''),
   };
 }
