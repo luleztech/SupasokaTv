@@ -56,13 +56,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
   }
 
   Future<void> _applyDuration(AdminStore store, Duration d) async {
-    await store.addUserPremiumDuration(widget.initial.id, d);
-    if (mounted) setState(() {});
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Muda umeongezwa: ${d.inDays} siku')),
-      );
-    }
+    final ok = await store.addUserPremiumDuration(widget.initial.id, d);
+    if (!mounted) return;
+    setState(() {});
+    if (!ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Imehifadhiwa: ${d.inDays} siku')),
+    );
   }
 
   void _saveNote(AdminStore store) {
@@ -95,13 +95,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
     if (time == null || !mounted) return;
 
     final end = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-    await store.setUserPremiumUntil(widget.initial.id, end);
+    final saved = await store.setUserPremiumUntil(widget.initial.id, end);
+    if (!mounted) return;
     setState(() {});
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mwisho: ${_fmtDateTime(end)}')),
-      );
-    }
+    if (!saved) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Imehifadhiwa hadi ${_fmtDateTime(end)}')),
+    );
   }
 
   Future<void> _clearPremium(AdminStore store) async {
@@ -117,13 +117,13 @@ class _UserManageSheetState extends State<UserManageSheet> {
       ),
     );
     if (ok != true || !mounted) return;
-    await store.setUserPremiumUntil(widget.initial.id, null);
+    final saved = await store.setUserPremiumUntil(widget.initial.id, null);
+    if (!mounted) return;
     setState(() {});
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Premium imeondolewa')),
-      );
-    }
+    if (!saved) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Premium imeondolewa')),
+    );
   }
 
   Future<void> _applyCustomDays(AdminStore store) async {

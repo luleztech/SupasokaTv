@@ -17,6 +17,7 @@ import {
 import { importAppUpdateSettings } from '../../services/appUpdateSettingsImport';
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
+import { logger } from '../../lib/logger';
 import { applyAdminPremiumUpdate, deleteUserById, isValidPublicUserId, listUsersForAdmin } from '../../services/userDirectory';
 import {
   checkEamaxBridgeConfiguration,
@@ -278,16 +279,27 @@ adminRouter.put('/users/:id/premium', requireAdmin, async (req, res, next) => {
       }
       premiumUntilMs = Math.trunc(n);
     }
-    const updated = await applyAdminPremiumUpdate(userId, premiumUntilMs);
-    if (!updated) {
+    const result = await applyAdminPremiumUpdate(userId, premiumUntilMs);
+    if (!result.updated) {
       res.status(404).json({ ok: false, error: 'user not found' });
       return;
     }
-    const effectiveMs =
-      premiumUntilMs == null
-        ? Date.now()
-        : premiumUntilMs;
-    res.json({ ok: true, userId, premiumUntilMs: effectiveMs });
+    const effectiveMs = premiumUntilMs == null ? Date.now() : premiumUntilMs;
+    if (premiumUntilMs != null && premiumUntilMs > Date.now()) {
+      for (const id of result.userIds) {
+        void sendPushToUser({
+          publicId: id,
+          title: 'Akaunti yako imewashwa',
+          body: 'Sasa unaweza kutazama. Fungua programu.',
+        }).catch((err: unknown) => {
+          logger.warn(
+            { userId: id, err: err instanceof Error ? err.message : String(err) },
+            'admin_grant_push_skipped',
+          );
+        });
+      }
+    }
+    res.json({ ok: true, userId, premiumUntilMs: effectiveMs, userIds: result.userIds });
   } catch (e) {
     next(e);
   }

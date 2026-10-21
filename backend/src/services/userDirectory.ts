@@ -1,7 +1,7 @@
 import { getPool } from '../db/pool';
 import { HttpError } from '../middleware/errorHandler';
 import { normalizePhoneToLocal0, toLocal0Digits } from '../lib/tzPhone';
-import { enforcePaidPremiumWindow, noteWithAdminGrant, noteWithoutAdminGrant } from './premiumWindow';
+import { enforcePaidPremiumWindow, adminGrantMs, noteWithAdminGrant, noteWithoutAdminGrant } from './premiumWindow';
 
 const publicIdRe = /^User-[A-Za-z2-9]{5}$/;
 
@@ -279,16 +279,107 @@ export function isPremiumRevokeLocked(note: string | null | undefined): boolean 
   return String(note ?? '').includes('premium_revoked:');
 }
 
+type PremiumRow = {
+  id: string;
+  legacy_user_id: string | null;
+  premium_until_ms: string | null;
+  note: string | null;
+};
+
+async function samePhonePremiumRows(userId: string): Promise<PremiumRow[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const self = await pool.query<PremiumRow>(
+    `SELECT id, legacy_user_id, premium_until_ms, note FROM users WHERE id = $1`,
+    [userId],
+  );
+  const row = self.rows[0];
+  if (!row) return [];
+  const candidates = phoneIdentityCandidates(String(row.legacy_user_id ?? ''));
+  if (candidates.length === 0) return [row];
+  const related = await pool.query<PremiumRow>(
+    `SELECT id, legacy_user_id, premium_until_ms, note
+     FROM users
+     WHERE id = $1 OR legacy_user_id = ANY($2::text[])`,
+    [userId, candidates],
+  );
+  return related.rows.length > 0 ? related.rows : [row];
+}
+
+/**
+ * The handset may be a different User id than the row the admin tapped.
+ * Copy a live admin grant onto every account that shares the phone number.
+ */
+async function shareAdminGrantWithPhone(
+  userId: string,
+  authoritativeMs?: number,
+): Promise<string[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const rows = await samePhonePremiumRows(userId);
+  if (rows.length === 0) return [];
+  const now = Date.now();
+  const self = rows.find((r) => r.id === userId) ?? rows[0]!;
+  let grant = authoritativeMs != null && authoritativeMs > now ? Math.trunc(authoritativeMs) : 0;
+  if (grant <= now && !isPremiumRevokeLocked(self.note)) {
+    for (const row of rows) {
+      const n = adminGrantMs(row.note);
+      if (n > grant) grant = n;
+    }
+  }
+  if (grant <= now) return rows.filter((r) => r.id === userId).map((r) => r.id);
+
+  const touched: string[] = [];
+  for (const row of rows) {
+    const current = row.premium_until_ms != null ? Number(row.premium_until_ms) : 0;
+    const marked = adminGrantMs(row.note);
+    const nextUntil = row.id === userId && authoritativeMs != null ? grant : Math.max(current, grant);
+    if (marked === grant && current === nextUntil) {
+      touched.push(row.id);
+      continue;
+    }
+    await pool.query(
+      `UPDATE users
+       SET premium_until_ms = $2, note = $3, updated_at = now()
+       WHERE id = $1`,
+      [row.id, nextUntil, noteWithAdminGrant(row.note, grant)],
+    );
+    touched.push(row.id);
+  }
+  return touched;
+}
+
+async function revokeAdminGrantOnPhone(userId: string, effectiveMs: number): Promise<string[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const rows = await samePhonePremiumRows(userId);
+  const touched: string[] = [];
+  for (const row of rows) {
+    const grant = adminGrantMs(row.note);
+    const current = row.premium_until_ms != null ? Number(row.premium_until_ms) : 0;
+    if (row.id !== userId && !(grant > Date.now())) continue;
+    const nextUntil = row.id === userId ? effectiveMs : current > grant ? current : effectiveMs;
+    await pool.query(
+      `UPDATE users
+       SET premium_until_ms = $2, note = $3, updated_at = now()
+       WHERE id = $1`,
+      [row.id, nextUntil, noteWithoutAdminGrant(row.note)],
+    );
+    touched.push(row.id);
+  }
+  return touched;
+}
+
 export async function applyAdminPremiumUpdate(
   userId: string,
   premiumUntilMs: number | null,
-): Promise<boolean> {
+): Promise<{ updated: boolean; userIds: string[] }> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
   }
   const trimmed = userId.trim();
-  if (!trimmed) return false;
+  if (!trimmed) return { updated: false, userIds: [] };
 
   const now = Date.now();
   const revoke = premiumUntilMs == null || premiumUntilMs <= now;
@@ -297,20 +388,15 @@ export async function applyAdminPremiumUpdate(
     `SELECT note FROM users WHERE id = $1`,
     [trimmed],
   );
-  if (current.rows.length === 0) return false;
-  const nextNote = revoke
-    ? noteWithoutAdminGrant(current.rows[0]?.note)
-    : noteWithAdminGrant(current.rows[0]?.note, effectiveMs);
+  if (current.rows.length === 0) return { updated: false, userIds: [] };
 
-  const res = await pool.query(
-    `UPDATE users
-     SET premium_until_ms = $2,
-         note = $3,
-         updated_at = now()
-     WHERE id = $1`,
-    [trimmed, effectiveMs, nextNote],
-  );
-  return (res.rowCount ?? 0) > 0;
+  if (revoke) {
+    const userIds = await revokeAdminGrantOnPhone(trimmed, effectiveMs);
+    return { updated: userIds.length > 0, userIds };
+  }
+
+  const userIds = await shareAdminGrantWithPhone(trimmed, effectiveMs);
+  return { updated: userIds.length > 0, userIds };
 }
 
 export async function isUserPremiumRevokeLocked(userId: string): Promise<boolean> {
@@ -349,6 +435,19 @@ export async function getUserPremiumRecord(userId: string): Promise<{
   }
   const trimmed = userId.trim();
   if (!trimmed) return { userExists: false, premiumUntilMs: null, note: '' };
+  await shareAdminGrantWithPhone(trimmed);
+  const peek = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
+    `SELECT premium_until_ms, note FROM users WHERE id = $1`,
+    [trimmed],
+  );
+  const peeked = peek.rows[0];
+  if (!peeked) return { userExists: false, premiumUntilMs: null, note: '' };
+  const grant = adminGrantMs(peeked.note);
+  if (grant > Date.now()) {
+    const raw = peeked.premium_until_ms != null ? Number(peeked.premium_until_ms) : null;
+    const until = raw != null && Number.isFinite(raw) ? Math.max(raw, grant) : grant;
+    return { userExists: true, premiumUntilMs: until, note: String(peeked.note ?? '') };
+  }
   await enforcePaidPremiumWindow(trimmed);
   const res = await pool.query<{ premium_until_ms: string | null; note: string | null }>(
     `SELECT premium_until_ms, note FROM users WHERE id = $1`,

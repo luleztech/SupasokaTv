@@ -10,7 +10,7 @@ import {
 import { isPlayableChannelId } from '../../lib/streamUrl';
 import { assertSupportedAppClient, resolvePlaybackForChannel } from '../../services/playbackAccess';
 import { proxyRelayRequest } from '../../services/streamRelay';
-import { registerPublicUser, getUserPremiumRecord, getUserPremiumStatus } from '../../services/userDirectory';
+import { registerPublicUser, getUserPremiumRecord, isPremiumUntilActive } from '../../services/userDirectory';
 import { logger } from '../../lib/logger';
 import {
   ensurePaymentIntentsTable,
@@ -206,9 +206,12 @@ publicRouter.post('/register-user', async (req, res, next) => {
 publicRouter.get('/user-premium/:userId', async (req, res, next) => {
   try {
     const userId = String(req.params.userId ?? '').trim();
-    await reconcilePremiumForUser(userId);
-    const out = await getUserPremiumRecord(userId);
-    const premiumUntilMs = await getUserPremiumStatus(userId);
+    let out = await getUserPremiumRecord(userId);
+    if (!isPremiumUntilActive(out.premiumUntilMs)) {
+      await reconcilePremiumForUser(userId);
+      out = await getUserPremiumRecord(userId);
+    }
+    const premiumUntilMs = isPremiumUntilActive(out.premiumUntilMs) ? out.premiumUntilMs : null;
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

@@ -1372,9 +1372,9 @@ class AdminStore extends ChangeNotifier {
     await _saveLocalConfigOnly();
   }
 
-  Future<void> addUserPremiumDuration(String userId, Duration duration) async {
+  Future<bool> addUserPremiumDuration(String userId, Duration duration) async {
     final i = _config.users.indexWhere((x) => x.id == userId);
-    if (i < 0) return;
+    if (i < 0) return false;
     final u = _config.users[i];
     final now = DateTime.now();
     var start = now;
@@ -1384,54 +1384,63 @@ class AdminStore extends ChangeNotifier {
       if (ex.isAfter(now)) start = ex;
     }
     final end = start.add(duration);
-    await setUserPremiumUntil(userId, end);
+    return setUserPremiumUntil(userId, end);
   }
 
-  Future<void> setUserPremiumUntil(String userId, DateTime? endUtc) async {
+  Future<bool> setUserPremiumUntil(String userId, DateTime? endUtc) async {
     final i = _config.users.indexWhere((x) => x.id == userId);
-    if (i < 0) return;
-    final u = _config.users[i];
+    if (i < 0) return false;
+    final previous = _config.users[i];
     final next = endUtc == null
-        ? u.copyWith(clearPremiumUntilMs: true)
-        : u.copyWith(premiumUntilMs: endUtc.millisecondsSinceEpoch);
+        ? previous.copyWith(clearPremiumUntilMs: true)
+        : previous.copyWith(premiumUntilMs: endUtc.millisecondsSinceEpoch);
     _config.users[i] = next;
+    notifyListeners();
 
-    // Fast path: single-user premium update, avoids heavy full-config import latency.
-    if (hasAdminSession) {
-      final base = resolvedApiBaseUrl;
-      final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(userId)}/premium');
-      _syncing = true;
-      _lastSyncError = null;
+    if (!hasAdminSession) {
+      _lastSyncError = 'Ingia tena ili kuhifadhi premium kwenye seva.';
+      _config.users[i] = previous;
       notifyListeners();
-      try {
-        final res = await http
-            .put(
-              uri,
-              headers: _authHeaders(contentType: 'application/json'),
-              body: jsonEncode({
-                'premiumUntilMs': endUtc?.millisecondsSinceEpoch,
-              }),
-            )
-            .timeout(const Duration(seconds: 20));
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          await _saveLocalConfigOnly();
-          return;
-        }
-        _lastSyncError =
-            'Premium update failed (${res.statusCode}): ${res.body.length > 200 ? '${res.body.substring(0, 200)}…' : res.body}';
-      } catch (e) {
-        _lastSyncError = 'Premium update failed: $e';
-      } finally {
-        _syncing = false;
-        notifyListeners();
-        if (_lastSyncError != null && _lastSyncError!.isNotEmpty) {
-          _snack(_lastSyncError!);
-        }
-      }
+      _snack(_lastSyncError!);
+      return false;
     }
 
-    // Fallback for older backend versions.
-    await _persist();
+    final base = resolvedApiBaseUrl;
+    final uri = Uri.parse('$base/api/v1/admin/users/${Uri.encodeComponent(userId)}/premium');
+    _syncing = true;
+    _lastSyncError = null;
+    notifyListeners();
+    try {
+      final res = await http
+          .put(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({
+              'premiumUntilMs': endUtc?.millisecondsSinceEpoch,
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        await _saveLocalConfigOnly();
+        return true;
+      }
+      _config.users[i] = previous;
+      _lastSyncError =
+          'Premium haijahifadhiwa (${res.statusCode}). Jaribu tena.';
+      await _saveLocalConfigOnly();
+      return false;
+    } catch (e) {
+      _config.users[i] = previous;
+      _lastSyncError = 'Premium haijahifadhiwa: ${adminFormatError(e)}';
+      await _saveLocalConfigOnly();
+      return false;
+    } finally {
+      _syncing = false;
+      notifyListeners();
+      if (_lastSyncError != null && _lastSyncError!.isNotEmpty) {
+        _snack(_lastSyncError!);
+      }
+    }
   }
 
   Future<void> importJson(String raw) async {

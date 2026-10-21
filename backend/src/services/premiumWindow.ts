@@ -1,42 +1,11 @@
 import { getPool } from '../db/pool';
 import { logger } from '../lib/logger';
 import { ensurePaymentIntentsTable } from './paymentIntents';
+import { adminGrantMs } from './premiumGrantNote';
+
+export { adminGrantMs, noteWithAdminGrant, noteWithoutAdminGrant } from './premiumGrantNote';
 
 const GRACE_MS = 2 * 60 * 60 * 1000;
-
-/** Latest admin grant in the note. A newer save wins over an older one. */
-export function adminGrantMs(note: string | null | undefined): number {
-  const text = String(note ?? '');
-  let best = 0;
-  for (const match of text.matchAll(/premium_admin_grant:(\d{10,})/g)) {
-    const n = Number(match[1]);
-    if (Number.isFinite(n) && n > best) best = n;
-  }
-  return best;
-}
-
-export function noteWithAdminGrant(note: string | null | undefined, grantMs: number): string {
-  const stripped = String(note ?? '')
-    .replace(/(\s*\|\s*)?premium_revoked:(admin|no_verified_payment)/gi, '')
-    .replace(/(\s*\|\s*)?premium_admin_grant:\d+/gi, '')
-    .replace(/\s*\|\s*/g, ' | ')
-    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
-    .trim();
-  const marker = `premium_admin_grant:${Math.trunc(grantMs)}`;
-  return stripped ? `${stripped} | ${marker}` : marker;
-}
-
-export function noteWithoutAdminGrant(note: string | null | undefined): string {
-  let text = String(note ?? '')
-    .replace(/(\s*\|\s*)?premium_admin_grant:\d+/gi, '')
-    .replace(/\s*\|\s*/g, ' | ')
-    .replace(/^\s*\|\s*|\s*\|\s*$/g, '')
-    .trim();
-  if (!text.includes('premium_revoked:')) {
-    text = text ? `${text} | premium_revoked:admin` : 'premium_revoked:admin';
-  }
-  return text;
-}
 
 /**
  * Shrink an active subscription to the periods that were actually paid.
@@ -47,9 +16,6 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   const pool = getPool();
   const trimmed = String(userId ?? '').trim();
   if (!pool || !trimmed) return;
-
-  await ensurePaymentIntentsTable();
-  const { durationMsForPaidOrder, stackPaidPremiumEndMs } = await import('./premiumActivation.js');
 
   const user = await pool.query<{
     premium_until_ms: string | null;
@@ -65,18 +31,9 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   if (!Number.isFinite(wasUntil)) return;
   const now = Date.now();
   const grantMs = adminGrantMs(row.note);
-  const adminFloor = grantMs > now ? grantMs : 0;
-  if (adminFloor > 0) {
-    if (wasUntil < adminFloor) {
-      await pool.query(
-        `UPDATE users
-         SET premium_until_ms = $2, updated_at = now()
-         WHERE id = $1 AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
-        [trimmed, adminFloor],
-      );
-    }
-    return;
-  }
+  if (grantMs > now) return;
+
+  await ensurePaymentIntentsTable();
 
   const phone = String(row.legacy_user_id ?? '').trim();
   const phoneKey = phone.length >= 9 ? phone : '';
@@ -100,6 +57,7 @@ export async function enforcePaidPremiumWindow(userId: string): Promise<void> {
   );
   if (pays.rows.length === 0) return;
 
+  const { durationMsForPaidOrder, stackPaidPremiumEndMs } = await import('./premiumActivation.js');
   const stacked: Array<{ activatedAtMs: number; durationMs: number }> = [];
   for (const pay of pays.rows) {
     const activatedAt = Number(pay.activated_at_ms);
