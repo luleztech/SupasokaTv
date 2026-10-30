@@ -18,12 +18,12 @@ import { importAppUpdateSettings } from '../../services/appUpdateSettingsImport'
 import { HttpError } from '../../middleware/errorHandler';
 import { requireAdmin } from '../../middleware/adminAuth';
 import { logger } from '../../lib/logger';
-import { applyAdminPremiumUpdate, deleteUserById, isValidPublicUserId, listUsersForAdmin } from '../../services/userDirectory';
+import { applyAdminPremiumUpdate, deleteUserById, isValidPublicUserId, listExpiredPublicUserIds, listUsersForAdmin } from '../../services/userDirectory';
 import {
   checkEamaxBridgeConfiguration,
   mirrorPushToEamax,
 } from '../../services/eamaxPushBridge';
-import { checkPushConfiguration, sendPushToTopic, sendPushToUser } from '../../services/pushNotifications';
+import { checkPushConfiguration, sendPushToMany, sendPushToTopic, sendPushToUser } from '../../services/pushNotifications';
 import {
   getSelectedPaymentProvider,
   isSonicPesaConfigured,
@@ -502,74 +502,45 @@ adminRouter.post('/notify-user/:id', requireAdmin, async (req, res, next) => {
   }
 });
 
-/** Targeted reminders for many viewers (e.g. all expired) — one FCM send per id. */
+/** Reminders for every expired viewer. Loaded from the database so a partial admin list cannot stop early. */
 adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) => {
   try {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const rawIds = b.ids;
     const title = String(b.title ?? defaultExpiredTitle).trim() || defaultExpiredTitle;
     const bodyText = String(b.body ?? defaultExpiredBody).trim() || defaultExpiredBody;
+    const allExpired = b.allExpired === true;
+    const rawIds = b.ids;
 
-    if (!Array.isArray(rawIds) || rawIds.length === 0) {
-      res.status(400).json({ ok: false, error: 'ids must be a non-empty array of public ids' });
-      return;
+    let ids: string[] = [];
+    if (allExpired || !Array.isArray(rawIds) || rawIds.length === 0) {
+      ids = await listExpiredPublicUserIds();
+    } else {
+      ids = rawIds.map((raw) => String(raw ?? '').trim()).filter((id) => isValidPublicUserId(id));
     }
+    ids = [...new Set(ids)];
+
+    const { sent, failed } = await sendPushToMany({ publicIds: ids, title, body: bodyText });
 
     const pool = getPool();
-    type RowResult = {
-      id: string;
-      ok: boolean;
-      messageId?: string;
-      error?: string;
-      eamaxMirror?: never;
-    };
-    const results: RowResult[] = [];
-    let notificationPersistErrors = 0;
-
-    for (const raw of rawIds) {
-      const publicId = String(raw ?? '').trim();
-      if (!isValidPublicUserId(publicId)) {
-        results.push({ id: publicId, ok: false, error: 'invalid public id format' });
-        continue;
-      }
+    let notificationPersistError: string | undefined;
+    if (pool && ids.length > 0) {
       try {
-        const out = await sendPushToUser({ publicId, title, body: bodyText });
-        results.push({
-          id: publicId,
-          ok: true,
-          messageId: out.messageId,
-        });
-        if (pool) {
-          try {
-            const nid = randomUUID();
-            await pool.query(
-              `INSERT INTO notifications (id, title, body, target, created_at)
-               VALUES ($1, $2, $3, $4, now())`,
-              [nid, title, bodyText, `user:${publicId}`],
-            );
-          } catch (_dbErr) {
-            notificationPersistErrors += 1;
-          }
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        results.push({ id: publicId, ok: false, error: msg });
+        await pool.query(
+          `INSERT INTO notifications (id, title, body, target, created_at)
+           VALUES ($1, $2, $3, $4, now())`,
+          [randomUUID(), title, bodyText, `expired:${ids.length}`],
+        );
+      } catch (dbErr) {
+        notificationPersistError = dbErr instanceof Error ? dbErr.message : String(dbErr);
       }
     }
-
-    const sent = results.filter((r) => r.ok).length;
-    const failed = results.filter((r) => !r.ok).length;
 
     res.json({
       ok: true,
       sent,
       failed,
-      results,
-      ...(notificationPersistErrors > 0
-        ? {
-            notificationPersistError: `${notificationPersistErrors} notification row(s) failed to save`,
-          }
-        : {}),
+      total: ids.length,
+      ...(notificationPersistError ? { notificationPersistError } : {}),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

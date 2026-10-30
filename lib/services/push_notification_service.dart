@@ -162,7 +162,7 @@ class PushNotificationService {
     if (!_firebaseReady) return;
     final raw = publicId.trim();
     if (raw.isEmpty) return;
-    final topic = 'user_${raw.replaceAll(RegExp(r'[^a-zA-Z0-9\\-_.~%]'), '_')}';
+    final topic = 'user_${raw.replaceAll(RegExp(r'[^a-zA-Z0-9_.~%-]'), '_')}';
     final prefs = await SharedPreferences.getInstance();
     final old = prefs.getString(_prefsDirectTopic);
     final messaging = FirebaseMessaging.instance;

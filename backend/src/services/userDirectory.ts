@@ -21,6 +21,21 @@ function timeMs(value: Date | string | null | undefined): number {
   return 0;
 }
 
+export async function listExpiredPublicUserIds(): Promise<string[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const res = await pool.query<{ id: string }>(
+    `SELECT id
+     FROM users
+     WHERE premium_until_ms IS NOT NULL
+       AND premium_until_ms <= $1
+       AND id ~ '^User-[A-Za-z2-9]{5}$'
+     ORDER BY id`,
+    [Date.now()],
+  );
+  return res.rows.map((row) => row.id);
+}
+
 export type RegisterPublicUserResult = {
   publicId: string;
   recovered: boolean;

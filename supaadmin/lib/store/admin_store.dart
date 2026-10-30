@@ -1258,36 +1258,59 @@ class AdminStore extends ChangeNotifier {
       throw Exception('Not logged in. Please login again.');
     }
     final ids = users.map((u) => u.id.trim()).where((id) => id.isNotEmpty).toList();
-    if (ids.isEmpty) {
-      return ExpiredBatchOutcome(sent: 0, failed: 0);
-    }
     const title = 'Kifurushi chako kimeisha';
     const body =
         'Mpendwa mteja, kifurushi chako kimeisha muda wake. Tafadhali lipia uendelee kufurahia vipindi vyetu bora sana.';
     final base = resolvedApiBaseUrl;
     final uri = Uri.parse('$base/api/v1/admin/notify-expired-batch');
-    final res = await http
+    final whole = await http
         .post(
           uri,
           headers: _authHeaders(contentType: 'application/json'),
-          body: jsonEncode({'ids': ids, 'title': title, 'body': body}),
+          body: jsonEncode({'allExpired': true, 'title': title, 'body': body}),
         )
-        .timeout(const Duration(seconds: 120));
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      String reason = '';
-      try {
-        final decoded = jsonDecode(res.body);
-        if (decoded is Map) {
-          final err = decoded['error'];
-          if (err is String) {
-            reason = err;
-          } else if (err is Map && err['message'] != null) {
-            reason = '${err['message']}';
-          }
-        }
-      } catch (_) {}
-      throw Exception(reason.isEmpty ? 'HTTP ${res.statusCode}' : reason);
+        .timeout(const Duration(seconds: 90));
+    if (whole.statusCode >= 200 && whole.statusCode < 300) {
+      return _expiredBatchFromResponse(whole);
     }
+    if (whole.statusCode != 400) {
+      throw Exception(_httpErrorReason(whole));
+    }
+    var sent = 0;
+    var failed = 0;
+    const chunkSize = 40;
+    for (var i = 0; i < ids.length; i += chunkSize) {
+      final chunk = ids.sublist(i, i + chunkSize > ids.length ? ids.length : i + chunkSize);
+      final res = await http
+          .post(
+            uri,
+            headers: _authHeaders(contentType: 'application/json'),
+            body: jsonEncode({'ids': chunk, 'title': title, 'body': body}),
+          )
+          .timeout(const Duration(seconds: 50));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception(_httpErrorReason(res));
+      }
+      final part = _expiredBatchFromResponse(res);
+      sent += part.sent;
+      failed += part.failed;
+    }
+    return ExpiredBatchOutcome(sent: sent, failed: failed);
+  }
+
+  String _httpErrorReason(http.Response res) {
+    try {
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        if (err is String && err.trim().isNotEmpty) return err.trim();
+        if (err is Map && err['message'] != null) return '${err['message']}';
+      }
+    } catch (_) {}
+    return 'HTTP ${res.statusCode}';
+  }
+
+  ExpiredBatchOutcome _expiredBatchFromResponse(http.Response res) {
     try {
       final decoded = jsonDecode(res.body);
       if (decoded is Map) {
@@ -1302,7 +1325,7 @@ class AdminStore extends ChangeNotifier {
         return ExpiredBatchOutcome(sent: s, failed: f);
       }
     } catch (_) {}
-    return ExpiredBatchOutcome(sent: 0, failed: ids.length);
+    return ExpiredBatchOutcome(sent: 0, failed: 0);
   }
 
   Future<void> deleteNotification(String id) async {

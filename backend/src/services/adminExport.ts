@@ -91,7 +91,7 @@ async function loadAdminExport(): Promise<Record<string, unknown>> {
       `SELECT id, title, body, target, created_at, scheduled_for
        FROM notifications
        ORDER BY created_at DESC
-       LIMIT 80`,
+           LIMIT 400`,
     );
     const usersRes = await client.query(
       `SELECT id, profile_username, legacy_user_id, premium_until_ms, note, created_at

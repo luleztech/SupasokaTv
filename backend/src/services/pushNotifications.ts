@@ -130,3 +130,40 @@ export async function sendPushToUser(input: {
   });
   return { topic, messageId };
 }
+
+/** Many phones at once. Sending one-by-one was cut off near 80 when the request ran out of time. */
+export async function sendPushToMany(input: {
+  publicIds: string[];
+  title: string;
+  body: string;
+}): Promise<{ sent: number; failed: number }> {
+  ensureFirebaseApp();
+  const title = input.title.trim();
+  const body = input.body.trim();
+  const ids = [...new Set(input.publicIds.map((id) => id.trim()).filter((id) => id.length > 0))];
+  if (!title || ids.length === 0) return { sent: 0, failed: 0 };
+
+  async function deliver(list: string[]): Promise<string[]> {
+    const queue = [...list];
+    const failed: string[] = [];
+    const workers = Math.min(25, queue.length);
+    await Promise.all(
+      Array.from({ length: workers }, async () => {
+        while (queue.length > 0) {
+          const publicId = queue.shift();
+          if (!publicId) return;
+          try {
+            await sendPushToUser({ publicId, title, body });
+          } catch {
+            failed.push(publicId);
+          }
+        }
+      }),
+    );
+    return failed;
+  }
+
+  const firstFailures = await deliver(ids);
+  const stillFailed = firstFailures.length > 0 ? await deliver(firstFailures) : [];
+  return { sent: ids.length - stillFailed.length, failed: stillFailed.length };
+}

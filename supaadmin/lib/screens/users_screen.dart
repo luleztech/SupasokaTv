@@ -86,7 +86,7 @@ class _UsersScreenState extends State<UsersScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Tuma kwa wote walioisha?'),
         content: Text(
-          'Tuma ukumbusho wa malipo kwa watumiaji ${expiredUsers.length} walio na premium iliyoisha?',
+          'Tuma ukumbusho kwa kila mtumiaji ambaye premium imeisha. Orodha hii inaonyesha ${expiredUsers.length}.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Ghairi')),
