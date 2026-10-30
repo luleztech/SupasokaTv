@@ -105,18 +105,10 @@ class TanzaniaPhone {
     return null;
   }
 
-  /// True when SonicPesa Push USSD is expected (M-Pesa, Tigo/Yas, Airtel, Halopesa).
-  static bool supportsPushUssd(String raw) {
-    final local = normalize(raw);
-    if (local == null) return false;
-    return halopesaPrefixes.any((p) => local.startsWith(p)) ||
-        tigoYasPrefixes.any((p) => local.startsWith(p)) ||
-        airtelPrefixes.any((p) => local.startsWith(p)) ||
-        vodacomPrefixes.any((p) => local.startsWith(p)) ||
-        local.startsWith('072');
-  }
+  /// Every valid Tanzania mobile can start checkout (061–079).
+  static bool supportsPushUssd(String raw) => isValid(raw);
 
   /// Short label for payment UI (Swahili).
   static String networksHint() =>
-      'Inakubaliwa: M-Pesa (074/075/076/079), Tigo/Yas (065/067/070/071/077), Airtel (066/068/069/078), Halopesa (061–063).';
+      'Inakubaliwa: nambari zote za Tanzania (061–079) — M-Pesa, Tigo/Yas, Airtel Money, Halopesa, TTCL na CooTel.';
 }

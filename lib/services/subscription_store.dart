@@ -24,7 +24,7 @@ class SubscriptionStore {
   /// Keeps a just-confirmed unlock if the premium read is a moment behind the payment.
   static DateTime? _trustedGrantAt;
   static const _minSyncInterval = Duration(seconds: 45);
-  static const _syncTimeout = Duration(seconds: 12);
+  static const _syncTimeout = Duration(seconds: 20);
 
   static void _cancelLocalExpiryTimer() {
     _localExpiryTimer?.cancel();

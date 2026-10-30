@@ -13,6 +13,9 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Home Wi‑Fi often advertises broken IPv6. Prefer IPv4 so streams and
+        // API calls are not stuck until that address times out.
+        System.setProperty("java.net.preferIPv6Addresses", "false")
         super.onCreate(savedInstanceState)
         enableScreenshotBlocking()
         // Warm WebView engine so gateway pages start faster.

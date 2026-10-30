@@ -4,7 +4,10 @@ import android.net.Uri
 import android.util.Log
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import okhttp3.Dns
 import okhttp3.OkHttpClient
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 /**
@@ -21,6 +24,7 @@ object OrizonStreamClient {
 
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .dns(Ipv4FirstDns)
             .connectTimeout(CONNECT_TIMEOUT_SEC, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SEC, TimeUnit.SECONDS)
             .writeTimeout(WRITE_TIMEOUT_SEC, TimeUnit.SECONDS)
@@ -80,5 +84,19 @@ object OrizonStreamClient {
         val scheme = uri.scheme ?: return "<invalid>"
         val host = uri.host ?: return "<invalid>"
         return "$scheme://$host"
+    }
+}
+
+/**
+ * Café and home Wi‑Fi often return a broken IPv6 address first. Mobile data is
+ * usually IPv4 and works. Try IPv4 first, then IPv6 if that is all the network has.
+ */
+private object Ipv4FirstDns : Dns {
+    override fun lookup(hostname: String): List<InetAddress> {
+        val all = Dns.SYSTEM.lookup(hostname)
+        val v4 = all.filterIsInstance<Inet4Address>()
+        if (v4.isEmpty()) return all
+        val v6 = all.filter { it !is Inet4Address }
+        return v4 + v6
     }
 }

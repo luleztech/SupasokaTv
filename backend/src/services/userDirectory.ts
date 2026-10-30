@@ -334,6 +334,33 @@ async function samePhonePremiumRows(userId: string): Promise<PremiumRow[]> {
 }
 
 /**
+ * A paid order unlocks every account on that phone, not only the id that paid.
+ * Never shortens a longer window, and never restores a sibling an admin revoked.
+ */
+export async function sharePaidPremiumWithPhone(
+  userId: string,
+  premiumUntilMs: number,
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const until = Math.trunc(premiumUntilMs);
+  if (!Number.isFinite(until) || until <= Date.now()) return;
+  const rows = await samePhonePremiumRows(userId);
+  for (const row of rows) {
+    if (row.id !== userId && isPremiumRevokeLocked(row.note)) continue;
+    const current = row.premium_until_ms != null ? Number(row.premium_until_ms) : 0;
+    if (Number.isFinite(current) && current >= until) continue;
+    await pool.query(
+      `UPDATE users
+       SET premium_until_ms = $2, updated_at = now()
+       WHERE id = $1
+         AND (premium_until_ms IS NULL OR premium_until_ms < $2)`,
+      [row.id, until],
+    );
+  }
+}
+
+/**
  * The handset may be a different User id than the row the admin tapped.
  * Copy a live admin grant onto every account that shares the phone number.
  */

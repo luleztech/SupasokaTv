@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  isSupportedSonicPushWallet,
   phoneCandidatesForSonicPesaApi,
   sonicDispatchChannel,
 } from '../src/lib/tzPhone.ts';
@@ -18,6 +19,14 @@ describe('PIN wallet routing', () => {
     assert.equal(sonicDispatchChannel('0654111222'), 'TIGOPESATZ');
     assert.equal(sonicDispatchChannel('0614111222'), 'HALOPESA');
     assert.equal(sonicDispatchChannel('0624111222'), 'HALOPESA');
+    assert.equal(sonicDispatchChannel('0664111222'), 'AIRTELMONEY');
+    assert.equal(sonicDispatchChannel('0694111222'), 'AIRTELMONEY');
+    assert.equal(sonicDispatchChannel('0704111222'), 'TIGOPESATZ');
+    assert.equal(sonicDispatchChannel('0774111222'), 'TIGOPESATZ');
+    assert.equal(sonicDispatchChannel('0634111222'), 'HALOPESA');
+    assert.equal(sonicDispatchChannel('0724111222'), 'MPESA');
+    assert.equal(isSupportedSonicPushWallet('0644111222'), true);
+    assert.equal(isSupportedSonicPushWallet('0734111222'), true);
   });
 
   it('uses national numbers for Halo and Yas, international for M-Pesa and Airtel', () => {

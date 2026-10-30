@@ -262,8 +262,7 @@ export function walletLabelForLocalPhone(local0: string): string {
   }
 }
 
-/** True for the four push-USSD wallets SonicPesa officially routes (M-Pesa, Tigo/Yas, Airtel, Halopesa). */
+/** Every assigned Tanzania mobile (061–079) may start a push. Sonic auto-detects TTCL and CooTel. */
 export function isSupportedSonicPushWallet(local0: string): boolean {
-  const n = detectTzMobileNetwork(toLocal0Digits(local0));
-  return n === 'vodacom' || n === 'mo_mobile' || n === 'tigo_yas' || n === 'airtel' || n === 'halotel';
+  return isValidTzMobileLocal0(toLocal0Digits(local0));
 }

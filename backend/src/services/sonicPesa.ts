@@ -407,7 +407,7 @@ export function mapSonicInitiateUserError(
       return 'Hatukuweza kutuma ombi la M-Pesa (Vodacom) kwenye simu yako. Hakikisha nambari 074, 075, 076 au 079 ni sahihi, una salio, na M-Pesa inafanya kazi, kisha jaribu tena.';
     }
     if (network === 'ttcl' || network === 'smile' || network === 'cootel') {
-      return `Nambari hii inaonekana kama ${wallet}. Tumia nambari ya M-Pesa, TigoPesa/Yas, Airtel Money au Halopesa ili kupokea Push USSD.`;
+      return `Hatukuweza kutuma ombi la ${wallet} kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na mtandao wa pesa unafanya kazi, kisha jaribu tena.`;
     }
     return `Hatukuweza kutuma ombi la ${wallet} kwenye simu yako. Hakikisha nambari ni sahihi, una salio, na mtandao wa pesa unafanya kazi, kisha jaribu tena.`;
   }

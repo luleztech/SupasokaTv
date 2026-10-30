@@ -10,6 +10,7 @@ import 'package:supasoka/screens/force_update_screen.dart';
 import 'package:supasoka/screens/loader_screen.dart';
 import 'package:supasoka/screens/capture_guard_screen.dart';
 import 'package:supasoka/services/content_store.dart';
+import 'package:supasoka/services/ipv4_http.dart';
 import 'package:supasoka/services/push_notification_service.dart';
 import 'package:supasoka/services/user_identity.dart';
 import 'package:supasoka/services/premium_recovery.dart';
@@ -28,6 +29,7 @@ class _NoScrollbarScrollBehavior extends MaterialScrollBehavior {
 }
 
 Future<void> main() async {
+  installIpv4FirstHttp();
   WidgetsFlutterBinding.ensureInitialized();
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
     final captureApps = await _findCaptureApps();
@@ -279,103 +281,10 @@ class _RootNavigatorState extends State<_RootNavigator> with WidgetsBindingObser
     final shouldAsk = await PushNotificationService.shouldShowPermissionPrompt();
     if (!mounted || !shouldAsk) return;
 
-    final granted = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 390),
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF0E172A), Color(0xFF0A1120)],
-            ),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.42),
-                blurRadius: 22,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFF22C55E).withValues(alpha: 0.18),
-                    ),
-                    child: const Icon(Icons.notifications_active_rounded, color: Colors.white),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Usikose taarifa muhimu',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Washa notifications upate taarifa za mechi za moja kwa moja, updates za channel, na ujumbe muhimu wa akaunti.',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.82),
-                  height: 1.45,
-                  fontSize: 13.5,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white70,
-                        side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
-                      ),
-                      child: const Text('Sasa hivi hapana'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFF22C55E)),
-                      child: const Text('Washa'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (granted == true) {
-      await PushNotificationService.requestPermissionFromPrompt();
-      final isPremium =
-          SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
-      await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
-    } else {
-      await PushNotificationService.markPermissionPromptSeen();
-    }
+    final granted = await PushNotificationService.requestPermissionFromPrompt();
+    if (!mounted || !granted) return;
+    final isPremium =
+        SubscriptionStore.premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    await PushNotificationService.syncAudienceTopics(isPremium: isPremium);
   }
 }

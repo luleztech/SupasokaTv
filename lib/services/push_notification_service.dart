@@ -113,12 +113,6 @@ class PushNotificationService {
     return allowed;
   }
 
-  static Future<void> markPermissionPromptSeen() async {
-    if (!_pushSupported) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefsNotifPrompted, true);
-  }
-
   static Future<void> _showForegroundNotification(RemoteMessage message) async {
     final n = message.notification;
     if (n == null) return;

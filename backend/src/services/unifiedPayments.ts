@@ -282,7 +282,14 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
 }
 
 function canUseAuraxStkFallback(localPhone: string): boolean {
-  return isSupportedSonicPushWallet(localPhone);
+  const network = detectTzMobileNetwork(localPhone);
+  return (
+    network === 'vodacom' ||
+    network === 'mo_mobile' ||
+    network === 'tigo_yas' ||
+    network === 'airtel' ||
+    network === 'halotel'
+  );
 }
 
 /**
@@ -447,10 +454,9 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   }
   const localPhone = phoneNorm.local;
   if (!isSupportedSonicPushWallet(localPhone)) {
-    const wallet = walletLabelForLocalPhone(localPhone);
     throw new HttpError(
       400,
-      `Nambari hii (${wallet}) haipokei Push USSD. Tumia M-Pesa (074–079), Tigo/Yas (065/067/070/071/077), Airtel (066/068/069/078) au Halopesa (061–063).`,
+      'Nambari hii si ya mtandao wa pesa unaotumia Push USSD. Tumia nambari ya simu ya Tanzania (061–079).',
       'UNSUPPORTED_WALLET',
     );
   }
@@ -895,7 +901,12 @@ async function writePremiumForOrder(
   });
   await markIntentActivated(orderId);
   await markIntentPremiumGranted(orderId, activated.premiumUntilMs);
-  const { getUserPremiumRecord } = await import('./userDirectory.js');
+  const { getUserPremiumRecord, sharePaidPremiumWithPhone } = await import('./userDirectory.js');
+  try {
+    await sharePaidPremiumWithPhone(identity.publicId, activated.premiumUntilMs);
+  } catch (err) {
+    logger.warn({ err, orderId, publicId: identity.publicId }, 'payment_share_phone_premium_failed');
+  }
   const saved = await getUserPremiumRecord(identity.publicId);
   const premiumUntilMs =
     saved.premiumUntilMs != null && Number.isFinite(saved.premiumUntilMs)
