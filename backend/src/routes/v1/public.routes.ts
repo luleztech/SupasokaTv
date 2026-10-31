@@ -332,6 +332,7 @@ async function handleUnifiedPaymentStatus(
       ...(out.intentPublicId ? { intentPublicId: out.intentPublicId } : {}),
       ...(out.intentPlanId ? { intentPlanId: out.intentPlanId, planId: out.intentPlanId } : {}),
       ...(out.activated ? { activated: true, premiumUntilMs: out.premiumUntilMs ?? null } : {}),
+      ...(out.consumed ? { consumed: true } : {}),
     });
   } catch (e) {
     next(e);

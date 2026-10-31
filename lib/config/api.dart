@@ -147,6 +147,7 @@ class _PaymentsApi {
     required String email,
     required String name,
     void Function(int attempt, int maxAttempts)? onAttempt,
+    bool forceNew = false,
   }) async {
     final normalizedPhone = TanzaniaPhone.normalize(phone.trim()) ?? phone.trim();
     // Caller (_send) already registered the user — avoid duplicate API hits before checkout.
@@ -160,6 +161,9 @@ class _PaymentsApi {
       'phone': normalizedPhone,
       'buyer_email': email,
       'buyer_name': name,
+      // The previous attempt already ended on screen (cancelled, no balance, or timed
+      // out). Ask the server for a fresh PIN instead of the old order.
+      if (forceNew) 'forceNew': true,
       'metadata': {
         'plan_id': bundle,
         'external_id': externalId,

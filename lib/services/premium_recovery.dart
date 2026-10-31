@@ -237,7 +237,8 @@ class PremiumRecovery {
     try {
       final response = await paymentsApi.checkPaymentStatus(orderId);
       final paymentStatus = paymentStatusFromCheckResponse(response);
-      if (isPaymentTerminalFailure(paymentStatus)) {
+      if (isPaymentTerminalFailure(paymentStatus) || response['consumed'] == true) {
+        // Dead order, or a receipt whose window already ended. Stop carrying it.
         await _clearPendingOrderPrefs();
         return false;
       }

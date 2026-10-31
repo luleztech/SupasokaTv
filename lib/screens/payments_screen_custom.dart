@@ -111,6 +111,8 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   bool _paymentPollArmed = false;
   /// Prevents countdown timeout from racing past a successful poll / [confirm] round-trip.
   bool _paymentCompletionInProgress = false;
+  /// The last session ended without a payment. The next tap asks for a fresh PIN.
+  bool _retryAfterEndedSession = false;
   /// Ensures only one expiry handler runs when the poll loop and countdown fire together.
   bool _waitExpiryHandling = false;
   String _submitStatus = '';
@@ -203,6 +205,14 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       if (isPaymentCompleted(st)) {
         final premiumMs = res['premiumUntilMs'];
         final serverActivated = res['activated'] == true;
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final consumed = res['consumed'] == true ||
+            (serverActivated && premiumMs is num && premiumMs.toInt() <= nowMs);
+        if (consumed) {
+          // That receipt already unlocked a window that has ended. Let the user pay again.
+          await _clearPendingOrderPrefs();
+          return;
+        }
         if (serverActivated && premiumMs is num) {
           _stopPaymentTimersOnly();
           await _markPaymentCompleted(serverPremiumUntilMs: premiumMs.toInt());
@@ -218,6 +228,15 @@ class _PaymentsScreenState extends State<PaymentsScreen>
             await widget.onPaymentSuccess?.call();
             return;
           }
+          final createdAtMs = prefs.getInt('pendingPaymentCreatedAtMs') ?? 0;
+          final ageMs = createdAtMs > 0 ? nowMs - createdAtMs : 0;
+          if (createdAtMs > 0 && ageMs > const Duration(minutes: 20).inMilliseconds) {
+            // Old receipt the server could not turn into premium. Do not park the
+            // user on a countdown — the pay form must stay usable.
+            await _clearPendingOrderPrefs();
+            return;
+          }
+          if (!mounted) return;
           setState(() {
             _pollingOrderId = pending;
             _paymentUiPhase = _PaymentUiPhase.waiting;
@@ -273,7 +292,10 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     try {
       final res = await paymentsApi.checkPaymentStatus(pending);
       final st = paymentStatusFromCheckResponse(res);
-      if (isPaymentCompleted(st)) return;
+      if (isPaymentCompleted(st)) {
+        if (res['consumed'] == true) await _clearPendingOrderPrefs();
+        return;
+      }
       if (isPaymentTerminalFailure(st)) {
         await _clearPendingOrderPrefs();
         return;
@@ -577,6 +599,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     if (_paymentCompletionInProgress) return;
     if (_paymentUiPhase != _PaymentUiPhase.waiting) return;
     _stopPaymentTimersOnly();
+    _retryAfterEndedSession = true;
     // Keep pending order prefs so [PremiumRecovery] / [_load] can finish activation after reopen.
     if (!mounted) return;
     setState(() {
@@ -590,6 +613,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
   Future<void> _finalizeSessionFailed(String message) async {
     if (_paymentCompletionInProgress) return;
     _stopPaymentTimersOnly();
+    _retryAfterEndedSession = true;
     await _clearPendingOrderPrefs();
     if (!mounted) return;
     setState(() {
@@ -796,6 +820,22 @@ class _PaymentsScreenState extends State<PaymentsScreen>
     _stopPaymentTimersOnly();
     
     try {
+      if (serverPremiumUntilMs != null &&
+          serverPremiumUntilMs <= DateTime.now().millisecondsSinceEpoch) {
+        // An old receipt whose window already ended. Nothing to unlock; free the form.
+        await _clearPendingOrderPrefs();
+        if (mounted) {
+          setState(() {
+            _pollingOrderId = null;
+            _paymentUiPhase = _PaymentUiPhase.none;
+            _notFoundStreak = 0;
+            _sessionEndDetail = null;
+            _pendingBundleLabel = null;
+            _waitingSeconds = 0;
+          });
+        }
+        return;
+      }
       final prefs = await SharedPreferences.getInstance();
       final planId = prefs.getString('pendingPaymentPlanId')?.trim();
       final phone = prefs.getString('pendingPaymentPhone')?.trim();
@@ -1025,6 +1065,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
         phone: clean,
         email: '$_userId@supasoka.app',
         name: _userId!,
+        forceNew: _retryAfterEndedSession,
         onAttempt: (attempt, maxAttempts) {
           if (!mounted || attempt <= 1) return;
           setState(() => _submitStatus = 'Inajaribu tena ($attempt/$maxAttempts)…');
@@ -1035,6 +1076,7 @@ class _PaymentsScreenState extends State<PaymentsScreen>
       final provider = (result['provider']?.toString() ?? '').trim().toLowerCase();
 
       if (orderId.isNotEmpty) {
+        _retryAfterEndedSession = false;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pendingPaymentOrderId', orderId);
         await prefs.setString('pendingPaymentPlanId', plan.id);

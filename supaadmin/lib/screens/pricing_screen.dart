@@ -265,7 +265,10 @@ class _MalipoPlanCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -278,8 +281,7 @@ class _MalipoPlanCard extends StatelessWidget {
                             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
                           ),
                         ),
-                        if (m.badge.isNotEmpty) ...[
-                          const SizedBox(width: 8),
+                        if (m.badge.isNotEmpty)
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -297,7 +299,6 @@ class _MalipoPlanCard extends StatelessWidget {
                               ),
                             ),
                           ),
-                        ],
                       ],
                     ),
                     const SizedBox(height: 8),

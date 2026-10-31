@@ -35,7 +35,7 @@ class NotificationsScreen extends StatelessWidget {
             child: AdminPageHeader(
               title: 'Push notifications',
               subtitle: hasHistory
-                  ? '${log.length} sent · swipe or clear history anytime'
+                  ? _historySummary(log)
                   : 'Compose and send pushes to all, premium, or free users',
               icon: Icons.notifications_active_rounded,
               actions: [
@@ -54,7 +54,7 @@ class NotificationsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _HistoryToolbar(
-            count: log.length,
+            count: _historyPeople(log),
             onClearAll: hasHistory ? () => _confirmClearAll(context, store, log.length) : null,
           ),
           const SizedBox(height: 10),
@@ -144,7 +144,7 @@ class NotificationsScreen extends StatelessWidget {
                                             color: cs.primary.withValues(alpha: 0.18),
                                           ),
                                           child: Text(
-                                            n.target.toUpperCase(),
+                                            _audienceChip(n.target),
                                             style: const TextStyle(
                                               fontSize: 10,
                                               fontWeight: FontWeight.w800,
@@ -170,6 +170,17 @@ class NotificationsScreen extends StatelessWidget {
                                         ),
                                       ],
                                     ),
+                                    if (_reachLine(n.target) != null) ...[
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        _reachLine(n.target)!,
+                                        style: TextStyle(
+                                          color: cs.primary,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
                                     const SizedBox(height: 8),
                                     Text(n.title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                                     const SizedBox(height: 6),
@@ -287,6 +298,80 @@ class NotificationsScreen extends StatelessWidget {
       );
     }
   }
+}
+
+class _ExpiredReach {
+  const _ExpiredReach({required this.total, this.sent, this.failed});
+
+  final int total;
+  final int? sent;
+  final int? failed;
+}
+
+_ExpiredReach? _expiredReach(String target) {
+  final match = RegExp(r'^expired:(\d+)', caseSensitive: false).firstMatch(target.trim());
+  if (match == null) return null;
+  final total = int.tryParse(match.group(1) ?? '') ?? 0;
+  int? field(String name) {
+    final found = RegExp('$name:(\\d+)', caseSensitive: false).firstMatch(target);
+    if (found == null) return null;
+    return int.tryParse(found.group(1) ?? '');
+  }
+
+  return _ExpiredReach(total: total, sent: field('sent'), failed: field('failed'));
+}
+
+String _formatCount(int n) {
+  final raw = n.toString();
+  final out = StringBuffer();
+  for (var i = 0; i < raw.length; i++) {
+    if (i > 0 && (raw.length - i) % 3 == 0) out.write(',');
+    out.write(raw[i]);
+  }
+  return out.toString();
+}
+
+String _audienceChip(String target) {
+  if (_expiredReach(target) != null) return 'EXPIRED';
+  return target.toUpperCase();
+}
+
+String? _reachLine(String target) {
+  final reach = _expiredReach(target);
+  if (reach == null) return null;
+  final total = _formatCount(reach.total);
+  if (reach.sent == null) return 'Sent to $total expired users';
+  final sent = _formatCount(reach.sent!);
+  final failed = reach.failed ?? 0;
+  if (failed > 0) {
+    return '$sent received · ${_formatCount(failed)} failed · $total expired';
+  }
+  return '$sent received · $total expired users';
+}
+
+String _historySummary(List<NotificationEntryDto> log) {
+  final people = _historyPeople(log);
+  final batches = log.where((entry) => _expiredReach(entry.target) != null).length;
+  if (batches == 0) {
+    return '${log.length} sent · swipe or clear history anytime';
+  }
+  return '${log.length} in history · ${_formatCount(people)} users · swipe or clear anytime';
+}
+
+int _historyPeople(List<NotificationEntryDto> log) {
+  var people = 0;
+  var batches = 0;
+  for (final entry in log) {
+    final reach = _expiredReach(entry.target);
+    if (reach == null) {
+      people += 1;
+      continue;
+    }
+    batches += 1;
+    people += reach.sent ?? reach.total;
+  }
+  if (batches == 0) return log.length;
+  return people;
 }
 
 class _HistoryToolbar extends StatelessWidget {

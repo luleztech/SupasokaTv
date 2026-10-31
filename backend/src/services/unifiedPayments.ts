@@ -154,6 +154,8 @@ export type StartPaymentInput = {
   phone: string;
   buyerName?: string;
   buyerEmail?: string;
+  /** The app already showed the previous attempt as failed or timed out. Send a fresh PIN. */
+  forceNew?: boolean;
 };
 
 /** Map legacy checkout POST bodies to unified fields. */
@@ -185,6 +187,7 @@ export function parseStartPaymentFromLegacyBody(
     phone,
     buyerName: String(body.buyer_name ?? body.buyerName ?? publicId).trim(),
     buyerEmail: String(body.buyer_email ?? body.buyerEmail ?? `${publicId}@supasoka.app`).trim(),
+    forceNew: body.forceNew === true || body.retry === true,
   };
 }
 
@@ -229,8 +232,14 @@ function sleep(ms: number): Promise<void> {
 const PIN_DISPATCH_BUDGET_MS = 120_000;
 const BUSY_BACKOFF_MS = [3000, 6000, 10_000, 15_000, 20_000];
 
-/** Clear post-STK cooldown when the linked order is dead — lets failed-first numbers retry. */
-async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<void> {
+/**
+ * Clear the post-PIN hold when the linked order is dead, so a user who cancelled
+ * or had no balance gets a fresh PIN on the next tap instead of the old order.
+ */
+async function refreshPaymentStartCooldownForPhone(
+  localPhone: string,
+  opts?: { forceNew?: boolean },
+): Promise<void> {
   const entry = getRecentPaymentStartEntry(localPhone) ?? getPaymentStartCooldownEntry(localPhone);
   if (!entry) return;
 
@@ -246,22 +255,47 @@ async function refreshPaymentStartCooldownForPhone(localPhone: string): Promise<
   }
 
   try {
-    // Local ledger only. A provider status call here stampedes the gateway during a burst
-    // and delays the PIN for everyone still waiting to pay.
     const intent = await getIntent(entry.orderId);
-    const ps = String(intent?.provider_status || intent?.status || '').trim().toUpperCase();
+    let ps = String(intent?.provider_status || intent?.status || '').trim().toUpperCase();
     if (!intent) {
-      if (isPaymentStartPendingRetryWindow(localPhone)) {
+      if (opts?.forceNew || isPaymentStartPendingRetryWindow(localPhone)) {
         clearPaymentStartCooldown(localPhone);
         logger.info({ phone: localPhone, orderId: entry.orderId }, 'payment_cooldown_cleared_missing_order');
       }
       return;
+    }
+    if (!isPaymentTerminalFailure(ps) && !isPaymentCompletedStatus(ps)) {
+      // The ledger still says pending. One cached provider read tells us whether the
+      // user already cancelled or ran out of balance, so this tap can send a new PIN.
+      try {
+        const provider = String(intent.payment_provider ?? '').toLowerCase();
+        const live = await readProviderPaymentStatus(entry.orderId, provider);
+        if (!isDeferredProviderStatus(live.raw) && live.paymentStatus) {
+          ps = live.paymentStatus.toUpperCase();
+          await updateIntentStatus({
+            orderId: entry.orderId,
+            providerStatus: live.paymentStatus,
+            providerPayload: live.raw,
+          });
+        }
+      } catch {
+        /* provider lag — fall back to the ledger */
+      }
     }
     if (isPaymentTerminalFailure(ps) || isPaymentCompletedStatus(ps)) {
       clearPaymentStartCooldown(localPhone);
       logger.info(
         { phone: localPhone, orderId: entry.orderId, paymentStatus: ps },
         'payment_cooldown_cleared_terminal_order',
+      );
+      return;
+    }
+    // The app already ended that session (failed or timed out). The user asked again.
+    if (opts?.forceNew) {
+      clearPaymentStartCooldown(localPhone);
+      logger.info(
+        { phone: localPhone, orderId: entry.orderId, paymentStatus: ps || 'PENDING' },
+        'payment_cooldown_cleared_user_retry',
       );
       return;
     }
@@ -509,6 +543,7 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
         buyerEmail,
         publicId,
         planId: input.planId,
+        forceNew: input.forceNew === true,
       }),
     );
   } catch (e) {
@@ -526,6 +561,7 @@ async function dispatchPinPrompt(args: {
   buyerEmail: string;
   publicId: string;
   planId: string;
+  forceNew?: boolean;
 }): Promise<{
   orderId: string;
   message: string;
@@ -535,7 +571,7 @@ async function dispatchPinPrompt(args: {
 }> {
   const { localPhone, amountTzs, buyerName, buyerEmail, publicId } = args;
 
-  await refreshPaymentStartCooldownForPhone(localPhone);
+  await refreshPaymentStartCooldownForPhone(localPhone, { forceNew: args.forceNew });
   const recent =
     getPaymentStartCooldownEntry(localPhone) ?? getRecentPaymentStartEntry(localPhone);
   if (recent?.orderId && !isPaymentStartPendingRetryWindow(localPhone)) {
@@ -657,6 +693,25 @@ async function dispatchPinPrompt(args: {
       userMsg.includes('umefanya majaribio') ||
       userMsg.includes('umejaribu mara nyingi');
     if (rateLimited) {
+      // Sonic's per-number quota is Sonic's alone. Aurax is a different gateway, and
+      // this order was never accepted, so one Aurax PIN is not a second charge.
+      if (!auraxAlreadyTried && isAuraxConfigured() && canUseAuraxStkFallback(localPhone)) {
+        logger.warn(
+          { phone: localPhone, network: detectTzMobileNetwork(localPhone), userMsg },
+          'payment_sonic_rate_limited_trying_aurax',
+        );
+        const aurax = await startAuraxPaymentIntent({
+          localPhone,
+          amountTzs,
+          buyerName,
+          buyerEmail,
+          publicId,
+          planId: args.planId,
+          fallbackFrom: 'sonicpesa',
+        });
+        auraxAlreadyTried = true;
+        if (aurax) return aurax;
+      }
       throw new HttpError(429, userMsg, 'PAYMENT_RATE_LIMIT');
     }
 
@@ -1140,6 +1195,8 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
   resultcode?: string;
   premiumUntilMs?: number;
   activated?: boolean;
+  /** Paid earlier for a window that has already ended. Nothing more to unlock. */
+  consumed?: boolean;
   intentPublicId?: string;
   intentPlanId?: string;
 }> {
@@ -1174,6 +1231,21 @@ export async function pollUnifiedPaymentStatus(orderId: string): Promise<{
         raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
         activated: true,
         premiumUntilMs: act.premiumUntilMs,
+        ...intentMeta,
+      };
+    }
+    // This order already paid for a window that has since ended. Tell the app it is
+    // finished so a renewing user is not parked on "subiri" for an old receipt.
+    const grantedRaw = local?.premium_granted_until_ms;
+    const granted = grantedRaw != null ? Number(grantedRaw) : NaN;
+    if (Number.isFinite(granted) && granted > 0 && granted <= Date.now()) {
+      return {
+        status: 'COMPLETED',
+        resultcode: '000',
+        raw: { data: [{ payment_status: 'COMPLETED', order_id: trimmed }] },
+        activated: true,
+        consumed: true,
+        premiumUntilMs: granted,
         ...intentMeta,
       };
     }

@@ -528,7 +528,7 @@ adminRouter.post('/notify-expired-batch', requireAdmin, async (req, res, next) =
         await pool.query(
           `INSERT INTO notifications (id, title, body, target, created_at)
            VALUES ($1, $2, $3, $4, now())`,
-          [randomUUID(), title, bodyText, `expired:${ids.length}`],
+          [randomUUID(), title, bodyText, `expired:${ids.length};sent:${sent};failed:${failed}`],
         );
       } catch (dbErr) {
         notificationPersistError = dbErr instanceof Error ? dbErr.message : String(dbErr);
