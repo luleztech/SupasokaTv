@@ -196,6 +196,8 @@ publicRouter.post('/register-user', async (req, res, next) => {
       recovered: out.recovered,
       premiumUntilMs: out.premiumUntilMs,
       profileUsername: out.profileUsername,
+      // Lets the handset judge expiry on the server's clock, not its own.
+      serverNowMs: Date.now(),
     });
   } catch (e) {
     next(e);
@@ -215,7 +217,7 @@ publicRouter.get('/user-premium/:userId', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.json({ ok: true, premiumUntilMs, userExists: out.userExists });
+    res.json({ ok: true, premiumUntilMs, userExists: out.userExists, serverNowMs: Date.now() });
   } catch (e) {
     next(e);
   }
@@ -329,6 +331,7 @@ async function handleUnifiedPaymentStatus(
       status: out.status === 'COMPLETED' ? 'success' : 'success',
       data: row != null ? (Array.isArray((out.raw as { data?: unknown[] })?.data) ? (out.raw as { data: unknown[] }).data : [row]) : [],
       paymentStatus: out.status,
+      serverNowMs: Date.now(),
       ...(out.intentPublicId ? { intentPublicId: out.intentPublicId } : {}),
       ...(out.intentPlanId ? { intentPlanId: out.intentPlanId, planId: out.intentPlanId } : {}),
       ...(out.activated ? { activated: true, premiumUntilMs: out.premiumUntilMs ?? null } : {}),
@@ -365,7 +368,16 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
-    if (process.env.SONICPESA_WEBHOOK_SECRET?.trim() && !signatureValid) {
+    let tracked = await getIntent(orderId);
+
+    // A bad/missing signature used to drop every callback (the secret or header name
+    // not matching what the gateway sends is a common setup slip), and the customer
+    // stayed locked until they happened to re-open the app. A callback we cannot
+    // verify is never trusted to prove payment, but when it names an order WE created
+    // we still act on it — and confirm the payment with the gateway before unlocking.
+    const secretConfigured = Boolean(process.env.SONICPESA_WEBHOOK_SECRET?.trim());
+    const trustCallback = !secretConfigured || signatureValid;
+    if (!trustCallback && !tracked) {
       res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
       return;
     }
@@ -375,8 +387,28 @@ publicRouter.post('/sonicpesa/webhook', async (req, res, next) => {
       return;
     }
 
+    if (!trustCallback && tracked) {
+      // Unverified callback for one of our own orders: let the gateway's status API decide.
+      logger.warn({ orderId, hasSignature: Boolean(sigHeader) }, 'payment_sonic_webhook_unsigned_verifying');
+      const verified = await ensurePremiumActivatedForPaidOrder(
+        orderId,
+        {
+          publicId: tracked.public_id ?? undefined,
+          planId: tracked.plan_id ?? undefined,
+          phone: tracked.buyer_phone ?? undefined,
+        },
+        { trustPaid: false },
+      );
+      res.json({
+        ok: true,
+        received: true,
+        activated: verified.activated,
+        premiumUntilMs: verified.premiumUntilMs ?? null,
+      });
+      return;
+    }
+
     const meta = metadataFromProviderPayload(payload);
-    let tracked = await getIntent(orderId);
 
     // Always persist COMPLETED when webhook says paid — even if activate fails (missing meta).
     // Sweep / poll / confirm can finish unlock once publicId+planId exist.
@@ -465,18 +497,38 @@ publicRouter.post('/aurax/webhook', async (req, res, next) => {
     }
     const primaryId = tracked?.order_id || orderId || refs[0]!;
 
-    if (process.env.AURAXPAY_WEBHOOK_SECRET?.trim()) {
-      if (!signatureValid) {
-        res.status(401).json({ ok: false, error: 'Invalid webhook signature' });
-        return;
-      }
-    } else if (!tracked) {
+    // Same rule as the Sonic callback: an unverifiable signature never proves payment,
+    // but a callback naming an order we created is confirmed with the gateway instead of
+    // being thrown away. A callback for an order we never created is rejected.
+    const auraxSecretConfigured = Boolean(process.env.AURAXPAY_WEBHOOK_SECRET?.trim());
+    const auraxTrusted = auraxSecretConfigured ? signatureValid : Boolean(tracked);
+    if (!tracked && !auraxTrusted) {
       res.status(401).json({ ok: false, error: 'Webhook not verified' });
       return;
     }
 
     if (!paid) {
       res.json({ ok: true, received: true, activated: false });
+      return;
+    }
+
+    if (!auraxTrusted && tracked) {
+      logger.warn({ orderId: primaryId, hasSignature: Boolean(sigHeader) }, 'payment_aurax_webhook_unsigned_verifying');
+      const verified = await ensurePremiumActivatedForPaidOrder(
+        primaryId,
+        {
+          publicId: tracked.public_id ?? undefined,
+          planId: tracked.plan_id ?? undefined,
+          phone: tracked.buyer_phone ?? undefined,
+        },
+        { trustPaid: false },
+      );
+      res.json({
+        ok: true,
+        received: true,
+        activated: verified.activated,
+        premiumUntilMs: verified.premiumUntilMs ?? null,
+      });
       return;
     }
 

@@ -236,7 +236,7 @@ export async function activatePremiumForUser(args: {
   /** When set, this paid order can add its period only once. */
   orderId?: string;
   amountTzs?: number | null;
-}): Promise<{ premiumUntilMs: number }> {
+}): Promise<{ premiumUntilMs: number; publicId: string }> {
   const pool = getPool();
   if (!pool) {
     throw new HttpError(503, 'DATABASE_URL is not configured', 'NO_DATABASE');
@@ -251,11 +251,18 @@ export async function activatePremiumForUser(args: {
   }
 
   // Never move an active subscription onto a brand-new id when phone already maps to one.
+  // An id that is itself subscribed stays where it is: the renewal must land on the id
+  // the handset is reading, not on whichever account shares the number.
   if (phone) {
-    const { findCanonicalUserByPhone, isPremiumUntilActive } = await import('./userDirectory.js');
-    const canonical = await findCanonicalUserByPhone(phone);
-    if (canonical && isPremiumUntilActive(canonical.premiumUntilMs) && canonical.id) {
-      publicId = canonical.id;
+    const { findCanonicalUserByPhone, getUserPremiumRecord, isPremiumUntilActive } = await import(
+      './userDirectory.js'
+    );
+    const own = await getUserPremiumRecord(publicId);
+    if (!(own.userExists && isPremiumUntilActive(own.premiumUntilMs))) {
+      const canonical = await findCanonicalUserByPhone(phone);
+      if (canonical && isPremiumUntilActive(canonical.premiumUntilMs) && canonical.id) {
+        publicId = canonical.id;
+      }
     }
   }
 
@@ -265,11 +272,13 @@ export async function activatePremiumForUser(args: {
   }
 
   // Ensure user exists; legacy_user_id will capture phone if present.
-  await registerPublicUser({
+  // Use the id the directory settled on, so the row we update is always the row that exists.
+  const registered = await registerPublicUser({
     publicId,
     profileUsername: publicId,
     phone,
   });
+  publicId = registered.publicId;
 
   const now = Date.now();
   const dur = await durationMsForPaidOrder(planId, args.amountTzs);
@@ -295,7 +304,7 @@ export async function activatePremiumForUser(args: {
         );
         await client.query('COMMIT');
         const until = Number(current.rows[0]?.premium_until_ms ?? granted);
-        return { premiumUntilMs: Number.isFinite(until) && until > 0 ? until : granted };
+        return { premiumUntilMs: Number.isFinite(until) && until > 0 ? until : granted, publicId };
       }
     }
 
@@ -333,7 +342,7 @@ export async function activatePremiumForUser(args: {
     }
 
     await client.query('COMMIT');
-    return { premiumUntilMs: end };
+    return { premiumUntilMs: end, publicId };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

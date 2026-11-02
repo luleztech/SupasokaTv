@@ -53,7 +53,19 @@ export function createApp(): express.Application {
       next();
     },
   );
-  app.use(express.json({ limit: '5mb' }));
+  app.use(
+    express.json({
+      limit: '5mb',
+      // Webhook signatures are computed over the exact bytes the gateway sent.
+      // Re-serialising the parsed body changes spacing/key order and never matches.
+      verify: (req, _res, buf) => {
+        const url = (req as express.Request).originalUrl ?? req.url ?? '';
+        if (url.includes('/webhook')) {
+          (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+        }
+      },
+    }),
+  );
   app.use(
     pinoHttp({
       logger,

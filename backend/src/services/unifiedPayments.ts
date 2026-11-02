@@ -500,11 +500,15 @@ export async function startUnifiedPayment(input: StartPaymentInput): Promise<{
   }
 
   // Keep payments on the existing subscribed User id when phone matches.
-  const { findCanonicalUserByPhone, isPremiumUntilActive, registerPublicUser } = await import(
-    './userDirectory.js'
-  );
+  const { findCanonicalUserByPhone, getUserPremiumRecord, isPremiumUntilActive, registerPublicUser } =
+    await import('./userDirectory.js');
   let publicId = String(input.publicId ?? '').trim();
-  const canonical = await findCanonicalUserByPhone(localPhone);
+  // The handset's own account keeps the payment when it is already subscribed (a renewal
+  // must land on the id the app is reading). Only a handset with no live subscription is
+  // moved onto the account that already owns this number.
+  const ownRecord = publicId ? await getUserPremiumRecord(publicId) : null;
+  const ownActive = !!ownRecord?.userExists && isPremiumUntilActive(ownRecord.premiumUntilMs);
+  const canonical = ownActive ? null : await findCanonicalUserByPhone(localPhone);
   if (canonical && isPremiumUntilActive(canonical.premiumUntilMs) && canonical.id) {
     if (canonical.id !== publicId) {
       logger.info(
@@ -868,6 +872,27 @@ async function mirrorPremiumFromSamePhone(publicId: string): Promise<number | nu
   return canonical.premiumUntilMs;
 }
 
+/** A pending order older than this cannot still have an open PIN prompt. */
+const PROVIDER_CHECK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const PROVIDER_CHECKS_PER_RECONCILE = 4;
+const PROVIDER_CHECK_MIN_GAP_MS = 20_000;
+const lastProviderCheckByUser = new Map<string, number>();
+
+/** True at most once per [PROVIDER_CHECK_MIN_GAP_MS] for this user. */
+function claimProviderCheck(publicId: string): boolean {
+  const now = Date.now();
+  const last = lastProviderCheckByUser.get(publicId) ?? 0;
+  if (now - last < PROVIDER_CHECK_MIN_GAP_MS) return false;
+  lastProviderCheckByUser.set(publicId, now);
+  if (lastProviderCheckByUser.size > 5000) {
+    const cutoff = now - PROVIDER_CHECK_MIN_GAP_MS * 6;
+    for (const [id, at] of lastProviderCheckByUser) {
+      if (at < cutoff) lastProviderCheckByUser.delete(id);
+    }
+  }
+  return true;
+}
+
 export async function reconcilePremiumForUser(publicId: string): Promise<number | null> {
   const trimmed = String(publicId ?? '').trim();
   if (!trimmed) return null;
@@ -884,8 +909,14 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
   await ensurePaymentIntentsTable();
 
   // Only never-granted paid orders — already-granted must not re-extend after expiry.
-  const res = await pool.query<{ order_id: string; status: string; provider_status: string | null }>(
-    `SELECT order_id, status, provider_status
+  const res = await pool.query<{
+    order_id: string;
+    status: string;
+    provider_status: string | null;
+    age_ms: string;
+  }>(
+    `SELECT order_id, status, provider_status,
+            (EXTRACT(EPOCH FROM (now() - updated_at)) * 1000)::bigint AS age_ms
      FROM payment_intents
      WHERE public_id = $1
        AND premium_granted_until_ms IS NULL
@@ -896,11 +927,21 @@ export async function reconcilePremiumForUser(publicId: string): Promise<number 
     [trimmed],
   );
 
+  // Asking the payment provider is expensive and shares one small lane with live PIN
+  // polling. Do it for at most one user-visible burst per window, only for orders a
+  // PIN prompt could still be open on, and never from a background prefetch loop.
+  const mayAskProvider = claimProviderCheck(trimmed);
+  let providerChecks = 0;
+
   for (const row of res.rows) {
     const localPaid =
       isPaymentCompletedStatus(row.status) || isPaymentCompletedStatus(row.provider_status ?? '');
     let paid = localPaid;
     if (!paid) {
+      const ageMs = Number(row.age_ms);
+      const recentEnough = Number.isFinite(ageMs) && ageMs <= PROVIDER_CHECK_MAX_AGE_MS;
+      if (!mayAskProvider || !recentEnough || providerChecks >= PROVIDER_CHECKS_PER_RECONCILE) continue;
+      providerChecks += 1;
       const ps = await resolvePaidStatusForOrder(row.order_id);
       paid = isPaymentCompletedStatus(ps);
     }
@@ -956,19 +997,23 @@ async function writePremiumForOrder(
   });
   await markIntentActivated(orderId);
   await markIntentPremiumGranted(orderId, activated.premiumUntilMs);
+  // The account the window was actually written to (the directory may have settled on
+  // the id that already owns this number).
+  const grantedTo = activated.publicId || identity.publicId;
   const { getUserPremiumRecord, sharePaidPremiumWithPhone } = await import('./userDirectory.js');
   try {
-    await sharePaidPremiumWithPhone(identity.publicId, activated.premiumUntilMs);
+    await sharePaidPremiumWithPhone(grantedTo, activated.premiumUntilMs);
   } catch (err) {
-    logger.warn({ err, orderId, publicId: identity.publicId }, 'payment_share_phone_premium_failed');
+    logger.warn({ err, orderId, publicId: grantedTo }, 'payment_share_phone_premium_failed');
   }
-  const saved = await getUserPremiumRecord(identity.publicId);
+  const saved = await getUserPremiumRecord(grantedTo);
+  // Never report less than what this payment just wrote, even if a read lags behind.
   const premiumUntilMs =
     saved.premiumUntilMs != null && Number.isFinite(saved.premiumUntilMs)
-      ? saved.premiumUntilMs
+      ? Math.max(saved.premiumUntilMs, activated.premiumUntilMs)
       : activated.premiumUntilMs;
   logger.info(
-    { orderId, publicId: identity.publicId, planId: identity.planId, premiumUntilMs },
+    { orderId, publicId: grantedTo, planId: identity.planId, premiumUntilMs },
     'payment_activated_premium',
   );
   return { premiumUntilMs };
@@ -1139,28 +1184,60 @@ export async function reconcileUnactivatedPaidIntents(limit = 40): Promise<numbe
   if (!pool) return 0;
   await ensurePaymentIntentsTable();
 
-  const res = await pool.query<{
+  type SweepRow = {
     order_id: string;
     public_id: string | null;
     plan_id: string | null;
     status: string;
     provider_status: string | null;
     activated_at_ms: string | null;
-  }>(
-    `SELECT order_id, public_id, plan_id, status, provider_status, activated_at_ms
+  };
+  const cap = Math.max(1, Math.min(100, limit));
+  const baseSelect = `SELECT order_id, public_id, plan_id, status, provider_status, activated_at_ms
      FROM payment_intents
      WHERE public_id IS NOT NULL AND public_id <> ''
        AND plan_id IS NOT NULL AND plan_id <> ''
        AND premium_granted_until_ms IS NULL
+       AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')`;
+
+  // 1) Orders the ledger already knows are paid. No provider call needed, so none of
+  //    them may wait behind a crowd of abandoned checkouts.
+  const paidLocally = await pool.query<SweepRow>(
+    `${baseSelect}
+       AND status = 'COMPLETED'
        AND updated_at > now() - interval '14 days'
-       AND status NOT IN ('FAILED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'ERROR')
      ORDER BY updated_at DESC
      LIMIT $1`,
-    [Math.max(1, Math.min(100, limit))],
+    [cap * 2],
   );
+  // 2) Orders whose PIN prompt could still be open: ask the provider.
+  const pendingFresh = await pool.query<SweepRow>(
+    `${baseSelect}
+       AND status = 'PENDING'
+       AND updated_at > now() - interval '6 hours'
+     ORDER BY updated_at DESC
+     LIMIT $1`,
+    [cap],
+  );
+  // 3) A small rotating sample of older pending orders (late webhook / lost callback).
+  const pendingOlder = await pool.query<SweepRow>(
+    `${baseSelect}
+       AND status = 'PENDING'
+       AND updated_at <= now() - interval '6 hours'
+       AND updated_at > now() - interval '14 days'
+     ORDER BY random()
+     LIMIT 5`,
+  );
+  const seenOrders = new Set<string>();
+  const rows: SweepRow[] = [];
+  for (const row of [...paidLocally.rows, ...pendingFresh.rows, ...pendingOlder.rows]) {
+    if (seenOrders.has(row.order_id)) continue;
+    seenOrders.add(row.order_id);
+    rows.push(row);
+  }
 
   let activated = 0;
-  for (const row of res.rows) {
+  for (const row of rows) {
     try {
       const alreadyCompletedLocal =
         isPaymentCompletedStatus(row.status) || isPaymentCompletedStatus(row.provider_status ?? '');

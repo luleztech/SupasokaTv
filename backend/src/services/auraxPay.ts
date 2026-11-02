@@ -316,10 +316,23 @@ export function extractAuraxWebhookPaid(payload: Record<string, unknown>): {
   )
     .toUpperCase()
     .trim();
-  const paid =
-    isAuraxPaymentCompleted(status) ||
-    /paid|success|completed|charge\.succeeded|invoice\.paid/i.test(status);
+  const paid = isAuraxPaidWebhookStatus(status);
   return { orderId: refs[0] ?? '', allRefs: [...new Set(refs)], paid };
+}
+
+/**
+ * Paid only when the status says so without a negation. A bare substring test
+ * counted "UNPAID" / "UNSUCCESSFUL" / "NOT_COMPLETED" as paid and unlocked a
+ * subscription for a payment that never went through.
+ */
+export function isAuraxPaidWebhookStatus(statusRaw: string): boolean {
+  const status = String(statusRaw ?? '').toUpperCase().trim();
+  if (!status) return false;
+  if (isAuraxPaymentCompleted(status)) return true;
+  if (/\b(UN|NOT|NON)[\s_.-]*(PAID|SUCCESS\w*|COMPLET\w*)\b|UNPAID|UNSUCCESS\w*|INCOMPLETE|FAIL\w*|CANCEL\w*|REJECT\w*|DECLIN\w*|EXPIRE\w*|PENDING|REFUND\w*|REVERS\w*/.test(status)) {
+    return false;
+  }
+  return /(^|[\s_.-])(PAID|SUCCESS|SUCCEEDED|SUCCESSFUL|COMPLETED)($|[\s_.-])|CHARGE\.SUCCEEDED|INVOICE\.PAID/.test(status);
 }
 
 export function verifyAuraxWebhookHmac(rawBody: string, signatureHeader?: string): boolean {

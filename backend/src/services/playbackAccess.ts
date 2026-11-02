@@ -8,7 +8,7 @@ import {
   fetchAppUpdateSettings,
   readClientAppIdentity,
 } from './appUpdatePolicy';
-import { getUserPremiumRecord, isValidPublicUserId, registerPublicUser, isPremiumUntilActive } from './userDirectory';
+import { ensurePublicUserRow, getUserPremiumRecord, isValidPublicUserId, isPremiumUntilActive } from './userDirectory';
 import { reconcilePremiumForUser } from './unifiedPayments';
 
 export type PlaybackSessionPayload = {
@@ -96,7 +96,7 @@ export async function resolvePlaybackForChannel(
       return { ok: false, code: 'PREMIUM_REQUIRED', premiumRequired: true };
     }
     if (isValidPublicUserId(trimmedUser)) {
-      await registerPublicUser({ publicId: trimmedUser, profileUsername: trimmedUser });
+      await ensurePublicUserRow(trimmedUser);
     }
     const premium = await getUserPremiumRecord(trimmedUser);
     if (!isPremiumActive(premium.premiumUntilMs)) {

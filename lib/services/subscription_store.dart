@@ -14,6 +14,7 @@ class SubscriptionStore {
 
   static const _kUntilMs = 'supasoka_premium_until_ms';
   static const _kPlanId = 'supasoka_premium_plan_id';
+  static const _kServerOffsetMs = 'supasoka_server_clock_offset_ms';
 
   /// Keeps Akaunti / Malipo in sync without prop drilling.
   static final ValueNotifier<DateTime?> premiumUntilNotifier = ValueNotifier<DateTime?>(null);
@@ -26,6 +27,33 @@ class SubscriptionStore {
   static const _minSyncInterval = Duration(seconds: 45);
   static const _syncTimeout = Duration(seconds: 20);
 
+  /// Server clock minus handset clock. A handset with a wrong date used to lock a
+  /// paying customer out early (or keep an expired one in); expiry is now judged
+  /// on the server's clock.
+  static int _serverOffsetMs = 0;
+  static bool _offsetLoaded = false;
+
+  static Future<void> _ensureOffsetLoaded() async {
+    if (_offsetLoaded) return;
+    final p = await SharedPreferences.getInstance();
+    _serverOffsetMs = p.getInt(_kServerOffsetMs) ?? 0;
+    _offsetLoaded = true;
+  }
+
+  static int _nowMs() => DateTime.now().millisecondsSinceEpoch + _serverOffsetMs;
+
+  static Future<void> _learnServerTime(Object? serverNowMs) async {
+    final raw = serverNowMs is num ? serverNowMs.toInt() : null;
+    if (raw == null || raw <= 0) return;
+    final offset = raw - DateTime.now().millisecondsSinceEpoch;
+    // Ignore absurd values (> 400 days) rather than trusting a broken response.
+    if (offset.abs() > 400 * 24 * 60 * 60 * 1000) return;
+    _serverOffsetMs = offset;
+    _offsetLoaded = true;
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_kServerOffsetMs, offset);
+  }
+
   static void _cancelLocalExpiryTimer() {
     _localExpiryTimer?.cancel();
     _localExpiryTimer = null;
@@ -34,7 +62,7 @@ class SubscriptionStore {
   /// Locks channels locally at the exact server expiry time (no wait for poll/sync).
   static void _scheduleLocalExpiry(int untilMs) {
     _cancelLocalExpiryTimer();
-    final delayMs = untilMs - DateTime.now().millisecondsSinceEpoch;
+    final delayMs = untilMs - _nowMs();
     if (delayMs <= 0) {
       unawaited(clearLocalPremium());
       return;
@@ -46,7 +74,7 @@ class SubscriptionStore {
 
   static bool _isActiveMs(int? ms) {
     if (ms == null) return false;
-    return DateTime.fromMillisecondsSinceEpoch(ms).isAfter(DateTime.now());
+    return ms > _nowMs();
   }
 
   static Future<void> clearLocalPremium() async {
@@ -60,6 +88,7 @@ class SubscriptionStore {
   }
 
   static Future<void> purgeExpiredLocalPremium() async {
+    await _ensureOffsetLoaded();
     final p = await SharedPreferences.getInstance();
     final ms = p.getInt(_kUntilMs);
     if (ms == null) {
@@ -76,6 +105,7 @@ class SubscriptionStore {
   }
 
   static Future<DateTime?> premiumUntil() async {
+    await _ensureOffsetLoaded();
     final p = await SharedPreferences.getInstance();
     final ms = p.getInt(_kUntilMs);
     if (ms == null || !_isActiveMs(ms)) {
@@ -86,6 +116,7 @@ class SubscriptionStore {
   }
 
   static Future<String?> premiumPlanId() async {
+    await _ensureOffsetLoaded();
     final p = await SharedPreferences.getInstance();
     final ms = p.getInt(_kUntilMs);
     if (ms == null || !_isActiveMs(ms)) return null;
@@ -100,7 +131,8 @@ class SubscriptionStore {
   static Future<void> setPremiumUntilMs(int premiumUntilMs) async {
     final end = DateTime.fromMillisecondsSinceEpoch(premiumUntilMs);
     // Allow small handset clock skew vs server-authoritative expiry.
-    if (!end.isAfter(DateTime.now().subtract(const Duration(minutes: 5)))) {
+    await _ensureOffsetLoaded();
+    if (premiumUntilMs <= _nowMs() - const Duration(minutes: 5).inMilliseconds) {
       await clearLocalPremium();
       return;
     }
@@ -114,7 +146,8 @@ class SubscriptionStore {
   }
 
   static bool isPremiumActiveLocal() {
-    return premiumUntilNotifier.value?.isAfter(DateTime.now()) ?? false;
+    final until = premiumUntilNotifier.value;
+    return until != null && until.millisecondsSinceEpoch > _nowMs();
   }
 
   /// Server is authoritative — use before opening paid channels.
@@ -166,6 +199,7 @@ class SubscriptionStore {
 
       final j = jsonDecode(res.body) as Map<String, dynamic>;
       if (j['ok'] != true) return;
+      await _learnServerTime(j['serverNowMs']);
 
       final rawUntil = j['premiumUntilMs'];
       final premiumUntilMs = rawUntil is int
@@ -191,6 +225,23 @@ class SubscriptionStore {
           DateTime.now().difference(grantAt) < const Duration(minutes: 3) &&
           isPremiumActiveLocal()) {
         return;
+      }
+
+      // The server has never heard of this id (reinstall, wiped data, id re-created):
+      // re-attach through the saved phone number before concluding "no package".
+      if (j['userExists'] == false) {
+        final phone = await UserIdentity.getSavedPhoneNumber();
+        final reg = await UserIdentity.registerWithBackend(phone: phone);
+        final recoveredMs = reg.premiumUntilMs;
+        if (recoveredMs != null && _isActiveMs(recoveredMs)) {
+          final p = await SharedPreferences.getInstance();
+          await p.setInt(_kUntilMs, recoveredMs);
+          premiumUntilNotifier.value = DateTime.fromMillisecondsSinceEpoch(recoveredMs);
+          _scheduleLocalExpiry(recoveredMs);
+          _trustedGrantAt = null;
+          invalidatePlaybackCache();
+          return;
+        }
       }
 
       // Server says expired / null — always clear local. Pending payment recovery

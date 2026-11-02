@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ equivalent of backup_rules.xml: only the Flutter preferences file
+  (stable User-xxxxx id + saved phone) survives a reinstall or device transfer.
+-->
 <data-extraction-rules>
     <cloud-backup disableIfNoEncryptionCapabilities="true">
-        <exclude domain="sharedpref" path="." />
-        <exclude domain="database" path="." />
-        <exclude domain="file" path="." />
+        <include domain="sharedpref" path="FlutterSharedPreferences.xml" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="sharedpref" path="." />
-        <exclude domain="database" path="." />
-        <exclude domain="file" path="." />
+        <include domain="sharedpref" path="FlutterSharedPreferences.xml" />
     </device-transfer>
 </data-extraction-rules>

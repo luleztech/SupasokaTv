@@ -5,7 +5,7 @@ import { getPool } from '../db/pool';
 import { logger } from '../lib/logger';
 import { resolveStoredStreamUrl } from '../lib/streamUrl';
 import { HttpError } from '../middleware/errorHandler';
-import { adminGrantMs, noteWithAdminGrant } from './premiumWindow';
+import { noteWithAdminGrant } from './premiumWindow';
 import {
   accentRgbFromDartColor,
   asBool,
@@ -338,39 +338,34 @@ export async function importAppConfig(body: unknown): Promise<void> {
         : x.legacyUserId != null
           ? String(x.legacyUserId)
           : null;
-      const existing = await client.query<{ premium_until_ms: string | null; note: string | null }>(
-        `SELECT premium_until_ms, note FROM users WHERE id = $1`,
-        [uid],
-      );
-      const prevNote = String(existing.rows[0]?.note ?? '');
-      const prevGrant = adminGrantMs(prevNote);
       const now = Date.now();
-      let nextUntil =
+      const nextUntil =
         premiumUntilMs != null && Number.isFinite(premiumUntilMs) ? Math.trunc(premiumUntilMs) : null;
       let nextNote = String(x.note ?? '');
       if (nextUntil != null && nextUntil > now) {
         nextNote = noteWithAdminGrant(nextNote, nextUntil);
-      } else if (prevGrant > now) {
-        nextNote = noteWithAdminGrant(nextNote, prevGrant);
-        if (nextUntil == null || nextUntil < prevGrant) nextUntil = prevGrant;
       }
-      await client.query(
+      // The database is the only authority on a viewer's subscription. SupaAdmin sends
+      // its whole local user list with every catalog save, and that list is only as
+      // fresh as the admin's last load. Overwriting `premium_until_ms` / `note` from it
+      // reset customers who had renewed since (paid, but locked again) and erased the
+      // markers that protect a paid window. Existing accounts are therefore never
+      // touched here: premium changes only go through PUT /admin/users/:id/premium or
+      // a confirmed payment. Unknown ids (restoring a backup) are inserted.
+      const inserted = await client.query(
         `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
          VALUES ($1, $2, $3, $4, $5, now())
-         ON CONFLICT (id) DO UPDATE SET
-           profile_username = COALESCE(NULLIF(TRIM(EXCLUDED.profile_username), ''), users.profile_username),
-           legacy_user_id = COALESCE(EXCLUDED.legacy_user_id, users.legacy_user_id),
-           premium_until_ms = COALESCE(EXCLUDED.premium_until_ms, users.premium_until_ms),
-           note = EXCLUDED.note,
-           updated_at = now()`,
-        [
-          uid,
-          displayName,
-          legacyUserId,
-          nextUntil,
-          nextNote,
-        ],
+         ON CONFLICT (id) DO NOTHING`,
+        [uid, displayName, legacyUserId, nextUntil, nextNote],
       );
+      if ((inserted.rowCount ?? 0) === 0 && legacyUserId) {
+        await client.query(
+          `UPDATE users
+           SET legacy_user_id = $2, updated_at = now()
+           WHERE id = $1 AND (legacy_user_id IS NULL OR TRIM(legacy_user_id) = '')`,
+          [uid, legacyUserId],
+        );
+      }
     }
 
     /** Do not delete viewers registered via `POST /public/register-user` — only remove users with `DELETE /admin/users/:id`. */

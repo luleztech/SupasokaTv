@@ -60,7 +60,20 @@ class UserIdentity {
   }
 
   /// Returns existing `User-xxxxx` or creates and persists a new one.
-  static Future<String> getOrCreatePublicId() async {
+  ///
+  /// Concurrent first-launch callers (sync, playback, payments) share one future so
+  /// they can never mint different ids and split a customer across accounts.
+  static Future<String>? _idInflight;
+
+  static Future<String> getOrCreatePublicId() {
+    final running = _idInflight;
+    if (running != null) return running;
+    final f = _loadOrCreatePublicId();
+    _idInflight = f;
+    return f.whenComplete(() => _idInflight = null);
+  }
+
+  static Future<String> _loadOrCreatePublicId() async {
     final p = await SharedPreferences.getInstance();
     var id = p.getString(_prefsPublicId)?.trim();
     if (id != null && id.isNotEmpty && _isValidPublicId(id)) {

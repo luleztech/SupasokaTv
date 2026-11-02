@@ -792,14 +792,24 @@ class AdminStore extends ChangeNotifier {
       if (decoded['ok'] != true) return;
       final list = decoded['users'];
       if (list is! List<dynamic>) return;
-      final seen = _config.users.map((u) => u.id).toSet();
+      final indexById = <String, int>{
+        for (var i = 0; i < _config.users.length; i++) _config.users[i].id: i,
+      };
       for (final raw in list) {
         if (raw is! Map) continue;
         final m = Map<String, dynamic>.from(raw);
         final id = '${m['id'] ?? ''}'.trim();
-        if (id.isEmpty || seen.contains(id)) continue;
-        _config.users.add(UserDto.fromJson(m));
-        seen.add(id);
+        if (id.isEmpty) continue;
+        final fresh = UserDto.fromJson(m);
+        final at = indexById[id];
+        if (at != null) {
+          // The server is the authority on a subscription. Keep the local list in step
+          // so a stale copy never shows (or pushes back) an old expiry.
+          _config.users[at] = fresh;
+        } else {
+          indexById[id] = _config.users.length;
+          _config.users.add(fresh);
+        }
       }
     } catch (_) {}
   }

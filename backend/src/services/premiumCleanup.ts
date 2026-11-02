@@ -4,10 +4,34 @@ import {
   ensurePaymentIntentsTable,
   markIntentPremiumGranted,
 } from './paymentIntents';
-import { durationMsForPaidOrder, stackPaidPremiumEndMs } from './premiumActivation';
-import { adminGrantMs } from './premiumWindow';
+import { durationMsForPaidOrder } from './premiumActivation';
+import { adminGrantMs, loadPaidOrdersForUser, paidPremiumCeilingMs } from './premiumWindow';
 import { clearAllExpiredPremiumInDatabase } from './userDirectory';
 import { logger } from '../lib/logger';
+
+/**
+ * "No verified payment" must mean none at all: not on this account, not on any
+ * phone the account is registered under (a paid order unlocks every id on that
+ * number), and no live admin grant. Matching only `pi.public_id` revoked paying
+ * customers whose subscription had been shared onto a second id.
+ */
+const NO_VERIFIED_PAYMENT_SQL = `
+  COALESCE(u.note, '') NOT LIKE '%premium_admin_grant:%'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM payment_intents pi
+    WHERE pi.activated_at_ms IS NOT NULL
+      AND (
+        pi.public_id = u.id
+        OR (
+          NULLIF(TRIM(COALESCE(u.legacy_user_id, '')), '') IS NOT NULL
+          AND (
+            pi.buyer_phone = u.legacy_user_id
+            OR pi.public_id IN (SELECT o.id FROM users o WHERE o.legacy_user_id = u.legacy_user_id)
+          )
+        )
+      )
+  )`;
 
 export type RevokeMistakenPremiumResult = {
   expiredCleared: number;
@@ -35,12 +59,7 @@ export async function revokePremiumWithoutVerifiedPayment(): Promise<RevokeMista
      FROM users u
      WHERE u.premium_until_ms IS NOT NULL
        AND u.premium_until_ms > $1
-       AND NOT EXISTS (
-         SELECT 1
-         FROM payment_intents pi
-         WHERE pi.public_id = u.id
-           AND pi.activated_at_ms IS NOT NULL
-       )
+       AND ${NO_VERIFIED_PAYMENT_SQL}
      ORDER BY u.id`,
     [now],
   );
@@ -60,12 +79,7 @@ export async function revokePremiumWithoutVerifiedPayment(): Promise<RevokeMista
            updated_at = now()
        WHERE u.premium_until_ms IS NOT NULL
          AND u.premium_until_ms > $1
-         AND NOT EXISTS (
-           SELECT 1
-           FROM payment_intents pi
-           WHERE pi.public_id = u.id
-             AND pi.activated_at_ms IS NOT NULL
-         )`,
+         AND ${NO_VERIFIED_PAYMENT_SQL}`,
       [now],
     );
     activeRevoked = res.rowCount ?? 0;
@@ -77,12 +91,7 @@ export async function revokePremiumWithoutVerifiedPayment(): Promise<RevokeMista
          updated_at = now()
      WHERE u.premium_until_ms IS NULL
        AND u.note LIKE '%premium_revoked:no_verified_payment%'
-       AND NOT EXISTS (
-         SELECT 1
-         FROM payment_intents pi
-         WHERE pi.public_id = u.id
-           AND pi.activated_at_ms IS NOT NULL
-       )`,
+       AND ${NO_VERIFIED_PAYMENT_SQL}`,
     [now],
   );
 
@@ -209,22 +218,21 @@ export async function capOverlongPremiumFromPayments(
       continue;
     }
 
-    const stacked: Array<{ activatedAtMs: number; durationMs: number }> = [];
+    // Backfill the one-shot grant marker for legacy orders, then judge the account
+    // by what its orders and phone actually earned (not by today's plan table).
+    let cursor = 0;
     for (const pay of pays.rows) {
       const activatedAt = Number(pay.activated_at_ms);
+      if (!Number.isFinite(activatedAt) || activatedAt <= 0) continue;
+      const recorded = pay.premium_granted_until_ms != null ? Number(pay.premium_granted_until_ms) : NaN;
+      if (Number.isFinite(recorded) && recorded > activatedAt) {
+        cursor = Math.max(cursor, recorded);
+        continue;
+      }
       const amount = pay.amount_tzs != null ? Number(pay.amount_tzs) : null;
       const dur = await durationMsForPaidOrder(String(pay.plan_id ?? ''), amount);
-      stacked.push({ activatedAtMs: activatedAt, durationMs: dur });
-    }
-    const expected = stackPaidPremiumEndMs(stacked);
-    let cursor = 0;
-    for (let i = 0; i < pays.rows.length; i++) {
-      const pay = pays.rows[i]!;
-      const activatedAt = stacked[i]?.activatedAtMs ?? 0;
-      const dur = stacked[i]?.durationMs ?? 0;
-      if (!Number.isFinite(activatedAt) || activatedAt <= 0 || dur <= 0) continue;
-      const start = Math.max(cursor, activatedAt);
-      cursor = start + dur;
+      if (dur <= 0) continue;
+      cursor = Math.max(cursor, activatedAt) + dur;
       if (pay.premium_granted_until_ms == null) {
         grantsBackfilled += 1;
         if (!dryRun) {
@@ -232,6 +240,14 @@ export async function capOverlongPremiumFromPayments(
         }
       }
     }
+
+    const userPhone = await pool.query<{ legacy_user_id: string | null }>(
+      `SELECT legacy_user_id FROM users WHERE id = $1`,
+      [userId],
+    );
+    const phoneKey = String(userPhone.rows[0]?.legacy_user_id ?? '').trim();
+    const earned = await loadPaidOrdersForUser(userId, phoneKey.length >= 9 ? phoneKey : '');
+    const expected = Math.max(paidPremiumCeilingMs(earned), cursor);
 
     if (!Number.isFinite(expected) || expected <= 0) continue;
     const ceiling = Math.max(expected, adminFloor);

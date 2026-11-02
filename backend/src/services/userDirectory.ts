@@ -171,30 +171,46 @@ export async function registerPublicUser(body: unknown): Promise<RegisterPublicU
   let recovered = false;
   let premiumUntilMs: number | null = null;
 
-  // Active subscription for this phone always wins — keep the old User id + premium.
+  // A phone that still has an active subscription gets that account back, so a
+  // reinstall or a new handset never strands a paid window on an abandoned id.
+  // But a handset whose OWN id is already subscribed keeps it: switching it to
+  // another id (because a different number was typed, or a number shared with a
+  // relative) is what made users lose their package and their username.
   if (legacyUserId) {
-    const canonical = await findCanonicalUserByPhone(legacyUserId);
-    if (canonical && isPremiumUntilActive(canonical.premiumUntilMs)) {
-      if (canonical.id !== publicId) {
-        recovered = true;
+    const ownRow = await getUserPremiumRecord(publicId);
+    const ownActive = ownRow.userExists && isPremiumUntilActive(ownRow.premiumUntilMs);
+    if (!ownActive) {
+      const canonical = await findCanonicalUserByPhone(legacyUserId);
+      if (canonical && isPremiumUntilActive(canonical.premiumUntilMs)) {
+        if (canonical.id !== publicId) {
+          recovered = true;
+        }
+        publicId = canonical.id;
+        profileUsername = canonical.profileUsername || publicId;
       }
-      publicId = canonical.id;
-      profileUsername = canonical.profileUsername || publicId;
     }
   }
 
+  // The first phone an account registers under is its recovery key. A later
+  // number (paying with another SIM or for a friend) must not replace it while
+  // the account is subscribed, or the paid window can no longer be found by phone.
   await pool.query(
     `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
      VALUES ($1, $2, NULLIF($3, ''), NULL, '', now())
      ON CONFLICT (id) DO UPDATE SET
        profile_username = CASE
-         WHEN EXCLUDED.profile_username IS NOT NULL AND TRIM(EXCLUDED.profile_username) <> ''
+         WHEN users.profile_username IS NULL OR TRIM(users.profile_username) = ''
            THEN EXCLUDED.profile_username
          ELSE users.profile_username
        END,
-       legacy_user_id = COALESCE(NULLIF(EXCLUDED.legacy_user_id, ''), users.legacy_user_id),
+       legacy_user_id = CASE
+         WHEN NULLIF(EXCLUDED.legacy_user_id, '') IS NULL THEN users.legacy_user_id
+         WHEN users.legacy_user_id IS NULL OR TRIM(users.legacy_user_id) = '' THEN EXCLUDED.legacy_user_id
+         WHEN users.premium_until_ms IS NOT NULL AND users.premium_until_ms > $4 THEN users.legacy_user_id
+         ELSE EXCLUDED.legacy_user_id
+       END,
        updated_at = now()`,
-    [publicId, profileUsername, legacyUserId],
+    [publicId, profileUsername, legacyUserId, Date.now()],
   );
 
   const row = await getUserPremiumRecord(publicId);
@@ -206,6 +222,22 @@ export async function registerPublicUser(body: unknown): Promise<RegisterPublicU
     premiumUntilMs,
     profileUsername,
   };
+}
+
+/**
+ * Cheap "make sure this viewer exists" for hot paths (playback). One insert that
+ * does nothing when the row is there, instead of a full upsert on every request.
+ */
+export async function ensurePublicUserRow(publicId: string): Promise<void> {
+  const pool = getPool();
+  const id = String(publicId ?? '').trim();
+  if (!pool || !isValidPublicUserId(id)) return;
+  await pool.query(
+    `INSERT INTO users (id, profile_username, legacy_user_id, premium_until_ms, note, updated_at)
+     VALUES ($1, $1, NULL, NULL, '', now())
+     ON CONFLICT (id) DO NOTHING`,
+    [id],
+  );
 }
 
 export type UserRow = {

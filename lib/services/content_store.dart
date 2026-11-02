@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supasoka/config/api_config.dart';
 import 'package:supasoka/data/app_data.dart';
 import 'package:supasoka/services/playback_service.dart';
+import 'package:supasoka/services/subscription_store.dart';
 import 'package:supasoka/data/pay_plan.dart';
 import 'package:supasoka/services/app_update_service.dart';
 import 'package:supasoka/services/network_reachability.dart';
@@ -676,7 +677,14 @@ class ContentStore extends ChangeNotifier {
       _customerCareWhatsapp = '';
     }
 
-    unawaited(warmPlaybackCache(_channels.map((c) => c.id)));
+    // Pre-resolve only what this viewer can actually open. Warming every paid channel
+    // for a non-subscriber just floods the backend with requests that end in 403.
+    final canOpenPaid = SubscriptionStore.isPremiumActiveLocal();
+    unawaited(
+      warmPlaybackCache(
+        _channels.where((c) => canOpenPaid || c.free).map((c) => c.id),
+      ),
+    );
   }
 
   Future<void> _syncUpdatePolicy(Map<String, dynamic> j) async {

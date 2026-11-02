@@ -270,6 +270,7 @@ class _PaymentsApi {
       'raw': j,
       'premiumUntilMs': ?premiumUntilMs,
       if (j['activated'] == true) 'activated': true,
+      if (j['consumed'] == true) 'consumed': true,
       'intentPlanId': ?intentPlanId,
     };
   }
